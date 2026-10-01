@@ -17,9 +17,9 @@ struct ControlView: View {
         let size = model.glassSize
         VStack(spacing: 0) {
             ZStack(alignment: .bottom) {
-                pane(.notes) { NotesPane(model: model, editor: notes).frame(height: model.notesHeight) }
-                pane(.history) { HistoryPane(model: model).frame(height: AppModel.historyHeight) }
-                pane(.settings) { SettingsPane(model: model).frame(height: AppModel.settingsHeight) }
+                pane(.notes) { NotesPane(model: model, editor: notes).frame(width: AppModel.paneWidth, height: model.notesHeight) }
+                pane(.history) { HistoryPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.historyHeight) }
+                pane(.settings) { SettingsPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.settingsHeight) }
             }
             .frame(width: AppModel.paneWidth)
             .frame(height: max(0, model.paneHeight - AppModel.seam), alignment: .bottom)
@@ -68,7 +68,8 @@ struct MemoryBanner: View {
                 Text(text).font(tiktok(12, "Medium"))
             }
             .foregroundStyle(accent)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 7)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -78,7 +79,7 @@ struct MemoryBanner: View {
     private var text: String {
         guard let memory = model.memory else { return "Memory is low" }
         let used = Double(memory.physical - min(memory.physical, memory.available)) / 1_073_741_824
-        return String(format: "Memory is low · %.1f of %.0f GB in use", used, Double(memory.physical) / 1_073_741_824)
+        return String(format: "Memory is low: %.1f of %.0f GB in use", used, Double(memory.physical) / 1_073_741_824)
     }
 }
 

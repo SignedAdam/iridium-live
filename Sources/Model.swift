@@ -25,7 +25,7 @@ final class AppModel {
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
-    static let bannerHeight: CGFloat = 30
+    static let bannerHeight: CGFloat = 24
     static let seam: CGFloat = 1
     /// The largest the glass ever gets: settings open with the memory banner showing.
     static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + bannerHeight)

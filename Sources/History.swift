@@ -81,7 +81,7 @@ struct HistoryPane: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2, pinnedViews: .sectionHeaders) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(days, id: \.day) { group in
                             Section {
                                 ForEach(group.entries) { entry in

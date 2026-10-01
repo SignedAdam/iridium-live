@@ -18,12 +18,24 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
     private let lineHeight: CGFloat
     private var startsParagraph = false
     private var glides = 0  // follow-the-end scroll animations in flight
+    private var hiding: Task<Void, Never>?
 
-    /// Only the notes on screen take clicks; hidden notes give up the keyboard.
+    /// Only the notes on screen take clicks and set the pointer; hidden notes give up the keyboard. Once faded out the
+    /// editor is hidden outright, so no text cursor shows over the pane that replaced it.
     var isActive = false {
         didSet {
             text.isActive = isActive
             if !isActive, text.window?.firstResponder === text { text.window?.makeFirstResponder(nil) }
+            hiding?.cancel()
+            if isActive {
+                view.isHidden = false
+            } else {
+                hiding = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, let self, !self.isActive else { return }
+                    self.view.isHidden = true
+                }
+            }
         }
     }
 
@@ -63,6 +75,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.delegate = self
         text.onFocusChange = { [unowned self] in reportEditing() }
         view.documentView = text
+        view.isHidden = true  // until the notes pane opens
 
         let center = NotificationCenter.default
         center.addObserver(forName: NSView.boundsDidChangeNotification, object: view.contentView, queue: .main) { [weak self] _ in
@@ -139,14 +152,15 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         glides > 0 || view.contentView.documentVisibleRect.maxY >= text.frame.height - Self.followSlack
     }
 
-    /// The height the notes want: the text view's own laid-out height (text plus insets, at its real width), from one
-    /// line up to `maxTextHeight`; past that the text scrolls.
+    /// The height the notes want: the laid-out text plus insets, from one line up to `maxTextHeight`, past which the
+    /// text scrolls. Measured from the layout, never from the text view, which a scroll view keeps at least as tall as
+    /// what is visible (so a pane that was once tall would stay tall).
     private func report() {
         guard let layout = text.layoutManager, let container = text.textContainer else { return }
         layout.ensureLayout(for: container)
-        text.sizeToFit()
-        let height = min(max(text.frame.height, lineHeight + 2 * Self.inset.height), Self.maxTextHeight + 2 * Self.inset.height)
-        if model.notesHeight != height.rounded(.up) { model.notesHeight = height.rounded(.up) }
+        let textHeight = min(max(layout.usedRect(for: container).height, lineHeight), Self.maxTextHeight)
+        let height = ceil(textHeight + 2 * Self.inset.height)
+        if model.notesHeight != height { model.notesHeight = height }
         if model.notesEmpty != text.string.isEmpty { model.notesEmpty = text.string.isEmpty }
         reportScroll()
     }
@@ -228,10 +242,10 @@ final class NotesTextView: NSTextView {
         pointerArea = area
     }
 
-    override func cursorUpdate(with event: NSEvent) { NSCursor.iBeam.set() }
-    override func mouseEntered(with event: NSEvent) { NSCursor.iBeam.set() }
-    override func mouseMoved(with event: NSEvent) { NSCursor.iBeam.set() }
-    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
+    override func cursorUpdate(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
+    override func mouseEntered(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
+    override func mouseMoved(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
+    override func mouseExited(with event: NSEvent) { if isActive { NSCursor.arrow.set() } }
 
     override func mouseDown(with event: NSEvent) {
         guard string.isEmpty, let window else { return super.mouseDown(with: event) }
