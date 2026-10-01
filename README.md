@@ -29,7 +29,7 @@ Measured on an M1 Max (32 GB):
 | Live captions | the phrase is re-transcribed every 0.12 s of speech, about 50 ms per pass |
 | End of a phrase | 0.7 s of silence closes it. Silero voice detection decides what counts as speech, so key clicks are never transcribed. |
 | AI cleanup per phrase | Qwen3 4B: 189 ms median. Llama 3.2 3B: 119 ms. Phrases that are already clean skip the model. |
-| Memory | about 2.7 GB with Phonon-2, 4.3 GB with Qwen3 4B cleanup added, 0.5 GB after *Unload models* |
+| Memory | about 1.6 GB with Phonon-2, 4.2 GB with Qwen3 4B cleanup added, 0.5 GB after *Unload models* |
 
 The cleanup is fast because it borrows Wispr Flow's playbook, done locally:
 
