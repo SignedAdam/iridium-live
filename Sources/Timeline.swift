@@ -131,7 +131,8 @@ struct PhraseTimeline: View {
             steps.append(Step(id: "cleanup", label: "Already clean, not sent", ms: cleanup.ms, shade: 0.85))
             return steps
         }
-        steps.append(Step(id: "cleanup", label: "Cleanup on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.85))
+        let place = cleanup.provider == Settings.localCleanup ? "this Mac" : cleanup.providerName
+        steps.append(Step(id: "cleanup", label: "Cleanup on \(place)", ms: cleanup.ms, shade: 0.85))
         let parts: [(String, Double?)] = [("Connecting", cleanup.connectMs), ("Network", cleanup.networkMs),
                                           ("Queued at \(cleanup.providerName)", cleanup.queueMs),
                                           ("Reading the prompt", cleanup.promptMs), ("Writing", cleanup.generateMs)]

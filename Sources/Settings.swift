@@ -27,13 +27,13 @@ struct Settings: Codable, Equatable {
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     /// Where cleanup can run, each with its models, the default first (chosen by measured latency and accuracy on
     /// dictated phrases). Groq and OpenRouter are called over the network with `GROQ_API_KEY` / `OPENROUTER_API_KEY`;
-    /// This Mac runs mlx-lm models, about 2.5 GB of memory while on.
+    /// Local runs mlx-lm models on this Mac, about 2.5 GB of memory while on.
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", [("openai/gpt-oss-120b:nitro", "GPT-OSS 120B"), ("qwen/qwen3.8-27b:nitro", "Qwen3.8 27B"),
                                       ("inclusionai/ling-3.0-flash", "Ling 3.0 Flash")]),
-        (localCleanup, "This Mac", [("qwen3-4b", "Qwen3 4B"), ("llama-3.2-3b", "Llama 3.2 3B")]),
+        (localCleanup, "Local", [("qwen3-4b", "Qwen3 4B"), ("llama-3.2-3b", "Llama 3.2 3B")]),
     ]
     static let localCleanup = "local"
     static let captionFonts = ["TikTok Sans", "SF Pro", "SF Pro Rounded", "New York", "Menlo"]

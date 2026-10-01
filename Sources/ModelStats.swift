@@ -78,7 +78,8 @@ struct ModelStatsCard: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(tiktok(13.5, "Medium")).foregroundStyle(.white.opacity(0.95))
-                Text("on \(providerName)").font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
+                Text(stats.provider == Settings.localCleanup ? "on this Mac" : "on \(providerName)")
+                    .font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
             }
             if let bench = stats.benchmark {
                 block("Benchmark, 40 dictated phrases") {
