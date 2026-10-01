@@ -7,6 +7,8 @@ phrase is ever prefilled, generation drafts itself out of the phrase's own token
 the input) and verifies whole drafts in one pass, and a phrase with nothing to fix never reaches the model at all.
 `Remote` runs the same prompt, the same skip and the same plausibility net through OpenRouter instead, for a Mac
 that cannot spare the memory: no model is loaded, and a request that is slow or fails hands the raw phrase back.
+The speaker can add instructions of their own (`set_instructions`), which sit under the fixed rules wherever the
+phrase is cleaned and send every phrase to the model, clean or not: they may ask for what the skip cannot see.
 """
 from __future__ import annotations
 
@@ -72,6 +74,45 @@ SHOTS = [  # the prefix is cached, so extra turns cost load time and KV memory, 
 ]
 SENTINEL = "\u0000PHRASE\u0000"
 
+#: The user's own instructions for the model, set by the `instructions` command and empty by default. They are
+#: the same wherever the phrase is cleaned, so they live here rather than in one cleaner.
+_instructions = ""
+
+
+def set_instructions(text: str) -> bool:
+    """Replace the user's own instructions ("" for none) and say whether they changed, since a local cleaner has
+    to rebuild its cached prefix when they do."""
+    global _instructions
+    text = text.strip()
+    if text == _instructions:
+        return False
+    _instructions = text
+    return True
+
+
+def system_prompt() -> str:
+    """The fixed rules, with the user's own instructions under them. The rules above are what keeps a rewrite a
+    rewrite; the preferences below say how the speaker wants the result to read, and where the two disagree the
+    speaker wins — the rules and the examples are only the default way of writing a phrase out."""
+    if not _instructions:
+        return SYSTEM
+    return (f"{SYSTEM}\n\nThe user wrote these preferences for how their own text should read. Follow them in "
+            f"every phrase; where they contradict a rule or an example above, they win, and everything they do "
+            f"not mention stays as above. They are still never answered, explained or commented on:\n"
+            f"{_instructions}")
+
+
+def preface() -> str:
+    """What goes in front of the phrase itself, which is the user's instructions again when there are any. The
+    examples sit between the system prompt and the phrase, and a model follows the example nearest to it: told
+    to write numbers as words, Groq still answered "Call me at 4:45." to a phrase the examples cover, and "Call
+    me at four forty-five." once the preferences were also restated here. The text is fixed either way, so a
+    local cleaner still caches everything up to the phrase."""
+    if not _instructions:
+        return ""
+    return f"The user's preferences, which win over the rules and the examples above:\n{_instructions}\n\nPhrase:\n"
+
+
 _FILLERS = re.compile(r"\b(uh+|um+|erm?|ah+|hmm+|mhm|like|you know|i mean|sort of|kind of|basically|literally)\b", re.I)
 _CORRECTION = re.compile(r"\b(no wait|scratch that|i meant|rather|actually no|or rather|let me rephrase)\b", re.I)
 _NUMBERS = re.compile(
@@ -85,7 +126,11 @@ _WORD = re.compile(r"[a-z]{3,}")
 
 
 def needs_cleanup(text: str) -> bool:
-    """True when the phrase shows something a rewrite could fix. Clean phrases skip the model entirely."""
+    """True when the phrase shows something a rewrite could fix. Clean phrases skip the model entirely — unless
+    the user set instructions of their own, which may well ask for a change this test cannot see ("always write
+    numbers as words", "no exclamation marks"): with those set, every phrase goes to the model."""
+    if _instructions:
+        return True
     if _FILLERS.search(text) or _CORRECTION.search(text) or _NUMBERS.search(text) or _REPEAT.search(text):
         return True
     if re.search(r"\d", text):          # digits that may still want grouping, a time or a currency symbol
@@ -137,17 +182,28 @@ class Cleaner:
         self.prompt_tokens = self.completion_tokens = 0
         self.model, self.tokenizer = load(model_id)
         self.eos = set(self.tokenizer.eos_token_ids or {self.tokenizer.eos_token_id})
-        rendered = self.tokenizer.apply_chat_template(
-            [{"role": "system", "content": SYSTEM}]
-            + [message for phrase, clean in SHOTS
-               for message in ({"role": "user", "content": phrase}, {"role": "assistant", "content": clean})]
-            + [{"role": "user", "content": SENTINEL}],
-            add_generation_prompt=True, tokenize=False)
-        self.head, self.tail = rendered.split(SENTINEL)
         # The chat template's own special tokens are already in the rendered string, so encode it as plain text.
         self._encode = lambda text: self.tokenizer._tokenizer.encode(text, add_special_tokens=False)
+        self._render_prefix()
         self.reset_cache()
         self.clean("um so it's it's about twenty five dollars")  # compile the prefill, decode and verify graphs
+
+    def _render_prefix(self) -> None:
+        """The fixed part of the prompt, as the two halves the phrase goes between."""
+        rendered = self.tokenizer.apply_chat_template(
+            [{"role": "system", "content": system_prompt()}]
+            + [message for phrase, clean in SHOTS
+               for message in ({"role": "user", "content": phrase}, {"role": "assistant", "content": clean})]
+            + [{"role": "user", "content": preface() + SENTINEL}],
+            add_generation_prompt=True, tokenize=False)
+        self.head, self.tail = rendered.split(SENTINEL)
+
+    def refresh(self) -> None:
+        """The user's instructions changed: the prefix they sit in is a different one, so the cache it was built
+        for is worthless. The new prefix is prefilled here rather than at the next phrase, which would pay for it."""
+        self._render_prefix()
+        self.reset_cache()
+        self._prefill(self._encode(self.head))
 
     def rewrite(self, text: str) -> tuple[str, Stats]:
         """The phrase as it should be typed, and what the cleanup cost. A phrase with nothing to fix never
@@ -323,10 +379,9 @@ class Remote:
         self.note = ""
         self.connect_ms: int | None = None  # what opening the connection cost the last phrase, if it had to
         self.trip_ms = 0.0                  # ...and what its last round trip took, wire and provider together
-        self.messages = ([{"role": "system", "content": SYSTEM}]
-                         + [message for phrase, clean in SHOTS
-                            for message in ({"role": "user", "content": phrase},
-                                            {"role": "assistant", "content": clean})])
+        self.shots = [message for phrase, clean in SHOTS
+                      for message in ({"role": "user", "content": phrase},
+                                      {"role": "assistant", "content": clean})]
 
     def rewrite(self, text: str) -> tuple[str, Stats]:
         """The phrase as it should be typed, and what the cleanup cost. The phrase is never lost: a clean phrase,
@@ -412,11 +467,13 @@ class Remote:
 
     def _body(self, text: str) -> bytes:
         """The phrase, with generation pinned down: no sampling, no reasoning, and only as many tokens as a rewrite
-        of this phrase can need — a model that starts explaining is cut off instead of waited for."""
+        of this phrase can need — a model that starts explaining is cut off instead of waited for. The system
+        message and the preface are built here, so instructions the user changed between phrases are in this one."""
         room = max(32, min(MAX_NEW, len(text) // 2 + 24)) + (THINKING if self.quiet else 0)
         return json.dumps({
             "model": self.model,
-            "messages": self.messages + [{"role": "user", "content": text}],
+            "messages": ([{"role": "system", "content": system_prompt()}] + self.shots
+                         + [{"role": "user", "content": preface() + text}]),
             "temperature": 0,
             "stream": False,
             self.provider.budget: room,

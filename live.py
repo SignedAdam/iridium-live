@@ -21,7 +21,10 @@ on at a provider (OPENROUTER_API_KEY or GROQ_API_KEY out of the environment; not
 request that fails or runs long leaves the phrase raw); "asr phonon-2|parakeet" switches the speech model; "unload"
 drops every model from memory (the next start brings back what was loaded; a remote cleanup model holds none, so it
 keeps working); "archive on SECONDS DIRECTORY" keeps a copy of the recorded audio as WAV files cut at silences that
-long, "archive off" stops.
+long, "archive off" stops; "instructions JSON" sets the speaker's own instructions for the cleanup model, as a
+JSON string so they can hold newlines (an empty JSON string clears them). They go under the fixed rules of the
+cleanup prompt wherever the phrase is cleaned, and while they are set no phrase is clean enough to skip the model.
+Nothing comes back for them except an error event if the JSON is not a string.
 All act at once, even while a model is still loading: audio waits and is transcribed as soon as the model is
 ready, and any model that is not on disk is fetched first. Events on stdout, one JSON object per line:
   {"kind": "state", "recording": bool}             at startup and after every change
@@ -44,6 +47,9 @@ wait from that last speech frame to this event, and "cleanup" null with cleanup 
 provider, the model, whether the phrase was clean enough to skip the model, "ms" as the speaker waits for it, the
 connection and network time, what the provider reports of its own queue, prompt and generation time, the token
 counts, the cost in dollars and any error that left the phrase raw.
+While audio is being archived, a final also carries "audio": where the phrase can be heard, as
+[{"file": ..., "start_s": ..., "end_s": ...}] in seconds from each file's first sample, with one entry per file
+it touches. A phrase thrown away by "cancel" says nothing at all, and nothing of it stays on disk.
 Decode timings go to stderr.
 """
 import argparse
@@ -181,6 +187,7 @@ class ModelSlot:
         self.want: str | None = None    # what the user asked for
         self.key: str | None = None     # what is loaded
         self.suspended = False          # `unload`: dropped from memory, but still wanted
+        self.rebuild = False            # the loaded model has to take in changed cleanup instructions
         self.model = None
 
     def say(self, state: str, key: str | None, **extra) -> None:
@@ -234,6 +241,12 @@ class ModelSlot:
         self.suspended = False
         self._hand_over()
 
+    def refresh(self) -> None:
+        """The user's cleanup instructions changed. A loaded local model rebuilds the prefix it caches, which is
+        MLX work and so belongs to the transcriber thread; a remote one reads them at its next phrase."""
+        self.rebuild = True
+        self._hand_over()
+
     @property
     def target(self) -> str | None:
         """What should be loaded. `unload` drops everything that holds memory, which a remote model does not:
@@ -251,7 +264,10 @@ class ModelSlot:
     def apply(self) -> bool:
         """Transcriber thread: make the loaded model match `want`, or none of it while suspended."""
         key = self.target
+        rebuild, self.rebuild = self.rebuild, False  # a model loaded below is built with the instructions anyway
         if key == self.key:
+            if rebuild and isinstance(self.model, cleanup_model.Cleaner):
+                self.model.refresh()
             return False
         if isinstance(self.model, cleanup_model.Remote):
             self.model.close()  # the kept connection belongs to the model that opened it
@@ -441,6 +457,16 @@ def main() -> None:
                 recorder.stop()  # the phrase in flight is finished, and the queue carries that before the unload
                 speech_slot.suspend()
                 cleanup_slot.suspend()
+            elif command == "instructions":
+                try:
+                    text = json.loads(argument)
+                    if not isinstance(text, str):
+                        raise ValueError("not a string")
+                except Exception as exc:
+                    cleanup_slot.say("error", cleanup_slot.key, message=f"instructions: {exc}")
+                else:
+                    if cleanup_model.set_instructions(text):
+                        cleanup_slot.refresh()
             elif command == "archive":
                 mode, _, rest = argument.partition(" ")
                 seconds, _, directory = rest.partition(" ")
@@ -490,9 +516,12 @@ def main() -> None:
     def on_final(text: str, timing: seg.Timing) -> None:
         """One phrase is done. With cleanup on, the rewrite runs here, in the transcriber loop: audio keeps
         queueing behind it and the phrase is typed once, cleaned. The event carries where the wait went, from
-        the last word the phrase held to this line leaving."""
+        the last word the phrase held to this line leaving, and where the phrase can be heard in the archive."""
         if discarding.is_set():
             return
+        # Asked before the rewrite, which can take seconds: this is where the phrase sits in the files as they
+        # stand now, and the archive has every frame of it already.
+        heard = archive.locate(timing.started, timing.started + timing.speech_s)
         final = {"kind": "final", "text": text}
         cleanup = None
         if cleaner := cleanup_slot.model:
@@ -509,6 +538,8 @@ def main() -> None:
                            "decode_ms": round((timing.decoded - timing.decode_at) * 1000),
                            "cleanup": cleanup,
                            "total_ms": round((time.time() - timing.last_speech) * 1000)}
+        if heard:
+            final["audio"] = heard
         send(final)
         send({"kind": "type", "text": final["text"], "final": True})
         stable.reset()

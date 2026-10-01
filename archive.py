@@ -4,7 +4,8 @@ The cut uses the speech decisions the segmenter already has from Silero, so noth
 file opens on the first speech after a long enough pause (carrying half a second of what came before, so the first
 word is whole), and closes once that pause has passed again (keeping half a second of the quiet after it). The
 silence between files is never written, so an hour of an open microphone costs only the minutes that had speech.
-Writing happens on this module's own thread; the transcriber only hands frames over.
+Each file also remembers the wall time of its first sample, which is how `locate` tells a phrase where in the WAV
+it can be heard. Writing happens on this module's own thread; the transcriber only hands frames over.
 """
 from __future__ import annotations
 
@@ -34,7 +35,11 @@ class Archive:
         self.writer: wave.Wave_write | None = None
         self.path: Path | None = None
         self.written = 0                  # frames in the file being written
+        self.start_at = 0.0               # wall time of that file's first sample, pre-roll included
         self.edge = max(1, round(EDGE_S * SAMPLE_RATE / FRAME))
+        #: The files already closed, as (path, wall time of the first sample, length in seconds): what `locate`
+        #: looks a phrase up in once its own file is no longer the one being written.
+        self.history: deque = deque(maxlen=32)
         self.preroll: deque = deque(maxlen=self.edge)   # what to put in front of the first word
         self.pending: list[np.ndarray] = []             # the silence since the last word, not written yet
         self.silence = _CLOSED
@@ -57,6 +62,17 @@ class Archive:
         """Recording was cancelled: throw the file in progress away, so nothing of it is kept."""
         self.work.put(("discard",))
 
+    def locate(self, start_at: float, end_at: float) -> list[dict]:
+        """Where a phrase heard between these two wall times lies inside the saved audio: one entry per file it
+        touches, in seconds from that file's first sample. Empty while nothing is being archived, and ordered
+        behind the frames already handed over, so the phrase's own audio is accounted for before the answer."""
+        answer: queue.Queue = queue.Queue(maxsize=1)
+        self.work.put(("locate", start_at, end_at, answer))
+        try:
+            return answer.get(timeout=2.0)
+        except queue.Empty:
+            return []  # the writer thread is gone or stuck: a phrase is never held up for its audio
+
     def close(self) -> None:
         self.work.put(("close",))
         self.thread.join(timeout=5.0)
@@ -77,6 +93,8 @@ class Archive:
             elif item[0] == "discard":
                 self._discard_file()
                 self._reset()
+            elif item[0] == "locate":
+                item[3].put(self._locate(item[1], item[2]))
             else:
                 self._close_file()
                 return
@@ -125,6 +143,7 @@ class Archive:
         self.writer.setsampwidth(2)
         self.writer.setframerate(SAMPLE_RATE)
         self.written = 0
+        self.start_at = at
         self.preroll.clear()
 
     def _write(self, frames: list[np.ndarray]) -> None:
@@ -141,8 +160,25 @@ class Archive:
         self.pending.clear()
         self.writer.close()
         self.writer = None
-        self.events.send({"kind": "archive", "file": str(self.path),
-                          "seconds": round(self.written * FRAME / SAMPLE_RATE, 3)})
+        seconds = round(self.written * FRAME / SAMPLE_RATE, 3)
+        self.history.append((str(self.path), self.start_at, seconds))
+        self.events.send({"kind": "archive", "file": str(self.path), "seconds": seconds})
+
+    def _locate(self, start_at: float, end_at: float) -> list[dict]:
+        """The part of each file that holds the audio between these two wall times. Everything written to one
+        file is one unbroken stretch of sound, so a wall time maps to a position by its distance from the file's
+        first sample; the file still open counts the quiet `_close_file` is going to keep as well, since the end
+        of a phrase is still sitting in `pending` when the phrase is decoded."""
+        files = list(self.history)
+        if self.writer is not None:
+            kept = self.written + min(len(self.pending), self.edge)
+            files.append((str(self.path), self.start_at, kept * FRAME / SAMPLE_RATE))
+        refs = []
+        for path, began, seconds in files:
+            start, end = max(start_at, began), min(end_at, began + seconds)
+            if end - start > FRAME / SAMPLE_RATE:  # a sliver at a file boundary is not worth an entry
+                refs.append({"file": path, "start_s": round(start - began, 3), "end_s": round(end - began, 3)})
+        return refs
 
     def _discard_file(self) -> None:
         """Close the file in progress and delete it: a cancelled recording leaves nothing on disk and says
