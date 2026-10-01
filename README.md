@@ -8,7 +8,7 @@ Fast, private dictation for the Mac. Speak, and your words show up as live capti
 
 - **One floating glass control.** Record, a live input meter and the elapsed time, then switches for typing, notes, history and settings. A line above the bar says where your words are going ("Writing to notes", "Typing into Safari") and "Finishing" while the last of a long take is still being transcribed. Hovering a button names it at once. The control floats on every Space, never takes focus, and you can drag it from anywhere that isn't a button or text.
 - **Live captions** at the top or bottom of the screen. Font, size, opacity and how long they stay are all adjustable.
-- **Notes** open upward out of the bar and grow as you talk, then scroll. You can edit them like any text: ⌘C, ⌘V, ⌘Z and the rest work, and dictated phrases never land in your undo history.
+- **Notes** open upward out of the bar and grow as you talk, then scroll. You can edit them like any text: ⌘C, ⌘V, ⌘Z and the rest work, and dictated phrases never land in your undo history. Right-click for the notes' own menu: save the note (⌘S), save the selection as a note of its own, start a new one (⌘N), or open **My notes** — every note you have kept, favourites first, each a file you can rename, star, export or open in Finder. Whichever note is open is written to disk as you type, and remembers which dictated phrases went into it.
 - **Typing into any app.** Words are typed once they have held steady for a moment (adjustable), and corrected in place if the model changes its mind.
 - **Hotkeys**, as many as you like, and several on the same key. Each one is switched on or off, types what you say or adds it to your notes, and works by hold, double-tap (stays on until the next press) or press to toggle. A hold on a key that also taps starts recording at once and drops it again if the key comes straight back up. A lone modifier such as right ⌘ counts only when pressed by itself, so ⌘C still copies.
 - **History** of every phrase, grouped by day and searchable, with each day's cleanup cost. Under each phrase: how long it took from your last word to the text, and what cleanup did. Click it for the full timeline: the pause before the phrase is sent on, transcription, and cleanup split into network, queueing, reading and writing, with tokens and cost. Hover to copy or delete.
@@ -65,7 +65,8 @@ Models download by themselves the first time they are needed, with progress show
 
 Your data lives in `~/Library/Application Support/PhononLive`:
 
-- `notes.txt`
+- `notes.txt` (the unsaved note)
+- `Notes/` (every saved note as a file named after it, with `index.json` beside them: names, dates, favourites and the dictated phrases that went into each)
 - `journal.txt` (every dictated phrase)
 - `backups/`
 - `history.jsonl`

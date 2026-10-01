@@ -1,35 +1,45 @@
 import Foundation
 
-/// Keeps the notes on disk so nothing is ever lost:
+/// Keeps the note being edited on disk so nothing is ever lost:
 /// - every change is written a moment after it happens, atomically and in order, off the main thread, and at once on
 ///   quit (`flush`);
 /// - every dictated phrase goes to an append-only journal the moment it arrives, whatever later happens to the notes;
 /// - the previous version is copied to `backups/` whenever a lot of text disappears at once, and at least hourly
 ///   while the notes keep changing (the newest 200 copies are kept).
+/// The file written to follows the note being edited: the unsaved scratch, or one of the saved notes.
 @MainActor
 final class NotesStore {
     private static let settle = 0.3            // seconds of quiet before a write
     nonisolated private static let keptBackups = 200
-    private let file: URL
     private let journal: URL
     private let backups: URL
     private let disk = DispatchQueue(label: "notes.disk")  // serial: writes land in the order they were made
     private var pending: DispatchWorkItem?
-    private var latest: String
     private var written: String
     private var lastBackup = Date.distantPast
+
+    /// The file the text is being written to.
+    private(set) var file: URL
+
+    /// The text as it stands, written or about to be.
+    private(set) var latest: String
 
     /// The notes as saved last time.
     let initialText: String
 
-    init(directory: URL) {
-        file = directory.appendingPathComponent("notes.txt")
+    init(directory: URL, file: URL) {
+        self.file = file
         journal = directory.appendingPathComponent("journal.txt")
         backups = directory.appendingPathComponent("backups")
         try? FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
-        initialText = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        initialText = Self.read(file)
         latest = initialText
         written = initialText
+    }
+
+    /// The text of a file, or nothing when there is none.
+    nonisolated static func read(_ file: URL) -> String {
+        (try? String(contentsOf: file, encoding: .utf8)) ?? ""
     }
 
     /// A dictated phrase: into the journal right now, before anything else can happen to it.
@@ -56,6 +66,35 @@ final class NotesStore {
         }
         pending = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle, execute: work)
+    }
+
+    /// Edit `file` from now on, keeping everything written so far where it was. Its text is returned for the editor.
+    func switchTo(_ file: URL) -> String {
+        flush()
+        self.file = file
+        let text = Self.read(file)
+        latest = text
+        written = text
+        return text
+    }
+
+    /// Carry the text over to `destination`, leaving the file it was in empty, and edit `destination` from now on:
+    /// the scratch becoming a saved note. Both writes go through the same queue as everything else, in order.
+    func move(to destination: URL) {
+        pending?.cancel()
+        let text = latest
+        let source = file
+        file = destination
+        written = text
+        disk.async { @Sendable in
+            try? text.write(to: destination, atomically: true, encoding: .utf8)
+            try? "".write(to: source, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// The file being edited now lives at `destination`: it was renamed under us, with its text intact.
+    func relocate(to destination: URL) {
+        file = destination
     }
 
     /// Write whatever is pending and wait until it is on disk.

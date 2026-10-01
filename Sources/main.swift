@@ -19,11 +19,11 @@ MainActor.assumeIsolated {
     let model = AppModel()
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("PhononLive")
-    let store = NotesStore(directory: support)
+    let library = NotesLibrary(directory: support)
     let history = HistoryStore(directory: support)
     let usage = UsageLog(directory: support)
     model.history = history.load()
-    let notes = NotesEditor(model: model, store: store)
+    let notes = NotesEditor(model: model, library: library)
     let captions = Captions(screen: screen, settings: model.settings)
     let typist = Typist(sink: KeyboardSink())
     let control = ControlWindowController(model: model, notes: notes, screen: screen)
@@ -56,7 +56,7 @@ MainActor.assumeIsolated {
                 history.append(entry)
                 usage.record(entry)
                 model.history.append(entry)
-                if model.notingNow { notes.append(event.text) }
+                if model.notingNow { notes.append(entry) }
                 if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
             case "type":
                 if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
@@ -169,7 +169,7 @@ MainActor.assumeIsolated {
     // end us from outside. (Set up after the engine starts, so the engine keeps the default signal handling.)
     NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
         MainActor.assumeIsolated {
-            store.flush()
+            library.flush()
             history.flush()
             usage.flush()
         }
@@ -179,7 +179,7 @@ MainActor.assumeIsolated {
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                store.flush()
+                library.flush()
                 history.flush()
                 usage.flush()
                 exit(0)

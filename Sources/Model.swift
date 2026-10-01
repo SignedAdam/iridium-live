@@ -26,6 +26,7 @@ final class AppModel {
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
     static let libraryHeight: CGFloat = 340  // the notes pane while it lists the saved notes
+    static let notesFooter: CGFloat = 20     // under the note's text: its name and the way into My notes
     static let lineHeight: CGFloat = 14     // the status line just above the bar: it hangs into the bar's empty top
     static let lineSpacing: CGFloat = 17    // each line above that one
     static let seam: CGFloat = 1
@@ -120,7 +121,7 @@ final class AppModel {
 
     var paneHeight: CGFloat {
         switch pane {
-        case .notes: (notesView == .library ? Self.libraryHeight : notesHeight) + Self.seam
+        case .notes: (notesView == .library ? Self.libraryHeight : notesHeight + Self.notesFooter) + Self.seam
         case .history: Self.historyHeight + Self.seam
         case .settings: Self.settingsHeight + Self.seam
         case nil: 0

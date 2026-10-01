@@ -20,7 +20,7 @@ struct ControlView: View {
         let barRegion = AppModel.barSize.height + model.linesHeight
         VStack(spacing: 0) {
             if down {
-                ControlBar(model: model)
+                bar
                 lines
                 seam
                 panes
@@ -28,7 +28,7 @@ struct ControlView: View {
                 panes
                 seam
                 lines
-                ControlBar(model: model)
+                bar
             }
         }
         .frame(width: size.width, height: size.height, alignment: down ? .top : .bottom)
@@ -47,13 +47,19 @@ struct ControlView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
     }
 
+    /// The bar; right-click it for the control's own menu (unload, notes, my notes, history, settings).
+    private var bar: some View {
+        ControlBar(model: model).onRightClick { barMenuItems(model) }
+    }
+
     /// The panes, stacked; only the open one shows, flush against the bar.
     private var panes: some View {
         let edge: Alignment = model.opensDown ? .top : .bottom
         return ZStack(alignment: edge) {
             pane(.notes) {
                 NotesPane(model: model, editor: notes)
-                    .frame(width: AppModel.paneWidth, height: model.notesView == .library ? AppModel.libraryHeight : model.notesHeight)
+                    .frame(width: AppModel.paneWidth,
+                           height: model.notesView == .library ? AppModel.libraryHeight : model.notesHeight + AppModel.notesFooter)
             }
             pane(.history) { HistoryPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.historyHeight) }
             pane(.settings) { SettingsPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.settingsHeight) }

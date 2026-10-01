@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The notes text, as an AppKit editor (SwiftUI's text editing has no control over undo, cursor or shortcuts at this
 /// level). Hosted in SwiftUI by `NotesEditorView`; reports its size, emptiness, editing state and scroll position to
-/// the model. Every change is kept by `NotesStore`.
+/// the model. Every change is kept by `NotesLibrary`, in whichever note is open.
 @MainActor
 final class NotesEditor: NSObject, NSTextViewDelegate {
     static let inset = NSSize(width: 18, height: 14)
@@ -13,7 +13,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
     let view = FadingScrollView(frame: NSRect(x: 0, y: 0, width: AppModel.paneWidth, height: 50))
     private let text = NotesTextView()
     private let model: AppModel
-    private let store: NotesStore
+    let library: NotesLibrary
     private let attributes: [NSAttributedString.Key: Any]
     private let lineHeight: CGFloat
     private var startsParagraph = false
@@ -39,9 +39,9 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         }
     }
 
-    init(model: AppModel, store: NotesStore) {
+    init(model: AppModel, library: NotesLibrary) {
         self.model = model
-        self.store = store
+        self.library = library
         let font = NSFont(name: "TikTokSans-Regular", size: 15) ?? .systemFont(ofSize: 15)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 3  // Return starts the next line, with no gap between paragraphs
@@ -71,9 +71,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.insertionPointColor = .white
         text.selectedTextAttributes = [.backgroundColor: NSColor.white.withAlphaComponent(0.24)]
         text.typingAttributes = attributes
-        text.textStorage?.setAttributedString(NSAttributedString(string: store.initialText, attributes: attributes))
+        text.textStorage?.setAttributedString(NSAttributedString(string: library.initialText, attributes: attributes))
         text.delegate = self
         text.onFocusChange = { [unowned self] in reportEditing() }
+        text.onCommand = { [unowned self] command in run(command) }
+        library.onOpen = { [unowned self] text in show(text) }
         view.documentView = text
         view.isHidden = true  // until the notes pane opens
         view.rim = Self.inset
@@ -101,9 +103,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
     }
 
     /// Add a finished phrase at the end, leaving the cursor, the selection and any edit in progress where they are.
-    func append(_ phrase: String) {
+    /// The note being edited keeps a record of the phrase it came from, so it can be traced back and heard again.
+    func append(_ entry: HistoryEntry) {
+        let phrase = entry.text
         guard let storage = text.textStorage, !phrase.isEmpty else { return }
-        store.recordPhrase(phrase)
+        library.record(entry)
         let following = isAtEnd
         var piece = phrase
         if let last = storage.string.last {
@@ -119,6 +123,37 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.undoManager?.enableUndoRegistration()
         text.didChangeText()
         if following { followEnd(animated: true) }
+    }
+
+    /// Show another note's text. It is not an edit: it starts its own undo history and is not written back.
+    private func show(_ note: String) {
+        text.undoManager?.removeAllActions()
+        text.textStorage?.setAttributedString(NSAttributedString(string: note, attributes: attributes))
+        text.typingAttributes = attributes
+        text.setSelectedRange(NSRange(location: (note as NSString).length, length: 0))
+        startsParagraph = true
+        report()
+        followEnd(animated: false)
+    }
+
+    /// The notes' own menu, beyond editing the text.
+    func run(_ command: NotesCommand) {
+        switch command {
+        case let .saveSelection(selection):
+            name(library.saveSelection(selection))
+        case .save:
+            if library.currentNote == nil { name(library.save(text.string)) } else { library.flush() }
+        case .newNote:
+            library.newNote(from: text.string)
+        case .myNotes:
+            model.showMyNotes()
+        }
+    }
+
+    /// A note just made: its name is put up for typing, with the keyboard on it.
+    private func name(_ note: SavedNote) {
+        view.window?.makeKey()
+        library.naming = note.id
     }
 
     /// Glide to the newest text.
@@ -145,7 +180,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
 
     func textDidChange(_ notification: Notification) {
         text.typingAttributes = attributes
-        store.changed(text.string)
+        library.changed(text.string)
         report()
     }
 
@@ -226,11 +261,21 @@ final class FadingScrollView: NSScrollView {
     }
 }
 
+/// What the notes' right-click menu asks for, beyond editing the text.
+enum NotesCommand {
+    case saveSelection(String)
+    case save
+    case newNote
+    case myNotes
+}
+
 /// The notes text view: plain, editable from the first click, with the text cursor under the pointer even before it
-/// has the keyboard, the standard editing shortcuts handled here (the app has no menu bar to route them) and a short
-/// context menu. While empty it is part of the handle: dragging moves the control, a click still starts typing.
+/// has the keyboard, the standard editing shortcuts handled here (the app has no menu bar to route them) and the
+/// notes' own menu on a right click. While empty it is part of the handle: dragging moves the control, a click still
+/// starts typing.
 final class NotesTextView: NSTextView {
     var onFocusChange: () -> Void = {}
+    var onCommand: (NotesCommand) -> Void = { _ in }
     var isActive = false
     private var pointerArea: NSTrackingArea?
 
@@ -248,12 +293,32 @@ final class NotesTextView: NSTextView {
                                                          .inVisibleRect], owner: self)
         addTrackingArea(area)
         pointerArea = area
+        window?.invalidateCursorRects(for: self)  // the text area moved with the view
     }
 
-    override func cursorUpdate(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
-    override func mouseEntered(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
-    override func mouseMoved(with event: NSEvent) { if isActive { NSCursor.iBeam.set() } }
-    override func mouseExited(with event: NSEvent) { if isActive { NSCursor.arrow.set() } }
+    /// Where the text itself is: inside the editor's rim, which belongs to the glass (clicks there fall through to
+    /// drag the control), and within sight. Only there does the pointer become a text cursor.
+    private var textArea: NSRect {
+        guard let scroll = enclosingScrollView as? FadingScrollView else { return visibleRect }
+        let inner = scroll.bounds.insetBy(dx: scroll.rim.width, dy: scroll.rim.height)
+        return convert(inner, from: scroll).intersection(visibleRect)
+    }
+
+    /// NSTextView claims the text cursor for the whole view, rim included: claim it for the text area instead.
+    override func resetCursorRects() {
+        guard isActive else { return }
+        addCursorRect(textArea, cursor: .iBeam)
+    }
+
+    private func pointer(at event: NSEvent) {
+        let inside = isActive && textArea.contains(convert(event.locationInWindow, from: nil))
+        (inside ? NSCursor.iBeam : NSCursor.arrow).set()
+    }
+
+    override func cursorUpdate(with event: NSEvent) { pointer(at: event) }
+    override func mouseEntered(with event: NSEvent) { pointer(at: event) }
+    override func mouseMoved(with event: NSEvent) { pointer(at: event) }
+    override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
 
     override func mouseDown(with event: NSEvent) {
         guard string.isEmpty, let window else { return super.mouseDown(with: event) }
@@ -290,6 +355,8 @@ final class NotesTextView: NSTextView {
         case "x": cut(nil)
         case "v": pasteAsPlainText(nil)
         case "a": selectAll(nil)
+        case "s": onCommand(.save)
+        case "n": onCommand(.newNote)
         case "z" where modifiers.contains(.shift): undoManager?.redo()
         case "z": undoManager?.undo()
         default: return super.performKeyEquivalent(with: event)
@@ -297,13 +364,46 @@ final class NotesTextView: NSTextView {
         return true
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Cut", action: #selector(cut(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Paste", action: #selector(pasteAsPlainText(_:)), keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
-        return menu
+    /// The notes' own menu: editing the text, and what can be done with the note itself.
+    override func rightMouseDown(with event: NSEvent) {
+        guard isActive, let window else { return super.rightMouseDown(with: event) }
+        MenuPanel.show(menuItems(), at: window.convertPoint(toScreen: event.locationInWindow))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { nil }
+
+    private func menuItems() -> [MenuItem] {
+        let selection = (string as NSString).substring(with: selectedRange())
+        let pasteable = NSPasteboard.general.canReadObject(forClasses: [NSString.self])
+        var items = [
+            MenuItem(id: "cut", title: "Cut", symbol: "scissors", shortcut: "⌘X", enabled: !selection.isEmpty) {
+                [weak self] in self?.cut(nil)
+            },
+            MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", shortcut: "⌘C", enabled: !selection.isEmpty) {
+                [weak self] in self?.copy(nil)
+            },
+            MenuItem(id: "paste", title: "Paste", symbol: "doc.on.clipboard", shortcut: "⌘V", enabled: pasteable) {
+                [weak self] in self?.pasteAsPlainText(nil)
+            },
+            MenuItem(id: "all", title: "Select All", symbol: "selection.pin.in.out", shortcut: "⌘A", enabled: !string.isEmpty) {
+                [weak self] in self?.selectAll(nil)
+            },
+            .separator(),
+        ]
+        if !selection.isEmpty {
+            items.append(MenuItem(id: "selection", title: "Save selection as note", symbol: "text.badge.plus") {
+                [weak self] in self?.onCommand(.saveSelection(selection))
+            })
+        }
+        items.append(MenuItem(id: "save", title: "Save note", symbol: "square.and.arrow.down", shortcut: "⌘S") {
+            [weak self] in self?.onCommand(.save)
+        })
+        items.append(MenuItem(id: "new", title: "New note", symbol: "square.and.pencil", shortcut: "⌘N") {
+            [weak self] in self?.onCommand(.newNote)
+        })
+        items.append(MenuItem(id: "library", title: "My notes", symbol: "list.bullet") {
+            [weak self] in self?.onCommand(.myNotes)
+        })
+        return items
     }
 }
