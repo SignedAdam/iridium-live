@@ -69,9 +69,14 @@ struct SettingsPane: View {
                             Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                         }
                         Row("Model") {
-                            GlassMenu(selection: $model.settings.cleanupModel,
-                                      options: Settings.cleanupModels(on: model.settings.cleanupProvider))
-                                .frame(width: 180)
+                            let provider = model.settings.cleanupProvider
+                            let options = Settings.cleanupModels(on: provider)
+                            GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
+                                AnyView(ModelStatsCard(name: options.first { $0.0 == id }?.1 ?? id,
+                                                       providerName: Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider,
+                                                       stats: ModelStats(provider: provider, model: id), history: model.history))
+                            }
+                            .frame(width: 180)
                         }
                         Row("Instructions", detail: instructionsPreview) {
                             Button(model.settings.cleanupInstructions.isEmpty ? "Add" : "Edit", action: model.onEditInstructions)

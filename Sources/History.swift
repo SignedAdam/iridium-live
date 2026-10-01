@@ -183,9 +183,9 @@ struct HistoryPane: View {
         let entry: HistoryEntry
         let copied: Bool
         let open: Bool
-        let toggle: () -> Void
-        let copy: () -> Void
-        let delete: () -> Void
+        let toggle: @MainActor () -> Void
+        let copy: @MainActor () -> Void
+        let delete: @MainActor () -> Void
         @State private var hovering = false
 
         var body: some View {
@@ -223,9 +223,9 @@ struct HistoryPane: View {
             .contentShape(Rectangle())
             .onTapGesture { if entry.timing != nil { toggle() } }
             .onHover { hovering = $0 }
-            .contextMenu {
-                Button("Copy", action: copy)
-                Button("Delete", role: .destructive, action: delete)
+            .onRightClick {
+                [MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", action: copy),
+                 MenuItem(id: "delete", title: "Delete", symbol: "trash", destructive: true, action: delete)]
             }
             .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.15), value: copied)
