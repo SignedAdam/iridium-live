@@ -25,7 +25,7 @@ final class AppModel {
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
-    static let bannerHeight: CGFloat = 24
+    static let bannerHeight: CGFloat = 14
     static let seam: CGFloat = 1
     /// The largest the glass ever gets: settings open with the memory banner showing.
     static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + bannerHeight)
@@ -72,6 +72,7 @@ final class AppModel {
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
     var onUnload: () -> Void = {}
     var onOpenRecordings: () -> Void = {}
+    var onDeleteHistory: (UUID) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
 
     /// Memory is tight: the control says so in red, whatever is open.
@@ -125,6 +126,12 @@ final class AppModel {
     /// The history button: the same, for everything said so far.
     func toggleHistory() {
         toggle(.history)
+    }
+
+    /// Remove a phrase from the history, on screen and on disk.
+    func deleteHistory(_ id: UUID) {
+        history.removeAll { $0.id == id }
+        onDeleteHistory(id)
     }
 
     /// Input level, 0...1: rises at once, falls gently.

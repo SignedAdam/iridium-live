@@ -67,7 +67,8 @@ def _parakeet_dir(local: bool = False) -> Path | None:
 
 
 def load(key: str, cache_dir: Path):
-    """The loaded model, ready to decode. Both paths end in `install_fast_tdt`, so decode speed is the same."""
+    """The loaded model, ready to decode. Both paths end in `install_fast_tdt`, so the greedy TDT loop stays on
+    the GPU either way; only the encoder differs (Phonon-2's is packed to 2-bit planes, Parakeet's is bf16)."""
     import mlx.core as mx
 
     started = time.perf_counter()
@@ -87,41 +88,60 @@ def load(key: str, cache_dir: Path):
 
 
 def _load_phonon2(cache_dir: Path, fd, started: float):
-    """Phonon-2 exactly as `fermion transcribe` runs it (fp16 dense encoder, GPU-resident TDT decode), but the
-    first load's densified weights are saved: unpacking the five-value container costs ~12 s, reading them back ~1 s."""
+    """Phonon-2 with its five-value encoder left packed: the 264 quantised linears stay two native 2-bit QMM
+    planes (`fermion transcribe`'s own packed runtime, without the `dense16` lever), which is what keeps the
+    encoder at 0.5 GB of GPU memory instead of 1.3 GB. Building the planes out of the container costs 13 s and
+    1.2 GB of transient host memory the allocator is slow to give back, so the first load saves them (350 MB,
+    against 1.2 GB for the densified weights) and every load after that is back in 4 s."""
     import mlx.core as mx
     from mlx.utils import tree_flatten
-    from fermion._speech import backends, fetch
+    from fermion._speech import fetch
+    from fermion._speech._engine_phonon2 import load as engine_module
     from fermion.transcribe import _resolve
 
     repo, key, pin, _ = _resolve("phonon-2")
     model_dir = Path(fetch.ensure(repo, key, pin, quiet=True))
-    cache = cache_dir / (f"phonon-2-{pin['sha256'][:16]}-fermion-"
+    cache = cache_dir / (f"phonon-2-packed-{pin['sha256'][:16]}-fermion-"
                          f"{importlib.metadata.version('fermion-research')}.safetensors")
-    if not cache.exists():
-        speech = backends.load("mlx", model_dir, profile=key, backend=pin["backend"], quiet=True)
+    if cache.exists():
+        model = _packed_from_cache(model_dir, cache, fd, engine_module("packed_runtime"))
+    else:
+        model = engine_module("load_parakeet").load_parakeet(
+            model_dir / "model.fermion", model_dir / "config.json",
+            dtype=mx.bfloat16, packed=True, scale_dtype=mx.float32)
         cache_dir.mkdir(parents=True, exist_ok=True)
         partial = cache.with_suffix(".partial.safetensors")
-        mx.save_safetensors(str(partial), dict(tree_flatten(speech.model.parameters())))
+        mx.save_safetensors(str(partial), dict(tree_flatten(model.parameters())))
         partial.rename(cache)
-        return speech
+    fd.install_fast_tdt(model, block=16)
+    return _wrap(model, model_dir, "phonon-2", {"five_value_modules": 264, "levers": ["tdt16"]},
+                 time.perf_counter() - started)
 
+
+def _packed_from_cache(model_dir: Path, cache: Path, fd, pr):
+    """The same graph `load_parakeet(packed=True)` builds, out of the saved planes: the 264 packed linears carry
+    `base_q`/`residual_q`/`row_lo`/`row_hi`, and the per-group QMM metadata is broadcast from the rows at the end."""
+    import mlx.core as mx
     from mlx_audio.stt.models.parakeet import Model
 
     model = Model.from_config(json.loads((model_dir / "config.json").read_text()))
     weights = mx.load(str(cache))
-    for i, layer in enumerate(model.encoder.layers):  # the 264 five-value linears, as densified by `dense16`
+    packed = []
+    for i, layer in enumerate(model.encoder.layers):
         for dotted in fd._PACKED_LEAVES:
             parent, leaf = dotted.split(".")
-            name = f"encoder.layers.{i}.{dotted}"
-            setattr(getattr(layer, parent), leaf,
-                    fd.DenseFromPacked(weights[f"{name}.weight"], weights.get(f"{name}.bias")))
+            planes = weights[f"encoder.layers.{i}.{dotted}.base_q"]
+            module = pr.PackedFiveValueLinear(planes.shape[1] * 16, planes.shape[0],
+                                              bias=f"encoder.layers.{i}.{dotted}.bias" in weights,
+                                              scale_dtype=mx.float32)
+            setattr(getattr(layer, parent), leaf, module)
+            packed.append(module)
     model.load_weights(list(weights.items()), strict=True)
+    for module in packed:
+        module.materialize_runtime_metadata()
     mx.eval(model.parameters())
     model.eval()
-    fd.install_fast_tdt(model, block=16)
-    return _wrap(model, model_dir, "phonon-2", {"five_value_modules": 264, "levers": ["tdt16", "dense16"]},
-                 time.perf_counter() - started)
+    return model
 
 
 def warm_up(speech) -> None:

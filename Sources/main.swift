@@ -70,10 +70,11 @@ MainActor.assumeIsolated {
         engine.send(settings.saveAudio ? "archive on \(settings.audioSplitSeconds) \(recordings.path)" : "archive off")
     }
     engine.send("hold \(model.settings.typingHold)")
-    if model.settings.cleanupEnabled { engine.send("cleanup \(model.settings.cleanupModel)") }
+    if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
     if model.settings.saveAudio { archive(model.settings) }
     model.onRecord = { engine.send($0 ? "start" : "stop") }
     model.onUnload = { engine.send("unload") }
+    model.onDeleteHistory = { history.delete($0) }
     model.onOpenRecordings = {
         try? FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
         NSWorkspace.shared.open(recordings)
@@ -109,8 +110,8 @@ MainActor.assumeIsolated {
     }
     model.onSettingsChange = { new, old in
         if new.typingHold != old.typingHold { engine.send("hold \(new.typingHold)") }
-        if new.cleanupEnabled != old.cleanupEnabled || new.cleanupModel != old.cleanupModel {
-            engine.send(new.cleanupEnabled ? "cleanup \(new.cleanupModel)" : "cleanup off")
+        if new.cleanupCommand != old.cleanupCommand {
+            engine.send(new.cleanupCommand)
             model.lastCleanupMs = nil
         }
         if new.speechModel != old.speechModel { engine.send("asr \(new.speechModel)") }

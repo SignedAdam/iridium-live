@@ -15,7 +15,7 @@ struct SettingsPane: View {
                             Figure("\(gigabytes(reading.physical - min(reading.physical, reading.available), unit: false)) of \(String(format: "%.0f GB", Double(reading.physical) / 1_073_741_824))")
                         }
                     }
-                    Row("Models", detail: model.speech.state == "unloaded" ? "Load again when you record" : nil) {
+                    Row("Models") {
                         Button(model.speech.state == "unloaded" ? "Unloaded" : "Unload", action: model.onUnload)
                             .buttonStyle(GlassButton())
                             .disabled(model.speech.state == "unloaded")
@@ -52,12 +52,19 @@ struct SettingsPane: View {
                     }
                 }
                 Section("AI cleanup") {
-                    Row("Clean up what you say", detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs) : nil,
+                    Row("Clean up dictation", detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs) : nil,
                         alert: model.cleanup.state == "error") {
                         GlassSwitch(isOn: $model.settings.cleanupEnabled)
                     }
-                    Row("Model") {
-                        Segments(selection: $model.settings.cleanupModel, options: Settings.cleanupModels)
+                    Group {
+                        Row("Runs on") {
+                            Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
+                        }
+                        Row("Model") {
+                            GlassMenu(selection: $model.settings.cleanupModel,
+                                      options: Settings.cleanupModels(on: model.settings.cleanupProvider))
+                                .frame(width: 180)
+                        }
                     }
                     .dimmed(!model.settings.cleanupEnabled)
                 }
@@ -115,7 +122,8 @@ struct SettingsPane: View {
     }
 
     private var lowMemoryAdvice: String {
-        model.settings.cleanupEnabled ? "Running low. AI cleanup uses about 2.5 GB." : "Running low. Closing other apps helps."
+        model.settings.cleanupEnabled && model.settings.cleanupProvider == Settings.localCleanup
+            ? "Running low. Cleanup on Groq would free about 2.5 GB." : "Running low. Closing other apps helps."
     }
 
     /// What a model is doing, in a few words; nothing while it is simply ready.
@@ -124,7 +132,7 @@ struct SettingsPane: View {
         case "downloading": "Downloading \(Int(status.progress * 100))%"
         case "loading": "Loading…"
         case "unloaded": "Unloaded"
-        case "error": "Couldn’t load: \(status.message)"
+        case "error": status.model?.contains(":") == true ? status.message : "Couldn’t load: \(status.message)"  // provider:model is remote
         case "ready": lastMs.map { "Last phrase took \(Int($0)) ms" }
         default: nil
         }
@@ -397,7 +405,7 @@ private struct HotkeyRow: View {
                     .frame(width: 48)
             }
             .buttonStyle(GlassButton())
-            .help("Click, then press the key you want: a single modifier (like right ⌘) or a key with modifiers")
+            .tip("Click, then press a key or a lone modifier")
             GlassMenu(selection: $hotkey.action, options: Hotkey.actionNames).fixedSize()
             GlassMenu(selection: $hotkey.mode, options: Hotkey.modeNames).fixedSize()
             Spacer(minLength: 0)
@@ -411,7 +419,7 @@ private struct HotkeyRow: View {
             }
             .buttonStyle(.plain)
             .onHover { hoveringRemove = $0 }
-            .help("Remove this hotkey")
+            .tip("Remove")
         }
         .frame(height: Row<EmptyView>.height)
     }

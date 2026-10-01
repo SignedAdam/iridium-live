@@ -65,7 +65,7 @@ struct IconToggle: View {
     let symbol: String
     let isOn: Bool
     var badge = false
-    let help: String
+    let tip: String
     let action: () -> Void
     @State private var hovering = false
 
@@ -87,8 +87,64 @@ struct IconToggle: View {
         }
         .buttonStyle(Pressable())
         .onHover { hovering = $0 }
-        .help(help)
+        .tip(tip)
         .animation(.easeOut(duration: 0.15), value: isOn)
         .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// Hover help that shows at once (the system's waits about a second). The hovered control reports its words and
+/// where it is; `TipLayer` draws them outside the glass's clip.
+struct Tip {
+    let text: String
+    let anchor: Anchor<CGRect>
+}
+
+struct TipKey: PreferenceKey {
+    static var defaultValue: [Tip] { [] }
+    static func reduce(value: inout [Tip], nextValue: () -> [Tip]) { value += nextValue() }
+}
+
+extension View {
+    func tip(_ text: String) -> some View { modifier(TipSource(text: text)) }
+}
+
+private struct TipSource: ViewModifier {
+    let text: String
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering = $0 }
+            .anchorPreference(key: TipKey.self, value: .bounds) { hovering ? [Tip(text: text, anchor: $0)] : [] }
+    }
+}
+
+/// The hovered control's tip in a small dark pill: just under the control, or under the whole glass for controls
+/// below `barTop` (the bar and the line above it), so it never covers the row of buttons you are aiming at. Kept
+/// inside the window's margin at the sides.
+struct TipLayer: View {
+    let tips: [Tip]
+    let barTop: CGFloat
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let tip = tips.last {
+                let rect = proxy[tip.anchor]
+                let edge = width / 2 - floatingMargin + 4
+                Text(tip.text)
+                    .font(tiktok(11.5, "Medium"))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .padding(.horizontal, 9)
+                    .frame(height: 20)
+                    .background(Capsule().fill(Color(white: 0.12).opacity(0.94)).overlay(Capsule().strokeBorder(.white.opacity(0.18))))
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+                    .position(x: min(max(rect.midX, edge), proxy.size.width - edge),
+                              y: (rect.minY >= barTop ? proxy.size.height : rect.maxY) + 14)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }

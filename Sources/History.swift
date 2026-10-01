@@ -10,7 +10,7 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
 }
 
 /// Every phrase ever said, whether or not notes or typing were on: one JSON object per line in `history.jsonl`,
-/// only ever appended to, in order, off the main thread.
+/// appended to in order, off the main thread; deleting an entry rewrites the file without it, in the same order.
 @MainActor
 final class HistoryStore {
     private static let shown = 2000  // the newest entries kept in memory for the pane
@@ -44,6 +44,20 @@ final class HistoryStore {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
+        }
+    }
+
+    /// Remove one entry for good: the file is rewritten without its line, atomically, after any pending appends.
+    func delete(_ id: UUID) {
+        let file = self.file
+        disk.async { @Sendable in
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let kept = text.split(separator: "\n").filter { line in
+                (try? decoder.decode(HistoryEntry.self, from: Data(line.utf8)))?.id != id
+            }
+            try? Data(kept.map { $0 + "\n" }.joined().utf8).write(to: file, options: .atomic)
         }
     }
 
@@ -85,7 +99,7 @@ struct HistoryPane: View {
                         ForEach(days, id: \.day) { group in
                             Section {
                                 ForEach(group.entries) { entry in
-                                    Row(entry: entry, copied: copied == entry.id) { copy(entry) }
+                                    Row(entry: entry, copied: copied == entry.id, copy: { copy(entry) }, delete: { delete(entry) })
                                 }
                             } header: {
                                 Text(group.title.uppercased())
@@ -130,37 +144,62 @@ struct HistoryPane: View {
         }
     }
 
+    private func delete(_ entry: HistoryEntry) {
+        withAnimation(.easeOut(duration: 0.2)) { model.deleteHistory(entry.id) }
+    }
+
+    /// One phrase: click to copy; on hover a delete button; right-click for both.
     private struct Row: View {
         let entry: HistoryEntry
         let copied: Bool
         let copy: () -> Void
+        let delete: () -> Void
         @State private var hovering = false
+        @State private var hoveringDelete = false
 
         var body: some View {
-            Button(action: copy) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(entry.time.formatted(date: .omitted, time: .shortened))
-                        .font(tiktok(11))
-                        .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.4))
-                        .frame(width: 52, alignment: .leading)
-                    Text(entry.text)
-                        .font(tiktok(13))
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(copied ? 0.9 : 0.55))
-                        .opacity(hovering || copied ? 1 : 0)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Button(action: copy) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(entry.time.formatted(date: .omitted, time: .shortened))
+                            .font(tiktok(11))
+                            .monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.4))
+                            .frame(width: 52, alignment: .leading)
+                        Text(entry.text)
+                            .font(tiktok(13))
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(copied ? 0.9 : 0.55))
+                            .opacity(hovering || copied ? 1 : 0)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(hovering ? 0.07 : 0)))
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .tip("Click to copy")
+                Button(action: delete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(hoveringDelete ? 0.95 : 0.5))
+                        .frame(width: 20, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveringDelete = $0 }
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
+                .tip("Delete")
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(hovering ? 0.07 : 0)))
             .onHover { hovering = $0 }
-            .help("Click to copy")
+            .contextMenu {
+                Button("Copy", action: copy)
+                Button("Delete", role: .destructive, action: delete)
+            }
             .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.15), value: copied)
         }

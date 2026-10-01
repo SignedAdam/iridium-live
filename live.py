@@ -16,9 +16,12 @@
 
 Commands on stdin, one per line. "start" opens the MacBook microphone (or plays --wav FILE at real time); "stop"
 closes it and finishes the phrase in flight; "hold SECONDS" sets how long a word must read the same before it is
-typed; "cleanup off|qwen3-4b|llama-3.2-3b" turns the rewrite model off or on; "asr phonon-2|parakeet" switches the
-speech model; "unload" drops every model from memory (the next start brings back what was loaded); "archive on
-SECONDS DIRECTORY" keeps a copy of the recorded audio as WAV files cut at silences that long, "archive off" stops.
+typed; "cleanup off|qwen3-4b|llama-3.2-3b|openrouter:MODEL|groq:MODEL" turns the rewrite model off, on locally, or
+on at a provider (OPENROUTER_API_KEY or GROQ_API_KEY out of the environment; nothing is downloaded or loaded, and a
+request that fails or runs long leaves the phrase raw); "asr phonon-2|parakeet" switches the speech model; "unload"
+drops every model from memory (the next start brings back what was loaded; a remote cleanup model holds none, so it
+keeps working); "archive on SECONDS DIRECTORY" keeps a copy of the recorded audio as WAV files cut at silences that
+long, "archive off" stops.
 All act at once, even while a model is still loading: audio waits and is transcribed as soon as the model is
 ready, and any model that is not on disk is fetched first. Events on stdout, one JSON object per line:
   {"kind": "state", "recording": bool}             at startup and after every change
@@ -158,7 +161,13 @@ class ModelSlot:
         self.events.send({"kind": self.kind, "state": state, "model": self.model_id(key), **extra})
 
     def model_id(self, key: str | None) -> str | None:
+        if self.remote(key):
+            return key  # a remote cleanup model is named by the key itself: "<provider>:<model id>"
         return (asr.MODELS if self.kind == "asr" else cleanup_model.MODELS).get(key) if key else None
+
+    def remote(self, key: str | None) -> bool:
+        """Is `key` a model that lives on someone else's machine? Nothing to download, load, or unload."""
+        return self.kind == "cleanup" and cleanup_model.provider(key) is not None
 
     def _hand_over(self) -> None:
         self.control.put(self)
@@ -169,6 +178,12 @@ class ModelSlot:
         self.want = key
         if key is None:
             self.say("off", None)
+            self._hand_over()
+            return
+        if self.remote(key):  # nothing to fetch and nothing to load: all it needs is a key in the environment
+            if message := cleanup_model.missing_key(key):
+                self.say("error", key, message=message)
+                self.want = self.key
             self._hand_over()
             return
 
@@ -193,21 +208,38 @@ class ModelSlot:
         self.suspended = False
         self._hand_over()
 
+    @property
+    def target(self) -> str | None:
+        """What should be loaded. `unload` drops everything that holds memory, which a remote model does not:
+        it keeps answering across an unload, and there is nothing to bring back afterwards."""
+        return self.want if self.remote(self.want) else (None if self.suspended else self.want)
+
     def changing(self) -> bool:
         """Would `apply` touch the model? The transcriber asks before it lets a phrase run into a reload."""
-        return (None if self.suspended else self.want) != self.key
+        return self.target != self.key
+
+    def notify(self, state: str, message: str = "") -> None:
+        """A remote cleaner reporting on its own requests, from the transcriber thread."""
+        self.say(state, self.key, **({"message": message} if message else {}))
 
     def apply(self) -> bool:
         """Transcriber thread: make the loaded model match `want`, or none of it while suspended."""
-        key = None if self.suspended else self.want
+        key = self.target
         if key == self.key:
             return False
+        if isinstance(self.model, cleanup_model.Remote):
+            self.model.close()  # the kept connection belongs to the model that opened it
         self.model, self.key = None, None
         gc.collect()  # models hold reference cycles (compiled decode loops, tokenizer closures): free them now
         mx.clear_cache()  # and hand their buffers back before the incoming model allocates
         if key is None:
             if self.suspended and self.want:
                 self.say("unloaded", self.want)
+            return True
+        if self.remote(key):
+            self.model = cleanup_model.Remote(key, self.notify)
+            self.key = key
+            self.say("ready", key)
             return True
         self.say("loading", key)
         try:
@@ -397,7 +429,7 @@ def main() -> None:
             rewritten, ran = cleaner.rewrite(text)
             ms = round((time.perf_counter() - at) * 1000, 1) if ran else 0.0
             final = {"kind": "final", "text": rewritten, "raw": text, "cleanup_ms": ms}
-            print(f"cleanup {ms:5.0f} ms  {cleaner.accepted}/{cleaner.steps} drafted", file=sys.stderr, flush=True)
+            print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
         send(final)
         send({"kind": "type", "text": final["text"], "final": True})
         stable.reset()

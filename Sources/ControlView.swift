@@ -27,9 +27,10 @@ struct ControlView: View {
             Rectangle().fill(.white.opacity(0.12))
                 .frame(height: model.pane == nil ? 0 : AppModel.seam)
                 .padding(.horizontal, 18)
+            // A narrow strip whose line hangs into the bar's empty top margin: not clipped to the strip, so it fades.
             MemoryBanner(model: model)
-                .frame(height: model.memoryWarning ? AppModel.bannerHeight : 0)
-                .clipped()
+                .frame(height: model.memoryWarning ? AppModel.bannerHeight : 0, alignment: .top)
+                .opacity(model.memoryWarning ? 1 : 0)
             ControlBar(model: model)
         }
         .frame(width: size.width, height: size.height, alignment: .bottom)
@@ -37,6 +38,9 @@ struct ControlView: View {
         .clipShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .gesture(DragGesture(minimumDistance: 2).onChanged { _ in mover.drag() }.onEnded { _ in mover.end() })
+        .overlayPreferenceValue(TipKey.self) { tips in
+            TipLayer(tips: tips, barTop: size.height - AppModel.barSize.height - (model.memoryWarning ? AppModel.bannerHeight : 0))
+        }
         .shadow(color: .black.opacity(0.32), radius: 16, y: 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(floatingMargin)
@@ -57,23 +61,19 @@ struct ControlView: View {
 }
 
 /// A red line above the bar while memory is tight, whatever else is open: the engine may slow down or be stopped by
-/// the system. Clicking it opens settings, where the memory figures are.
+/// the system. Only a label: drags pass through it to the glass (the settings button carries a red dot too).
 struct MemoryBanner: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        Button(action: { if model.pane != .settings { model.toggleSettings() } }) {
-            HStack(spacing: 6) {
-                Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
-                Text(text).font(tiktok(12, "Medium"))
-            }
-            .foregroundStyle(accent)
-            .padding(.top, 7)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .contentShape(Rectangle())
+        HStack(spacing: 6) {
+            Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
+            Text(text).font(tiktok(12, "Medium"))
         }
-        .buttonStyle(.plain)
-        .help("Memory is tight. Click for details.")
+        .foregroundStyle(accent)
+        .padding(.top, 3)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .allowsHitTesting(false)
     }
 
     private var text: String {

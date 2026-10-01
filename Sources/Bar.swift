@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The bar along the bottom of the control: record, input level, elapsed time, and the notes, typing and settings
-/// switches.
+/// The bar along the bottom of the control: record, input level and elapsed time, then the typing, notes, history
+/// and settings switches.
 struct ControlBar: View {
     @Bindable var model: AppModel
 
@@ -16,20 +16,16 @@ struct ControlBar: View {
                 .frame(width: 50, alignment: .leading)
                 .padding(.leading, 10)
             Rectangle().fill(.white.opacity(0.14)).frame(width: 1, height: 18).padding(.leading, 4)
-            IconToggle(symbol: "note.text", isOn: model.notesCapturing,
-                       help: model.notesCapturing ? "Keeping notes. Click to stop." : "Keep notes of everything you say",
-                       action: model.toggleNotes)
-                .padding(.leading, 9)
-            IconToggle(symbol: "clock.arrow.circlepath", isOn: model.pane == .history,
-                       help: "Everything you have said", action: model.toggleHistory)
-                .padding(.leading, 2)
-            IconToggle(symbol: "keyboard", isOn: model.typing,
-                       help: model.typing ? "Typing into the focused app. Click to stop." : "Type into the focused app",
+            IconToggle(symbol: "keyboard", isOn: model.typing, tip: model.typing ? "Stop typing" : "Type into apps",
                        action: { model.onTypingRequest(!model.typing) })
+                .padding(.leading, 9)
+            IconToggle(symbol: "note.text", isOn: model.notesCapturing, tip: model.notesCapturing ? "Stop notes" : "Notes",
+                       action: model.toggleNotes)
+                .padding(.leading, 2)
+            IconToggle(symbol: "clock.arrow.circlepath", isOn: model.pane == .history, tip: "History", action: model.toggleHistory)
                 .padding(.leading, 2)
             IconToggle(symbol: "gearshape", isOn: model.pane == .settings, badge: model.memoryWarning,
-                       help: model.memoryWarning ? "Settings. Memory is running low." : "Settings",
-                       action: model.toggleSettings)
+                       tip: model.memoryWarning ? "Settings: memory is low" : "Settings", action: model.toggleSettings)
                 .padding(.leading, 2)
         }
         .frame(width: AppModel.barSize.width, height: AppModel.barSize.height, alignment: .leading)
@@ -77,7 +73,7 @@ struct RecordOrb: View {
         }
         .buttonStyle(Pressable())
         .onHover { hovering = $0 }
-        .help(recording ? "Stop" : "Record")
+        .tip(recording ? "Stop" : "Record")
         .animation(.spring(response: 0.32, dampingFraction: 0.62), value: recording)
         .animation(.easeOut(duration: 0.4), value: loading)
     }
