@@ -27,8 +27,11 @@ struct SettingsPane: View {
                     }
                 }
                 Section("Hotkeys") {
+                    let clashing = Hotkey.conflicting(in: model.settings.hotkeys)
+                    let waiting = Hotkey.waitingForDoubleTap(in: model.settings.hotkeys)
                     ForEach($model.settings.hotkeys) { $hotkey in
                         HotkeyRow(hotkey: $hotkey, capturing: model.capturingHotkey == hotkey.id,
+                                  conflict: clashing.contains(hotkey.id), waits: waiting.contains(hotkey.id),
                                   capture: { model.onCaptureHotkey(hotkey.id) },
                                   remove: { model.settings.hotkeys.removeAll { $0.id == hotkey.id } })
                     }
@@ -387,40 +390,60 @@ private struct GlassMenu<Value: Hashable>: View {
     }
 }
 
-/// One hotkey: the key (click to set it, then press it), what it does, and how it is pressed.
+/// One hotkey: the switch that puts it in play, the key (click to set it, then press it), the gesture that works it,
+/// what the words are for, and a line under it when it clashes with another binding or has to wait one out.
 private struct HotkeyRow: View {
     @Binding var hotkey: Hotkey
     let capturing: Bool
+    let conflict: Bool
+    let waits: Bool
     let capture: () -> Void
     let remove: () -> Void
     @State private var hoveringRemove = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            Button(action: capture) {
-                Text(capturing ? "Press a key" : hotkey.label)
-                    .foregroundStyle(capturing ? accent : .white.opacity(0.92))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: 48)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                GlassSwitch(isOn: $hotkey.enabled)
+                Group {
+                    Button(action: capture) {
+                        Text(capturing ? "Press…" : hotkey.label)
+                            .foregroundStyle(capturing ? accent : .white.opacity(0.92))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(width: 44)
+                    }
+                    .buttonStyle(GlassButton())
+                    .tip("Click, then press a key or a lone modifier")
+                    GlassMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames).frame(width: 102)
+                    GlassMenu(selection: $hotkey.action, options: Hotkey.actionNames).frame(width: 112)
+                }
+                .opacity(hotkey.enabled ? 1 : 0.45)
+                Spacer(minLength: 0)
+                Button(action: remove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(hoveringRemove ? 0.9 : 0.45))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(.white.opacity(hoveringRemove ? 0.14 : 0)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveringRemove = $0 }
+                .tip("Remove")
             }
-            .buttonStyle(GlassButton())
-            .tip("Click, then press a key or a lone modifier")
-            GlassMenu(selection: $hotkey.action, options: Hotkey.actionNames).fixedSize()
-            GlassMenu(selection: $hotkey.mode, options: Hotkey.modeNames).fixedSize()
-            Spacer(minLength: 0)
-            Button(action: remove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(hoveringRemove ? 0.9 : 0.45))
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(.white.opacity(hoveringRemove ? 0.14 : 0)))
-                    .contentShape(Circle())
+            if conflict {
+                note("Same key and gesture as another", color: accent)
+            } else if waits {
+                note("Waits a moment for a double-tap", color: .white.opacity(0.45))
             }
-            .buttonStyle(.plain)
-            .onHover { hoveringRemove = $0 }
-            .tip("Remove")
         }
-        .frame(height: Row<EmptyView>.height)
+        .padding(.vertical, 6)
+        .frame(minHeight: Row<EmptyView>.height)
+        .animation(.easeOut(duration: 0.2), value: conflict || waits)
+    }
+
+    private func note(_ text: String, color: Color) -> some View {
+        Text(text).font(tiktok(11.5)).foregroundStyle(color).lineLimit(1).padding(.leading, 2)
     }
 }

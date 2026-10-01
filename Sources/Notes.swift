@@ -76,6 +76,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.onFocusChange = { [unowned self] in reportEditing() }
         view.documentView = text
         view.isHidden = true  // until the notes pane opens
+        view.rim = Self.inset
 
         let center = NotificationCenter.default
         center.addObserver(forName: NSView.boundsDidChangeNotification, object: view.contentView, queue: .main) { [weak self] _ in
@@ -188,10 +189,17 @@ struct NotesEditorView: NSViewRepresentable {
     func updateNSView(_ view: FadingScrollView, context: Context) {}
 }
 
-/// Scrolls with its top and bottom edges fading into the glass, so lines never end on a hard cut.
+/// Scrolls with its top and bottom edges fading into the glass, so lines never end on a hard cut. Its rim, outside the
+/// text, belongs to the glass: clicks there fall through, so the control drags from its edges even over the notes.
 final class FadingScrollView: NSScrollView {
     private static let fadeHeight: CGFloat = 14
     private let fade = CAGradientLayer()
+    var rim = NSSize.zero
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let inside = bounds.insetBy(dx: rim.width, dy: rim.height).contains(convert(point, from: superview))
+        return inside ? super.hitTest(point) : nil
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)

@@ -13,9 +13,9 @@
 # ]
 # ///
 """Phonon-2 (or Parakeet) on MLX, driven over stdin/stdout by the PhononLive app.
-
 Commands on stdin, one per line. "start" opens the MacBook microphone (or plays --wav FILE at real time); "stop"
-closes it and finishes the phrase in flight; "hold SECONDS" sets how long a word must read the same before it is
+closes it and finishes the phrase in flight; "cancel" closes it and throws that phrase away instead, so nothing
+of it is transcribed, typed or archived; "hold SECONDS" sets how long a word must read the same before it is
 typed; "cleanup off|qwen3-4b|llama-3.2-3b|openrouter:MODEL|groq:MODEL" turns the rewrite model off, on locally, or
 on at a provider (OPENROUTER_API_KEY or GROQ_API_KEY out of the environment; nothing is downloaded or loaded, and a
 request that fails or runs long leaves the phrase raw); "asr phonon-2|parakeet" switches the speech model; "unload"
@@ -29,11 +29,21 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
    "progress": 0..1, "message": ...}               whenever a model's state changes ("off" is cleanup only)
   {"kind": "ready"}                                the speech model is loaded, once, at startup
   {"kind": "level", "value": 0..1}                 input level of each 50 ms block while recording
+  {"kind": "work", "pending": bool}                true when a "stop" left work behind (audio queued, a phrase
+                                                   open or decoding, a cleanup running), false once the last
+                                                   final of that recording is out; only changes are sent
   {"kind": "partial" | "final", "text": ...}       caption: the whole in-flight phrase, replacing the previous one
                                                    (final also carries "raw" and "cleanup_ms" when cleanup is on)
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
                                                    whether typing is on)
   {"kind": "archive", "file": ..., "seconds": ...} a recording was closed on disk
+Every final carries "timing", all milliseconds, for where the speaker's wait went: "speech_ms" is how much audio
+the phrase holds, "endpoint_ms" the silence from its last speech frame until it closed (or until "stop" cut it),
+"queue_ms" how long it then waited behind earlier work, "decode_ms" its final transcription, "total_ms" the whole
+wait from that last speech frame to this event, and "cleanup" null with cleanup off or an object with the
+provider, the model, whether the phrase was clean enough to skip the model, "ms" as the speaker waits for it, the
+connection and network time, what the provider reports of its own queue, prompt and generation time, the token
+counts, the cost in dollars and any error that left the phrase raw.
 Decode timings go to stderr.
 """
 import argparse
@@ -65,7 +75,7 @@ import segmenter as seg
 TYPE_HOLD_S = 0.7  # a word is typed once the phrase up to it has read the same for this much audio
 BLOCK = int(0.05 * seg.SAMPLE_RATE)
 CACHE_DIR = Path.home() / ".cache" / "phonon-live"
-STOP, QUIT, CONTROL = "stop", "quit", "control"  # markers in the audio queue
+STOP, QUIT, CONTROL, CANCEL = "stop", "quit", "control", "cancel"  # markers in the audio queue
 
 
 class Block(NamedTuple):
@@ -140,6 +150,22 @@ class Events:
     def send(self, event: dict) -> None:
         with self.lock:
             print(json.dumps(event), flush=True)
+
+
+class Work:
+    """Whether the speaker is still waiting after recording stopped. The app shows that the engine is finishing
+    something it cannot hear any more, so only the changes are worth an event."""
+
+    def __init__(self, events: Events):
+        self.events = events
+        self.pending = False
+        self.lock = threading.Lock()
+
+    def set(self, pending: bool) -> None:
+        with self.lock:
+            if pending != self.pending:
+                self.pending = pending
+                self.events.send({"kind": "work", "pending": pending})
 
 
 class ModelSlot:
@@ -270,8 +296,10 @@ class Recorder:
     """Owns the audio source. Commands act immediately on their own thread, so the microphone opens (and closes)
     even while the model is still loading; captured audio waits in `audio` for the transcriber."""
 
-    def __init__(self, wav: str | None, audio: queue.Queue, events: Events):
+    def __init__(self, wav: str | None, audio: queue.Queue, events: Events, on_stop=None, on_cancel=None):
         self.wav, self.audio, self.events = wav, audio, events
+        self.on_stop = on_stop or (lambda: None)
+        self.on_cancel = on_cancel or (lambda: None)
         self.lock = threading.Lock()
         self.close_source = None  # set while recording
 
@@ -296,6 +324,31 @@ class Recorder:
             self.close_source = None
             self.audio.put(STOP)  # the transcriber finishes the phrase when it gets here
         print("stopped", file=sys.stderr, flush=True)
+        self.events.send({"kind": "state", "recording": False})
+        self.on_stop()
+
+    def cancel(self) -> None:
+        """Stop and throw the recording away: the blocks still waiting are dropped here and the marker tells the
+        transcriber to drop the phrase in flight, so nothing of it is decoded, typed or archived. The decode the
+        transcriber already has in hand is silenced first: its words belong to the phrase being thrown away."""
+        with self.lock:
+            if not self.close_source:
+                return
+            self.on_cancel()
+            self.close_source()
+            self.close_source = None
+            markers = []
+            while True:
+                try:
+                    item = self.audio.get_nowait()
+                except queue.Empty:
+                    break
+                if not isinstance(item, Block):
+                    markers.append(item)  # a model change was waiting behind the audio: it still has to happen
+            for item in markers:
+                self.audio.put(item)
+            self.audio.put(CANCEL)
+        print("cancelled", file=sys.stderr, flush=True)
         self.events.send({"kind": "state", "recording": False})
 
     def _capture(self, block: np.ndarray) -> None:
@@ -344,7 +397,17 @@ def main() -> None:
     events = Events()
     audio: queue.Queue = queue.Queue()
     control: queue.Queue = queue.Queue()  # slots whose files are on disk, waiting to be loaded here
-    recorder = Recorder(args.wav, audio, events)
+    work = Work(events)
+    working = threading.Event()           # the transcriber has an item in hand
+    discarding = threading.Event()        # a cancel is on its way: this recording says nothing more
+    session: seg.Segmenter | None = None  # built below, once there is a speech model to decode with
+
+    def stopped() -> None:
+        """Recording stopped: the speaker goes on waiting if any audio, phrase or decode is still left over.
+        The STOP marker is already in the queue, so anything past it is audio that has not been heard yet."""
+        work.set(audio.qsize() > 1 or working.is_set() or bool(session and session.open))
+
+    recorder = Recorder(args.wav, audio, events, stopped, discarding.set)
     archive = archive_module.Archive(events)
     speech_slot = ModelSlot("asr", events, control, audio)
     cleanup_slot = ModelSlot("cleanup", events, control, audio)
@@ -364,6 +427,8 @@ def main() -> None:
                 recorder.start()
             elif command == "stop":
                 recorder.stop()
+            elif command == "cancel":
+                recorder.cancel()
             elif command == "hold":
                 stable.hold_s = min(max(float(argument), 0.2), 3.0)
             elif command == "cleanup":
@@ -416,27 +481,46 @@ def main() -> None:
               file=sys.stderr, flush=True)
 
     def on_partial(text: str) -> None:
+        if discarding.is_set():
+            return  # a cancel is on its way through the queue: these words are already thrown away
         send({"kind": "partial", "text": text})
         if cleanup_slot.model is None and (typed := stable.update(text, speech.audio_s)):
             send({"kind": "type", "text": typed, "final": False})
 
-    def on_final(text: str) -> None:
+    def on_final(text: str, timing: seg.Timing) -> None:
         """One phrase is done. With cleanup on, the rewrite runs here, in the transcriber loop: audio keeps
-        queueing behind it and the phrase is typed once, cleaned."""
+        queueing behind it and the phrase is typed once, cleaned. The event carries where the wait went, from
+        the last word the phrase held to this line leaving."""
+        if discarding.is_set():
+            return
         final = {"kind": "final", "text": text}
+        cleanup = None
         if cleaner := cleanup_slot.model:
             at = time.perf_counter()
-            rewritten, ran = cleaner.rewrite(text)
-            ms = round((time.perf_counter() - at) * 1000, 1) if ran else 0.0
-            final = {"kind": "final", "text": rewritten, "raw": text, "cleanup_ms": ms}
+            rewritten, stats = cleaner.rewrite(text)
+            ms = (time.perf_counter() - at) * 1000
+            cleanup = stats._replace(ms=round(ms))._asdict()
+            final = {"kind": "final", "text": rewritten, "raw": text,
+                     "cleanup_ms": 0.0 if stats.skipped else round(ms, 1)}
             print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
+        final["timing"] = {"speech_ms": round(timing.speech_s * 1000),
+                           "endpoint_ms": round((timing.closed - timing.last_speech) * 1000),
+                           "queue_ms": round((timing.decode_at - timing.closed) * 1000),
+                           "decode_ms": round((timing.decoded - timing.decode_at) * 1000),
+                           "cleanup": cleanup,
+                           "total_ms": round((time.time() - timing.last_speech) * 1000)}
         send(final)
         send({"kind": "type", "text": final["text"], "final": True})
         stable.reset()
 
     session = seg.Segmenter(speech, vad, on_partial=on_partial, on_final=on_final, on_frame=archive.feed)
     try:
-        while (block := audio.get()) is not QUIT:
+        while True:
+            working.clear()
+            block = audio.get()
+            working.set()
+            if block is QUIT:
+                break
             if block is CONTROL:
                 while True:
                     try:
@@ -453,12 +537,20 @@ def main() -> None:
                         if slot.model is not None:
                             asr.warm_up(speech)
                             session.drain()  # whatever was said while no model was loaded
+                            work.set(False)  # ...which is the last of what a stop could still be waiting for
             elif block is STOP:
                 session.finish()
                 archive.flush()
                 if stable.typed:  # the phrase ended without a final decode: what is typed stands
                     send({"kind": "type", "text": " ".join(stable.typed), "final": True})
                     stable.reset()
+                work.set(False)
+            elif block is CANCEL:
+                session.discard()  # the phrase in flight is not decoded, typed or kept
+                archive.discard()
+                stable.reset()
+                work.set(False)
+                discarding.clear()  # everything of that recording is behind us; the next one speaks again
             else:
                 session.feed(block.samples, block.at)
     except (KeyboardInterrupt, BrokenPipeError):

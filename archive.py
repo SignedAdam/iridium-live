@@ -53,6 +53,10 @@ class Archive:
         """Recording stopped: close the file in progress, so it is complete and playable."""
         self.work.put(("flush",))
 
+    def discard(self) -> None:
+        """Recording was cancelled: throw the file in progress away, so nothing of it is kept."""
+        self.work.put(("discard",))
+
     def close(self) -> None:
         self.work.put(("close",))
         self.thread.join(timeout=5.0)
@@ -69,6 +73,9 @@ class Archive:
                 self._reset()
             elif item[0] == "flush":
                 self._close_file()
+                self._reset()
+            elif item[0] == "discard":
+                self._discard_file()
                 self._reset()
             else:
                 self._close_file()
@@ -136,3 +143,13 @@ class Archive:
         self.writer = None
         self.events.send({"kind": "archive", "file": str(self.path),
                           "seconds": round(self.written * FRAME / SAMPLE_RATE, 3)})
+
+    def _discard_file(self) -> None:
+        """Close the file in progress and delete it: a cancelled recording leaves nothing on disk and says
+        nothing, since the app was never told the file existed."""
+        if self.writer is None:
+            return
+        self.pending.clear()
+        self.writer.close()
+        self.writer = None
+        self.path.unlink(missing_ok=True)

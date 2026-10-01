@@ -36,6 +36,7 @@ MainActor.assumeIsolated {
             case "state":
                 if event.recording {
                     model.recording = true
+                    model.finishing = false
                     if model.notingNow { notes.startParagraph() }
                 } else {
                     model.stopped()
@@ -45,7 +46,8 @@ MainActor.assumeIsolated {
             case "partial": captions.show(event.text)
             case "final":
                 captions.show(event.text)
-                let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw)
+                let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
+                                         destination: model.destination, timing: event.timing)
                 history.append(entry)
                 model.history.append(entry)
                 if model.notingNow { notes.append(event.text) }
@@ -57,6 +59,7 @@ MainActor.assumeIsolated {
             case "archive":
                 if let file = event.file { model.lastRecording = (URL(fileURLWithPath: file).lastPathComponent, event.seconds ?? 0) }
             case "cleanup": model.cleanup = event.status
+            case "work": model.finishing = event.pending && !model.recording
             case "asr": model.speech = event.status
             default: break
             }
@@ -74,7 +77,20 @@ MainActor.assumeIsolated {
     if model.settings.saveAudio { archive(model.settings) }
     model.onRecord = { engine.send($0 ? "start" : "stop") }
     model.onUnload = { engine.send("unload") }
+    model.onCancel = { engine.send("cancel") }
     model.onDeleteHistory = { history.delete($0) }
+    // The app typed words land in, for the line above the bar and the history (never ourselves: our panels do not
+    // take the keyboard from it).
+    let ourselves = ProcessInfo.processInfo.processIdentifier
+    let front = { @MainActor @Sendable (app: NSRunningApplication?) in
+        if let app, app.processIdentifier != ourselves { model.frontApp = app.localizedName }
+    }
+    front(NSWorkspace.shared.frontmostApplication)
+    NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil,
+                                                      queue: .main) { note in
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        MainActor.assumeIsolated { front(app) }
+    }
     model.onOpenRecordings = {
         try? FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
         NSWorkspace.shared.open(recordings)
@@ -95,6 +111,10 @@ MainActor.assumeIsolated {
         typist.isEnabled = model.typingNow
     }
     hotkeys.onStop = { model.stopRecording() }
+    hotkeys.onCancel = {
+        model.cancelRecording()
+        typist.isEnabled = model.typingNow
+    }
     if !model.settings.hotkeys.isEmpty { model.hotkeysListening = hotkeys.listen() }
     model.onCaptureHotkey = { id in
         model.hotkeysListening = hotkeys.listen()

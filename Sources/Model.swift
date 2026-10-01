@@ -25,10 +25,11 @@ final class AppModel {
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
-    static let bannerHeight: CGFloat = 14
+    static let lineHeight: CGFloat = 14     // the status line just above the bar: it hangs into the bar's empty top
+    static let lineSpacing: CGFloat = 17    // each line above that one
     static let seam: CGFloat = 1
-    /// The largest the glass ever gets: settings open with the memory banner showing.
-    static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + bannerHeight)
+    /// The largest the glass ever gets: settings open with both status lines showing.
+    static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + lineHeight + lineSpacing)
 
     var recording = false
     var recordingSince = Date()
@@ -39,6 +40,8 @@ final class AppModel {
     var lastCleanupMs: Double?
     var memory: MemoryReading?
     var lastRecording: (file: String, seconds: Double)?
+    var finishing = false  // recording has stopped, the engine is still working through what it heard
+    var frontApp: String?  // the app in front, where typed words land
     var hotkeysListening = false
     var capturingHotkey: UUID?  // the hotkey row waiting for a key press
     /// What the recording in progress is for, when a hotkey started it; nil when started from the record button.
@@ -58,6 +61,31 @@ final class AppModel {
     /// Finished phrases go to the notes: notes are being kept, or an "add to notes" hotkey is recording.
     var notingNow: Bool { notesCapturing || session == .note }
 
+    /// Where finished phrases are going, in a few words: "Notes", the app in front, or both.
+    var destination: String? {
+        let app = typingNow ? frontApp ?? "the app in front" : nil
+        switch (app, notingNow) {
+        case let (app?, true): return "\(app) and notes"
+        case let (app?, false): return app
+        case (nil, true): return "Notes"
+        case (nil, false): return nil
+        }
+    }
+
+    /// What the control is doing, for the line above the bar: where the words are going while recording, and that it
+    /// is still finishing after a stop. Nothing worth saying otherwise.
+    var activity: String? {
+        if recording {
+            switch (typingNow, notingNow) {
+            case (true, true): return "Typing into \(frontApp ?? "the app in front") and notes"
+            case (true, false): return "Typing into \(frontApp ?? "the app in front")"
+            case (false, true): return "Writing to notes"
+            case (false, false): return nil
+            }
+        }
+        return finishing ? "Finishing" : nil
+    }
+
     var settings = Settings.load() {
         didSet {
             guard settings != oldValue else { return }
@@ -67,6 +95,7 @@ final class AppModel {
     }
 
     var onRecord: (Bool) -> Void = { _ in }
+    var onCancel: () -> Void = {}
     var onTypingRequest: (Bool) -> Void = { _ in }  // main checks permission, then sets `typing`
     var onPaneChange: (Pane?) -> Void = { _ in }
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
@@ -87,10 +116,15 @@ final class AppModel {
         }
     }
 
-    /// The glass: the bar alone, or opened upward into a pane; the memory banner, when showing, sits above the bar.
+    /// The status lines above the bar: what it is doing, and the memory warning.
+    var linesHeight: CGFloat {
+        let lines = (activity == nil ? 0 : 1) + (memoryWarning ? 1 : 0)
+        return lines == 0 ? 0 : Self.lineHeight + CGFloat(lines - 1) * Self.lineSpacing
+    }
+
+    /// The glass: the bar alone, or opened upward into a pane, with any status lines just above the bar.
     var glassSize: CGSize {
-        let banner = memoryWarning ? Self.bannerHeight : 0
-        return CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth, height: Self.barSize.height + paneHeight + banner)
+        CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth, height: Self.barSize.height + paneHeight + linesHeight)
     }
 
     /// The record button: a recording of your own, typed or noted as the switches say.
@@ -110,6 +144,13 @@ final class AppModel {
     func stopRecording() {
         recording = false
         onRecord(false)
+    }
+
+    /// Drop the recording in progress and whatever it heard: a hotkey tap that turned out not to be a hold.
+    func cancelRecording() {
+        recording = false
+        session = nil
+        onCancel()
     }
 
     /// The notes button: opens the notes and starts keeping them, or closes them and stops.

@@ -12,6 +12,8 @@ struct EngineEvent: Sendable {
     let raw: String?         // "final" events when cleanup ran: the phrase as heard
     let file: String?        // "archive" events: a recording file just closed
     let seconds: Double?     // ... and how long it is
+    let timing: PhraseTiming?  // "final" events: how long each step took
+    let pending: Bool        // "work" events: still finishing what was recorded
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -27,6 +29,8 @@ struct EngineEvent: Sendable {
         raw = object["raw"] as? String
         file = object["file"] as? String
         seconds = object["seconds"] as? Double
+        timing = PhraseTiming(engine: object["timing"])
+        pending = object["pending"] as? Bool ?? false
     }
 }
 

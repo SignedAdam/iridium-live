@@ -8,9 +8,11 @@ pre-roll so its onset survives, and closes on a pause with the trailing silence 
 from __future__ import annotations
 
 import hashlib
+import time
 import urllib.request
 from collections import deque
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -73,13 +75,23 @@ class Vad:
         return float(probability[0, 0])
 
 
+class Timing(NamedTuple):
+    """The wall times of one phrase, so the app can show where the speaker's wait went."""
+    speech_s: float      # audio length of the phrase as it was decoded
+    last_speech: float   # end of the last speech frame in it
+    closed: float        # when the phrase was closed, by the silence after it or by `finish`
+    decode_at: float     # when its final decode started...
+    decoded: float       # ...and when the words came back
+
+
 class Segmenter:
     """Cuts the incoming audio into phrases and decodes them.
 
-    `on_partial(text)` fires with the whole in-flight phrase, replacing the last; `on_final(text)` fires once per
-    phrase that held real speech. Partials self-clock off the buffer as it stands after a decode returns, so slow
-    decodes space partials out instead of queueing. `on_frame(frame, speech, at)` sees every 512-sample frame with
-    its speech decision and the wall time of its first sample, which is what the archive cuts its files on.
+    `on_partial(text)` fires with the whole in-flight phrase, replacing the last; `on_final(text, timing)` fires
+    once per phrase that held real speech, with a `Timing` of where its latency went. Partials self-clock off the
+    buffer as it stands after a decode returns, so slow decodes space partials out instead of queueing.
+    `on_frame(frame, speech, at)` sees every 512-sample frame with its speech decision and the wall time of its
+    first sample, which is what the archive cuts its files on.
 
     Segmenting does not need a speech model: with none loaded the phrases are kept whole and decoded by `drain()`
     as soon as one is back.
@@ -88,11 +100,11 @@ class Segmenter:
     def __init__(self, speech, vad: Vad, *, on_partial=None, on_final=None, on_frame=None):
         self.speech, self.vad = speech, vad
         self.on_partial = on_partial or (lambda text: None)
-        self.on_final = on_final or (lambda text: None)
+        self.on_final = on_final or (lambda text, timing: None)
         self.on_frame = on_frame or (lambda frame, speech, at: None)
         self.pending = np.zeros(0, dtype=np.float32)          # samples not yet a whole frame
         self.preroll: deque[np.ndarray] = deque(maxlen=max(1, round(PREROLL_S * SAMPLE_RATE / FRAME)))
-        self.held: list[np.ndarray] = []                      # phrases that finished with no model loaded
+        self.held: list[tuple[np.ndarray, float, float]] = []  # phrases that finished with no model loaded
         self.clock = 0.0                                      # wall time of the next frame's first sample
         self._reset_phrase()
 
@@ -102,6 +114,7 @@ class Segmenter:
         self.onset_run = 0                   # consecutive speech frames while still closed
         self.speech_frames = 0               # speech frames in the phrase (the min-speech test)
         self.last_speech = 0                 # frames in the phrase when speech was last heard
+        self.last_speech_at = 0.0            # ...and the wall time that frame ended at
         self.in_speech = False               # hysteresis: speech until a frame drops under END_P
         self.next_partial = 0                # phrase frames at which to decode next
 
@@ -118,6 +131,8 @@ class Segmenter:
     def _frame(self, frame: np.ndarray) -> None:
         probability = self.vad(frame)
         self.in_speech = probability >= (END_P if self.in_speech else START_P)
+        if self.in_speech:
+            self.last_speech_at = self.clock + FRAME / SAMPLE_RATE
         self.on_frame(frame, self.in_speech, self.clock)
 
         if not self.open:
@@ -140,7 +155,7 @@ class Segmenter:
 
         quiet = (len(self.frames) - self.last_speech) * FRAME >= SILENCE_CLOSE_S * SAMPLE_RATE
         if quiet or len(self.frames) * FRAME >= MAX_PHRASE_S * SAMPLE_RATE:
-            self._finalize()
+            self._finalize(self.clock + FRAME / SAMPLE_RATE)
         elif (self.speech.ready and len(self.frames) >= self.next_partial
               and self.speech_frames * FRAME >= MIN_SPEECH_S * SAMPLE_RATE):
             text, _, _ = self.speech.transcribe_array(np.concatenate(self.frames))
@@ -148,8 +163,9 @@ class Segmenter:
                 self.on_partial(text)
             self.next_partial = len(self.frames) + round(PARTIAL_EVERY_S * SAMPLE_RATE / FRAME)
 
-    def _finalize(self) -> None:
+    def _finalize(self, closed: float) -> None:
         frames, speech_frames, last_speech = self.frames, self.speech_frames, self.last_speech
+        last_speech_at = self.last_speech_at
         self._reset_phrase()
         self.vad.reset()  # the next phrase starts from silence; stale recurrent state would bias its onset
         if speech_frames * FRAME < MIN_SPEECH_S * SAMPLE_RATE:
@@ -157,28 +173,38 @@ class Segmenter:
         keep = min(len(frames), last_speech + round(FINAL_TAIL_S * SAMPLE_RATE / FRAME))
         audio = np.concatenate(frames[:keep])
         if not self.speech.ready:
-            self.held.append(audio)  # no model: keep the phrase whole until there is one again
-            while sum(len(held) for held in self.held) > HELD_MAX_S * SAMPLE_RATE:
+            self.held.append((audio, last_speech_at, closed))  # no model: keep the phrase whole until there is one
+            while sum(len(held) for held, _, _ in self.held) > HELD_MAX_S * SAMPLE_RATE:
                 self.held.pop(0)     # ...but a model that never comes back must not fill memory
             return
-        self._decode(audio)
+        self._decode(audio, last_speech_at, closed)
 
-    def _decode(self, audio: np.ndarray) -> None:
+    def _decode(self, audio: np.ndarray, last_speech: float, closed: float) -> None:
+        decode_at = time.time()
         text, _, _ = self.speech.transcribe_array(audio)
         if text:
-            self.on_final(text)
+            self.on_final(text, Timing(len(audio) / SAMPLE_RATE, last_speech, closed, decode_at, time.time()))
 
     def drain(self) -> None:
         """A speech model is loaded again: decode the phrases that finished without one, oldest first."""
         held, self.held = self.held, []
-        for audio in held:
-            self._decode(audio)
+        for audio, last_speech, closed in held:
+            self._decode(audio, last_speech, closed)
 
     def finish(self) -> None:
-        """Recording stopped: decode whatever is in flight."""
+        """Recording stopped: decode whatever is in flight, which closes at the end of the audio heard so far."""
         self.pending = np.zeros(0, dtype=np.float32)
         self.preroll.clear()
         if self.open:
-            self._finalize()
+            self._finalize(self.clock)
         else:
             self.vad.reset()
+
+    def discard(self) -> None:
+        """The recording was cancelled: drop the phrase in flight and any phrase still waiting for a model,
+        decoding none of them. Nothing of what was said reaches `on_final`."""
+        self.pending = np.zeros(0, dtype=np.float32)
+        self.preroll.clear()
+        self.held.clear()
+        self._reset_phrase()
+        self.vad.reset()

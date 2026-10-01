@@ -25,6 +25,25 @@ MAX_NEW = 160        # a dictated phrase is short; past this the model is not cl
 NGRAM = (3, 2, 1)    # n-gram sizes tried when drafting, longest first; a bad draft costs one forward pass, no more
 DRAFT = 10           # tokens drafted per step
 
+
+class Stats(NamedTuple):
+    """What one cleanup cost, as the app shows it next to the phrase. Every duration is whole milliseconds, and
+    anything the provider did not report (or that does not apply to where the model ran) stays None."""
+    provider: str                    # "groq", "openrouter" or "local"
+    model: str                       # the model id as it was configured
+    skipped: bool                    # the phrase was already clean, so the model was never asked
+    ms: int = 0                      # the whole cleanup step, which is what the speaker waits for
+    connect_ms: int | None = None    # TCP and TLS, only when this request had to open the connection
+    network_ms: int | None = None    # the round trip minus the time the provider says it spent
+    queue_ms: int | None = None      # ...and the three halves of that time, as the provider reports them
+    prompt_ms: int | None = None
+    generate_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost_usd: float | None = None    # OpenRouter reports it; for Groq it is the token counts at list price
+    error: str | None = None         # why the phrase came back raw
+
+
 SYSTEM = (
     "You clean up dictated speech. Rewrite the user's transcript as the text they meant to type.\n"
     "- Delete fillers and stutters: um, uh, er, ah, like, you know, I mean, sort of, repeated words.\n"
@@ -114,6 +133,8 @@ class Cleaner:
     def __init__(self, model_id: str):
         from mlx_lm import load
 
+        self.model_id = model_id
+        self.prompt_tokens = self.completion_tokens = 0
         self.model, self.tokenizer = load(model_id)
         self.eos = set(self.tokenizer.eos_token_ids or {self.tokenizer.eos_token_id})
         rendered = self.tokenizer.apply_chat_template(
@@ -128,14 +149,16 @@ class Cleaner:
         self.reset_cache()
         self.clean("um so it's it's about twenty five dollars")  # compile the prefill, decode and verify graphs
 
-    def rewrite(self, text: str) -> tuple[str, bool]:
-        """The phrase as it should be typed, and whether the model actually ran. A phrase with nothing to fix
-        never reaches it, and a rewrite that stopped looking like a rewrite is thrown away for the raw phrase."""
+    def rewrite(self, text: str) -> tuple[str, Stats]:
+        """The phrase as it should be typed, and what the cleanup cost. A phrase with nothing to fix never
+        reaches the model, and a rewrite that stopped looking like a rewrite is thrown away for the raw phrase."""
         self.accepted = self.steps = 0
         if not needs_cleanup(text):
-            return text, False
+            return text, Stats("local", self.model_id, skipped=True)
         out = self.clean(text)
-        return (out if plausible(text, out) else text), True
+        stats = Stats("local", self.model_id, skipped=False, prompt_tokens=self.prompt_tokens,
+                      completion_tokens=self.completion_tokens)
+        return (out if plausible(text, out) else text), stats
 
     @property
     def note(self) -> str:
@@ -198,7 +221,9 @@ class Cleaner:
     def clean(self, text: str, speculate: bool = True) -> str:
         """The model's rewrite of one phrase, prefilling only the phrase: the prefix is already in the cache."""
         body = self._encode(text)
-        out = self.generate(self._encode(self.head) + body + self._encode(self.tail), body, speculate)
+        prompt = self._encode(self.head) + body + self._encode(self.tail)
+        out = self.generate(prompt, body, speculate)
+        self.prompt_tokens, self.completion_tokens = len(prompt), len(out)
         return self.tokenizer.decode(out).strip()
 
 
@@ -222,15 +247,18 @@ class Provider(NamedTuple):
     key_env: str
     budget: str                 # the field that caps generation
     quiet: tuple[dict, ...]     # ways to ask for no reasoning, best first; one rejected falls through to the next
+    accounting: dict            # what to add to the body to be told what the request cost
 
 
 PROVIDERS = {
     "openrouter": Provider("OpenRouter", "openrouter.ai", "/api/v1/chat/completions", "OPENROUTER_API_KEY",
-                           "max_tokens", ({"reasoning": {"enabled": False, "exclude": True}}, {})),
+                           "max_tokens", ({"reasoning": {"enabled": False, "exclude": True}}, {}),
+                           {"usage": {"include": True}}),  # ...which is the only way it reports the price
     # Groq's qwen3 models take "none"; gpt-oss only goes down to "low", so a rejected "none" falls through to it.
     "groq": Provider("Groq", "api.groq.com", "/openai/v1/chat/completions", "GROQ_API_KEY",
                      "max_completion_tokens", ({"reasoning_effort": "none", "reasoning_format": "hidden"},
-                                               {"reasoning_effort": "low", "reasoning_format": "hidden"}, {})),
+                                               {"reasoning_effort": "low", "reasoning_format": "hidden"}, {}),
+                     {}),  # Groq times and counts every request in `usage` without being asked
 }
 # One phrase is typed as soon as the rewrite is back, so this budget is dictation latency the speaker feels. A warm
 # connection to a fast model answers a phrase in well under a second, and the slowest worth offering lands inside
@@ -241,6 +269,28 @@ THINKING = 256  # tokens granted on top when a model will not stop reasoning: it
 #: The statuses worth a word of their own: the API's own sentence is long, and these are what goes wrong.
 SAYS = {401: "key rejected", 402: "no credits", 403: "model not allowed", 404: "no such model",
         429: "rate limited", 503: "no provider available"}
+#: Groq's published list price per million tokens, input then output, for the chat models it sells by the token
+#: (https://console.groq.com/docs/models, read 2026-10-01). The models priced "contact sales" there, and anything
+#: added since, are simply absent: a phrase cleaned by one of those reports no cost rather than a wrong one.
+GROQ_PRICES = {
+    "qwen/qwen3.8-27b": (0.80, 4.00),
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.075, 0.30),
+    "openai/gpt-oss-safeguard-20b": (0.075, 0.30),
+}
+
+
+def _ms(seconds: float | None) -> int | None:
+    """A duration a provider reported in seconds, in whole milliseconds."""
+    return None if seconds is None else round(seconds * 1000)
+
+
+def _groq_cost(model: str, prompt_tokens: int | None, completion_tokens: int | None) -> float | None:
+    """What one Groq request cost at list price, or None for a model with no published per-token price."""
+    price = GROQ_PRICES.get(model)
+    if price is None or prompt_tokens is None or completion_tokens is None:
+        return None
+    return round((prompt_tokens * price[0] + completion_tokens * price[1]) / 1e6, 9)
 
 
 def provider(key: str | None) -> Provider | None:
@@ -263,6 +313,7 @@ class Remote:
 
     def __init__(self, key: str, notify=None):
         self.key = key
+        self.name = key.split(":", 1)[0]
         self.provider = provider(key)
         self.model = key.split(":", 1)[1]
         self.notify = notify or (lambda state, message="": None)
@@ -270,33 +321,41 @@ class Remote:
         self.failed = False  # the last request failed; a success after that is worth an event of its own
         self.quiet = 0       # which way of asking for no reasoning this model turned out to accept
         self.note = ""
+        self.connect_ms: int | None = None  # what opening the connection cost the last phrase, if it had to
+        self.trip_ms = 0.0                  # ...and what its last round trip took, wire and provider together
         self.messages = ([{"role": "system", "content": SYSTEM}]
                          + [message for phrase, clean in SHOTS
                             for message in ({"role": "user", "content": phrase},
                                             {"role": "assistant", "content": clean})])
 
-    def rewrite(self, text: str) -> tuple[str, bool]:
-        """The phrase as it should be typed, and whether the model was asked. The phrase is never lost: a clean
-        phrase, a missing key, a timeout, an API error and an implausible rewrite all return the raw text."""
+    def rewrite(self, text: str) -> tuple[str, Stats]:
+        """The phrase as it should be typed, and what the cleanup cost. The phrase is never lost: a clean phrase,
+        a missing key, a timeout, an API error and an implausible rewrite all return the raw text."""
         self.note = ""
+        self.connect_ms, self.trip_ms = None, 0.0
         if not needs_cleanup(text):
-            return text, False
+            return text, self._stats(skipped=True)
         if message := missing_key(self.key):
             self.note = message
             self._state(False, message)
-            return text, False
+            return text, self._stats(error=message)
         try:
-            out = self._ask(text, time.monotonic() + TIMEOUT_S)
+            out, usage = self._ask(text, time.monotonic() + TIMEOUT_S)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
-            return text, True
+            return text, self._stats(error=str(exc))
         self._state(True)
         if not plausible(text, out):
             self.note = f"{self.model} implausible"
-            return text, True
+            return text, self._stats(error="implausible rewrite", **usage)
         self.note = self.model
-        return out, True
+        return out, self._stats(**usage)
+
+    def _stats(self, *, skipped: bool = False, **fields) -> Stats:
+        """One phrase's `Stats`, with what this object knows already filled in. `ms` belongs to the caller: the
+        wait it measures is the caller's."""
+        return Stats(self.name, self.model, skipped, connect_ms=self.connect_ms, **fields)
 
     def close(self) -> None:
         if self.conn is not None:
@@ -316,7 +375,9 @@ class Remote:
             self.failed = True
             self.notify("error", message)
 
-    def _ask(self, text: str, deadline: float) -> str:
+    def _ask(self, text: str, deadline: float) -> tuple[str, dict]:
+        """The rewrite and what the provider says it cost, in one round trip — two when the model turns out not to
+        take the way it was asked not to think."""
         status, data = self._round_trip(self._body(text), deadline)
         while status != 200 and b"reasoning" in data.lower() and self.quiet + 1 < len(self.provider.quiet):
             self.quiet += 1  # this model does not take that way of being quietened: try the next one down
@@ -324,10 +385,30 @@ class Remote:
         if status != 200:
             raise RuntimeError(f"{status} {SAYS.get(status) or _message(data)}")
         try:
-            out = json.loads(data)["choices"][0]["message"]["content"]
+            body = json.loads(data)
+            out = body["choices"][0]["message"]["content"]
         except Exception:
             raise RuntimeError(f"bad response: {_message(data)}") from None
-        return " ".join((out or "").split()).strip('"')
+        return " ".join((out or "").split()).strip('"'), self._usage(body)
+
+    def _usage(self, body: dict) -> dict:
+        """What the response says the request cost, as `Stats` fields. Groq times every request in `usage`, in
+        seconds, and charges by the token, so its price comes from `GROQ_PRICES`; OpenRouter reports no timings
+        but, with usage accounting asked for, the amount it actually charged."""
+        usage = body.get("usage") or {}
+        prompt_tokens, completion_tokens = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        queue_s, prompt_s = usage.get("queue_time"), usage.get("prompt_time")
+        generate_s = usage.get("completion_time")
+        spent = usage.get("total_time")
+        if spent is None and (prompt_s is not None or generate_s is not None):
+            spent = (prompt_s or 0.0) + (generate_s or 0.0)
+        # Everything the round trip took that the provider does not account for is the wire and our own side.
+        network = None if spent is None else max(0, round(self.trip_ms - ((queue_s or 0.0) + spent) * 1000))
+        cost = usage.get("cost") if self.name == "openrouter" else _groq_cost(
+            self.model, prompt_tokens, completion_tokens)
+        return {"network_ms": network, "queue_ms": _ms(queue_s), "prompt_ms": _ms(prompt_s),
+                "generate_ms": _ms(generate_s), "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens, "cost_usd": cost}
 
     def _body(self, text: str) -> bytes:
         """The phrase, with generation pinned down: no sampling, no reasoning, and only as many tokens as a rewrite
@@ -339,12 +420,15 @@ class Remote:
             "temperature": 0,
             "stream": False,
             self.provider.budget: room,
+            **self.provider.accounting,
             **self.provider.quiet[self.quiet],
         }).encode()
 
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
-        """One request on the kept connection. A connection that died between phrases costs one reconnect, never
-        the phrase: the second attempt runs on what is left of the budget, and nothing is retried past it."""
+        """One request on the kept connection, timed: opening the connection is counted on its own, since that is
+        the cold phrase's extra cost, and `trip_ms` is the request itself. A connection that died between phrases
+        costs one reconnect, never the phrase: the second attempt runs on what is left of the budget, and nothing
+        is retried past it."""
         import http.client
 
         headers = {"Authorization": f"Bearer {os.environ[self.provider.key_env]}",
@@ -360,9 +444,16 @@ class Remote:
             if self.conn.sock is not None:
                 self.conn.sock.settimeout(left)
             try:
+                if fresh:
+                    opened = time.perf_counter()
+                    self.conn.connect()  # TCP and TLS, which is most of what a cold phrase waits for
+                    self.connect_ms = round((time.perf_counter() - opened) * 1000)
+                    self.conn.sock.settimeout(left)
+                sent = time.perf_counter()
                 self.conn.request("POST", self.provider.path, payload, headers)
                 response = self.conn.getresponse()
                 data = response.read()
+                self.trip_ms = (time.perf_counter() - sent) * 1000
                 if response.will_close:
                     self.close()
                 return response.status, data

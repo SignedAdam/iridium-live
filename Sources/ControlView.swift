@@ -27,10 +27,9 @@ struct ControlView: View {
             Rectangle().fill(.white.opacity(0.12))
                 .frame(height: model.pane == nil ? 0 : AppModel.seam)
                 .padding(.horizontal, 18)
-            // A narrow strip whose line hangs into the bar's empty top margin: not clipped to the strip, so it fades.
-            MemoryBanner(model: model)
-                .frame(height: model.memoryWarning ? AppModel.bannerHeight : 0, alignment: .top)
-                .opacity(model.memoryWarning ? 1 : 0)
+            // Narrow strips whose lowest line hangs into the bar's empty top margin: not clipped, so lines fade.
+            StatusLines(model: model)
+                .frame(height: model.linesHeight, alignment: .top)
             ControlBar(model: model)
         }
         .frame(width: size.width, height: size.height, alignment: .bottom)
@@ -39,14 +38,14 @@ struct ControlView: View {
         .contentShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .gesture(DragGesture(minimumDistance: 2).onChanged { _ in mover.drag() }.onEnded { _ in mover.end() })
         .overlayPreferenceValue(TipKey.self) { tips in
-            TipLayer(tips: tips, barTop: size.height - AppModel.barSize.height - (model.memoryWarning ? AppModel.bannerHeight : 0))
+            TipLayer(tips: tips, barTop: size.height - AppModel.barSize.height - model.linesHeight)
         }
         .shadow(color: .black.opacity(0.32), radius: 16, y: 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(floatingMargin)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.pane)
         .animation(.easeOut(duration: 0.22), value: model.notesHeight)
-        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.memoryWarning)
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
     }
 
     /// A pane shows only while selected; the others wait just off to its side, faded out.
@@ -60,26 +59,57 @@ struct ControlView: View {
     }
 }
 
-/// A red line above the bar while memory is tight, whatever else is open: the engine may slow down or be stopped by
-/// the system. Only a label: drags pass through it to the glass (the settings button carries a red dot too).
-struct MemoryBanner: View {
+/// The lines just above the bar, whatever else is open: what the control is doing (where the words go while
+/// recording, "Finishing" while the engine works through what it heard after a stop) and, in red, that memory is
+/// tight. Only labels: drags pass through them to the glass (the settings button carries a red dot too).
+struct StatusLines: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
-            Text(text).font(tiktok(12, "Medium"))
+        VStack(spacing: AppModel.lineSpacing - 15) {
+            if let activity = model.activity {
+                HStack(spacing: 6) {
+                    if model.recording {
+                        Image(systemName: model.typingNow ? "keyboard" : "note.text").font(.system(size: 10, weight: .semibold))
+                    } else {
+                        Spinner().frame(width: 10, height: 10)
+                    }
+                    Text(activity).font(tiktok(12, "Medium")).lineLimit(1)
+                }
+                .frame(height: 15)
+                .foregroundStyle(.white.opacity(0.85))
+                .transition(.opacity)
+            }
+            if model.memoryWarning {
+                HStack(spacing: 6) {
+                    Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
+                    Text(memoryText).font(tiktok(12, "Medium"))
+                }
+                .frame(height: 15)
+                .foregroundStyle(accent)
+                .transition(.opacity)
+            }
         }
-        .foregroundStyle(accent)
         .padding(.top, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .allowsHitTesting(false)
     }
 
-    private var text: String {
+    private var memoryText: String {
         guard let memory = model.memory else { return "Memory is low" }
         let used = Double(memory.physical - min(memory.physical, memory.available)) / 1_073_741_824
         return String(format: "Memory is low: %.1f of %.0f GB in use", used, Double(memory.physical) / 1_073_741_824)
+    }
+}
+
+/// A small arc going round: work in progress.
+struct Spinner: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            Circle().trim(from: 0, to: 0.7)
+                .stroke(.white.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .rotationEffect(.degrees(360 * context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9))
+        }
     }
 }
 

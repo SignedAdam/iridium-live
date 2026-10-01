@@ -85,7 +85,7 @@ extension Settings {
         captionOpacity = value(.captionOpacity, fallback.captionOpacity)
         glassTint = value(.glassTint, fallback.glassTint)
         controlOpacity = value(.controlOpacity, fallback.controlOpacity)
-        hotkeys = value(.hotkeys, fallback.hotkeys)
+        hotkeys = value(.hotkeys, SavedHotkeys(hotkeys: fallback.hotkeys)).hotkeys  // older saves carried a mode
         saveAudio = value(.saveAudio, fallback.saveAudio)
         audioSplitSeconds = value(.audioSplitSeconds, fallback.audioSplitSeconds)
     }

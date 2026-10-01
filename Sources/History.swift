@@ -1,12 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// One finished phrase, as it was typed (cleaned, when AI cleanup ran) and as it was heard.
+/// One finished phrase, as it was typed (cleaned, when AI cleanup ran) and as it was heard, where it went, and how
+/// long each step took.
 struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     let time: Date
     let text: String
     var raw: String?
+    var destination: String?  // "Notes", the app it was typed into, or both
+    var timing: PhraseTiming?
 }
 
 /// Every phrase ever said, whether or not notes or typing were on: one JSON object per line in `history.jsonl`,
@@ -67,11 +70,13 @@ final class HistoryStore {
     }
 }
 
-/// Everything said so far, newest first, by day. Search narrows it; clicking an entry copies it.
+/// Everything said so far, newest first, by day, with each day's cleanup cost. Search narrows it; clicking an entry
+/// opens its timeline.
 struct HistoryPane: View {
     @Bindable var model: AppModel
     @State private var query = ""
     @State private var copied: UUID?
+    @State private var open: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,17 +104,20 @@ struct HistoryPane: View {
                         ForEach(days, id: \.day) { group in
                             Section {
                                 ForEach(group.entries) { entry in
-                                    Row(entry: entry, copied: copied == entry.id, copy: { copy(entry) }, delete: { delete(entry) })
+                                    Row(entry: entry, copied: copied == entry.id, open: open == entry.id,
+                                        toggle: { toggle(entry) }, copy: { copy(entry) }, delete: { delete(entry) })
                                 }
                             } header: {
-                                Text(group.title.uppercased())
-                                    .font(tiktok(10.5, "Medium"))
-                                    .kerning(0.8)
-                                    .foregroundStyle(.white.opacity(0.42))
-                                    .padding(.horizontal, 10)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 4)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                HStack {
+                                    Text(group.title.uppercased()).kerning(0.8)
+                                    Spacer()
+                                    if group.cost > 0 { Text(dollars(group.cost)).monospacedDigit() }
+                                }
+                                .font(tiktok(10.5, "Medium"))
+                                .foregroundStyle(.white.opacity(0.42))
+                                .padding(.horizontal, 10)
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
                             }
                         }
                     }
@@ -122,7 +130,7 @@ struct HistoryPane: View {
         .foregroundStyle(.white.opacity(0.9))
     }
 
-    private var days: [(day: Date, title: String, entries: [HistoryEntry])] {
+    private var days: [(day: Date, title: String, entries: [HistoryEntry], cost: Double)] {
         let calendar = Calendar.current
         let matching = model.history.reversed().filter { query.isEmpty || $0.text.localizedCaseInsensitiveContains(query) }
         let grouped = Dictionary(grouping: matching) { calendar.startOfDay(for: $0.time) }
@@ -130,8 +138,13 @@ struct HistoryPane: View {
             let title = calendar.isDateInToday(day) ? "Today"
                 : calendar.isDateInYesterday(day) ? "Yesterday"
                 : day.formatted(.dateTime.weekday(.wide).day().month(.wide))
-            return (day, title, grouped[day]!.sorted { $0.time > $1.time })
+            let entries = grouped[day]!.sorted { $0.time > $1.time }
+            return (day, title, entries, entries.reduce(0) { $0 + ($1.timing?.cleanup?.costUsd ?? 0) })
         }
+    }
+
+    private func toggle(_ entry: HistoryEntry) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { open = open == entry.id ? nil : entry.id }
     }
 
     private func copy(_ entry: HistoryEntry) {
@@ -148,53 +161,51 @@ struct HistoryPane: View {
         withAnimation(.easeOut(duration: 0.2)) { model.deleteHistory(entry.id) }
     }
 
-    /// One phrase: click to copy; on hover a delete button; right-click for both.
+    /// One phrase: its time, text and timing at a glance; click for the full timeline; on hover copy and delete;
+    /// right-click for both.
     private struct Row: View {
         let entry: HistoryEntry
         let copied: Bool
+        let open: Bool
+        let toggle: () -> Void
         let copy: () -> Void
         let delete: () -> Void
         @State private var hovering = false
-        @State private var hoveringDelete = false
 
         var body: some View {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Button(action: copy) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Text(entry.time.formatted(date: .omitted, time: .shortened))
-                            .font(tiktok(11))
-                            .monospacedDigit()
-                            .foregroundStyle(.white.opacity(0.4))
-                            .frame(width: 52, alignment: .leading)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(entry.time.formatted(date: .omitted, time: .shortened))
+                        .font(tiktok(11))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.4))
+                        .frame(width: 52, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(entry.text)
                             .font(tiktok(13))
                             .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(copied ? 0.9 : 0.55))
-                            .opacity(hovering || copied ? 1 : 0)
+                        if let timing = entry.timing { TimingSummary(timing: timing) }
                     }
-                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 2) {
+                        RowAction(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy", action: copy)
+                        RowAction(symbol: "trash", tip: "Delete", action: delete)
+                    }
+                    .opacity(hovering || copied ? 1 : 0)
+                    .allowsHitTesting(hovering)
                 }
-                .buttonStyle(.plain)
-                .tip("Click to copy")
-                Button(action: delete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(hoveringDelete ? 0.95 : 0.5))
-                        .frame(width: 20, height: 18)
-                        .contentShape(Rectangle())
+                if open, let timing = entry.timing {
+                    PhraseTimeline(timing: timing, heard: entry.raw)
+                        .padding(.leading, 62)
+                        .padding(.top, 8)
+                        .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .onHover { hoveringDelete = $0 }
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
-                .tip("Delete")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(hovering ? 0.07 : 0)))
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(open ? 0.06 : hovering ? 0.05 : 0)))
+            .contentShape(Rectangle())
+            .onTapGesture { if entry.timing != nil { toggle() } }
             .onHover { hovering = $0 }
             .contextMenu {
                 Button("Copy", action: copy)
@@ -202,6 +213,27 @@ struct HistoryPane: View {
             }
             .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.15), value: copied)
+        }
+    }
+
+    /// A small icon button on a row.
+    private struct RowAction: View {
+        let symbol: String
+        let tip: String
+        let action: () -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: action) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.5))
+                    .frame(width: 20, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .tip(tip)
         }
     }
 }

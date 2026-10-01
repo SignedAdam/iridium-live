@@ -7,7 +7,7 @@ struct ControlBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RecordOrb(recording: model.recording, loading: !model.ready, action: model.toggleRecording)
+            RecordOrb(recording: model.recording, loading: !model.ready || model.finishing, action: model.toggleRecording)
                 .padding(.leading, 8)
             LevelMeter(level: model.recording ? model.level : 0, active: model.recording)
                 .frame(width: 56, height: 28)
