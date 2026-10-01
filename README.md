@@ -69,7 +69,14 @@ Your data lives in `~/Library/Application Support/PhononLive`:
 - `journal.txt` (every dictated phrase)
 - `backups/`
 - `history.jsonl`
+- `usage.jsonl` (one line per AI cleanup call: tokens, cost and latency, for the token ledger)
 - `Recordings/` (only when Save audio is on)
+
+`usage.jsonl` is written for the token collector (`resume-site/scripts/collect-tokens.mjs`), which reads it like the
+Claude Code, Codex and omp logs and posts the rows to the ledger. Each line carries the collector's event fields
+(`id`, `source`, `conv`, `day`, `model`, `input`, `output`, `cacheRead`, `cacheWrite`, `total`) plus `app`, `ts`,
+`provider`, `costUsd`, `ms` and `entry`, the history entry the phrase is in. Calls that were skipped, failed or
+reported no tokens are not logged. The first launch backfills the file from `history.jsonl`, by entry id, once.
 
 ## Credits
 

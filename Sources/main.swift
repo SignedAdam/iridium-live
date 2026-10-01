@@ -21,6 +21,7 @@ MainActor.assumeIsolated {
         .appendingPathComponent("PhononLive")
     let store = NotesStore(directory: support)
     let history = HistoryStore(directory: support)
+    let usage = UsageLog(directory: support)
     model.history = history.load()
     let notes = NotesEditor(model: model, store: store)
     let captions = Captions(screen: screen, settings: model.settings)
@@ -53,6 +54,7 @@ MainActor.assumeIsolated {
                                          destination: model.destination, timing: event.timing,
                                          audio: event.audio.isEmpty ? nil : event.audio)
                 history.append(entry)
+                usage.record(entry)
                 model.history.append(entry)
                 if model.notingNow { notes.append(event.text) }
                 if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
@@ -169,6 +171,7 @@ MainActor.assumeIsolated {
         MainActor.assumeIsolated {
             store.flush()
             history.flush()
+            usage.flush()
         }
     }
     let exits = [SIGINT, SIGTERM, SIGHUP].map { number -> DispatchSourceSignal in
@@ -178,6 +181,7 @@ MainActor.assumeIsolated {
             MainActor.assumeIsolated {
                 store.flush()
                 history.flush()
+                usage.flush()
                 exit(0)
             }
         }
