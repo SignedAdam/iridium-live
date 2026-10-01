@@ -120,12 +120,13 @@ private struct TipSource: ViewModifier {
     }
 }
 
-/// The hovered control's tip in a small dark pill: just under the control, or under the whole glass for controls
-/// below `barTop` (the bar and the line above it), so it never covers the row of buttons you are aiming at. Kept
-/// inside the window's margin at the sides.
+/// The hovered control's tip in a small dark pill: just under the control, or, for controls in the bar region (the bar
+/// and its status lines), outside the glass on the bar's side (below, or above when the glass opens downward), so it
+/// never covers the row of buttons you are aiming at. Kept inside the window's margin at the sides.
 struct TipLayer: View {
     let tips: [Tip]
-    let barTop: CGFloat
+    let bar: ClosedRange<CGFloat>
+    let barOnTop: Bool
     @State private var width: CGFloat = 0
 
     var body: some View {
@@ -142,7 +143,7 @@ struct TipLayer: View {
                     .fixedSize()
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
                     .position(x: min(max(rect.midX, edge), proxy.size.width - edge),
-                              y: (rect.minY >= barTop ? proxy.size.height : rect.maxY) + 14)
+                              y: bar.contains(rect.midY) ? (barOnTop ? -14 : proxy.size.height + 14) : rect.maxY + 14)
                     .allowsHitTesting(false)
             }
         }

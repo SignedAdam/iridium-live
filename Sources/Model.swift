@@ -25,6 +25,7 @@ final class AppModel {
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
+    static let libraryHeight: CGFloat = 340  // the notes pane while it lists the saved notes
     static let lineHeight: CGFloat = 14     // the status line just above the bar: it hangs into the bar's empty top
     static let lineSpacing: CGFloat = 17    // each line above that one
     static let seam: CGFloat = 1
@@ -54,7 +55,13 @@ final class AppModel {
     var notesEditing = false
     var notesEmpty = true
     var notesScroll = ScrollMetrics()
+    /// What the notes pane shows: the note being edited, or the list of saved notes.
+    enum NotesView { case editor, library }
+    var notesView = NotesView.editor
     var history: [HistoryEntry] = []
+    /// The glass opens below the bar instead of above it: set when the control sits too high on the screen for the
+    /// tallest pane to fit above.
+    var opensDown = false
 
     /// Words are typed into the focused app: the typing switch is on, or a "type it" hotkey is recording.
     var typingNow: Bool { typing || session == .insert }
@@ -100,6 +107,10 @@ final class AppModel {
     var onPaneChange: (Pane?) -> Void = { _ in }
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
     var onUnload: () -> Void = {}
+    var onEditInstructions: () -> Void = {}
+
+    /// How long to wait before unloading the models, counting from now: nil while recording or when switched off.
+    var idleUnloadMinutes: Int? { settings.autoUnload && !recording ? settings.autoUnloadMinutes : nil }
     var onOpenRecordings: () -> Void = {}
     var onDeleteHistory: (UUID) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
@@ -109,7 +120,7 @@ final class AppModel {
 
     var paneHeight: CGFloat {
         switch pane {
-        case .notes: notesHeight + Self.seam
+        case .notes: (notesView == .library ? Self.libraryHeight : notesHeight) + Self.seam
         case .history: Self.historyHeight + Self.seam
         case .settings: Self.settingsHeight + Self.seam
         case nil: 0
@@ -167,6 +178,12 @@ final class AppModel {
     /// The history button: the same, for everything said so far.
     func toggleHistory() {
         toggle(.history)
+    }
+
+    /// Opens the notes pane on the list of saved notes ("My notes"), leaving note keeping as it was.
+    func showMyNotes() {
+        notesView = .library
+        if pane != .notes { go(to: .notes) }
     }
 
     /// Remove a phrase from the history, on screen and on disk.

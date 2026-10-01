@@ -27,6 +27,7 @@ MainActor.assumeIsolated {
     let typist = Typist(sink: KeyboardSink())
     let control = ControlWindowController(model: model, notes: notes, screen: screen)
     let hotkeys = HotkeyMonitor()
+    let idle = IdleUnloader()
     let recordings = support.appendingPathComponent("Recordings")
 
     let engine: Engine
@@ -37,9 +38,11 @@ MainActor.assumeIsolated {
                 if event.recording {
                     model.recording = true
                     model.finishing = false
+                    idle.arm(after: nil)
                     if model.notingNow { notes.startParagraph() }
                 } else {
                     model.stopped()
+                    idle.arm(after: model.idleUnloadMinutes)
                 }
             case "ready": model.ready = true
             case "level": if model.recording { model.receive(level: event.value) }
@@ -47,7 +50,8 @@ MainActor.assumeIsolated {
             case "final":
                 captions.show(event.text)
                 let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
-                                         destination: model.destination, timing: event.timing)
+                                         destination: model.destination, timing: event.timing,
+                                         audio: event.audio.isEmpty ? nil : event.audio)
                 history.append(entry)
                 model.history.append(entry)
                 if model.notingNow { notes.append(event.text) }
@@ -59,7 +63,9 @@ MainActor.assumeIsolated {
             case "archive":
                 if let file = event.file { model.lastRecording = (URL(fileURLWithPath: file).lastPathComponent, event.seconds ?? 0) }
             case "cleanup": model.cleanup = event.status
-            case "work": model.finishing = event.pending && !model.recording
+            case "work":
+                model.finishing = event.pending && !model.recording
+                if !event.pending { idle.arm(after: model.idleUnloadMinutes) }
             case "asr": model.speech = event.status
             default: break
             }
@@ -74,9 +80,19 @@ MainActor.assumeIsolated {
     }
     engine.send("hold \(model.settings.typingHold)")
     if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
+    if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
     if model.settings.saveAudio { archive(model.settings) }
     model.onRecord = { engine.send($0 ? "start" : "stop") }
     model.onUnload = { engine.send("unload") }
+    idle.unload = {
+        if !model.recording, !model.finishing, model.speech.state != "unloaded" { engine.send("unload") }
+    }
+    idle.arm(after: model.idleUnloadMinutes)
+    model.onEditInstructions = {
+        InstructionsPanel.show(text: model.settings.cleanupInstructions, on: control.window.screen ?? screen) {
+            model.settings.cleanupInstructions = $0
+        }
+    }
     model.onCancel = { engine.send("cancel") }
     model.onDeleteHistory = { history.delete($0) }
     // The app typed words land in, for the line above the bar and the history (never ourselves: our panels do not
@@ -135,6 +151,10 @@ MainActor.assumeIsolated {
             model.lastCleanupMs = nil
         }
         if new.speechModel != old.speechModel { engine.send("asr \(new.speechModel)") }
+        if new.cleanupInstructions != old.cleanupInstructions { engine.send("instructions " + jsonString(new.cleanupInstructions)) }
+        if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
+            idle.arm(after: model.idleUnloadMinutes)
+        }
         if new.saveAudio != old.saveAudio || new.audioSplitSeconds != old.audioSplitSeconds { archive(new) }
         if new.hotkeys != old.hotkeys { hotkeys.hotkeys = new.hotkeys }
         captions.apply(new)

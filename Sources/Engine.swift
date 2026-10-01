@@ -14,6 +14,7 @@ struct EngineEvent: Sendable {
     let seconds: Double?     // ... and how long it is
     let timing: PhraseTiming?  // "final" events: how long each step took
     let pending: Bool        // "work" events: still finishing what was recorded
+    let audio: [AudioRef]    // "final" events while audio is saved: where the phrase is in the recordings
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -31,7 +32,15 @@ struct EngineEvent: Sendable {
         seconds = object["seconds"] as? Double
         timing = PhraseTiming(engine: object["timing"])
         pending = object["pending"] as? Bool ?? false
+        audio = (object["audio"] as? [[String: Any]] ?? []).compactMap(AudioRef.init(engine:))
     }
+}
+
+/// `text` as a one-line JSON string literal, for commands whose argument may span lines.
+func jsonString(_ text: String) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    return (try? encoder.encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
 }
 
 /// The engine as a child process: commands go to its stdin, events come back from its stdout, its stderr is ours.

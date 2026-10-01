@@ -20,6 +20,13 @@ struct SettingsPane: View {
                             .buttonStyle(GlassButton())
                             .disabled(model.speech.state == "unloaded")
                     }
+                    Row("Unload when idle") {
+                        GlassSwitch(isOn: $model.settings.autoUnload)
+                    }
+                    Row("After") {
+                        GlassMenu(selection: $model.settings.autoUnloadMinutes, options: Settings.idleChoices).frame(width: 100)
+                    }
+                    .dimmed(!model.settings.autoUnload)
                 }
                 Section("Speech") {
                     Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
@@ -35,19 +42,17 @@ struct SettingsPane: View {
                                   capture: { model.onCaptureHotkey(hotkey.id) },
                                   remove: { model.settings.hotkeys.removeAll { $0.id == hotkey.id } })
                     }
-                    HStack {
-                        Button("Add hotkey") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        AddRow {
                             let hotkey = Hotkey(keyCode: 54)
                             model.settings.hotkeys.append(hotkey)
                             model.onCaptureHotkey(hotkey.id)
                         }
-                        .buttonStyle(GlassButton())
-                        Spacer()
                         if !model.hotkeysListening, !model.settings.hotkeys.isEmpty {
                             Text("Needs Accessibility access").font(tiktok(12)).foregroundStyle(accent)
                         }
                     }
-                    .frame(height: Row<EmptyView>.height)
+                    .padding(.vertical, 8)
                 }
                 Section("Typing") {
                     Row("Wait before typing") {
@@ -67,6 +72,10 @@ struct SettingsPane: View {
                             GlassMenu(selection: $model.settings.cleanupModel,
                                       options: Settings.cleanupModels(on: model.settings.cleanupProvider))
                                 .frame(width: 180)
+                        }
+                        Row("Instructions", detail: instructionsPreview) {
+                            Button(model.settings.cleanupInstructions.isEmpty ? "Add" : "Edit", action: model.onEditInstructions)
+                                .buttonStyle(GlassButton())
                         }
                     }
                     .dimmed(!model.settings.cleanupEnabled)
@@ -127,6 +136,13 @@ struct SettingsPane: View {
     private var lowMemoryAdvice: String {
         model.settings.cleanupEnabled && model.settings.cleanupProvider == Settings.localCleanup
             ? "Running low. Cleanup on Groq would free about 2.5 GB." : "Running low. Closing other apps helps."
+    }
+
+    /// The start of the user's cleanup instructions, as a reminder under the row.
+    private var instructionsPreview: String? {
+        let text = model.settings.cleanupInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = text.split(separator: "\n").first else { return nil }
+        return first.count > 48 ? String(first.prefix(47)) + "…" : String(first)
     }
 
     /// What a model is doing, in a few words; nothing while it is simply ready.
@@ -390,8 +406,9 @@ private struct GlassMenu<Value: Hashable>: View {
     }
 }
 
-/// One hotkey: the switch that puts it in play, the key (click to set it, then press it), the gesture that works it,
-/// what the words are for, and a line under it when it clashes with another binding or has to wait one out.
+/// One hotkey, read like a sentence: the switch that puts it in play, the key as a keycap (click it, then press the
+/// key you want), the gesture and what the words are for as inline menus, and a line under it when it clashes with
+/// another binding or has to wait one out.
 private struct HotkeyRow: View {
     @Binding var hotkey: Hotkey
     let capturing: Bool
@@ -399,24 +416,21 @@ private struct HotkeyRow: View {
     let waits: Bool
     let capture: () -> Void
     let remove: () -> Void
+    @State private var hovering = false
     @State private var hoveringRemove = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
+            HStack(spacing: 8) {
                 GlassSwitch(isOn: $hotkey.enabled)
-                Group {
+                HStack(spacing: 6) {
                     Button(action: capture) {
-                        Text(capturing ? "Press…" : hotkey.label)
-                            .foregroundStyle(capturing ? accent : .white.opacity(0.92))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .frame(width: 44)
+                        Text(capturing ? "Press a key" : hotkey.label).lineLimit(1)
                     }
-                    .buttonStyle(GlassButton())
+                    .buttonStyle(Keycap(capturing: capturing))
                     .tip("Click, then press a key or a lone modifier")
-                    GlassMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames).frame(width: 102)
-                    GlassMenu(selection: $hotkey.action, options: Hotkey.actionNames).frame(width: 112)
+                    InlineMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames)
+                    InlineMenu(selection: $hotkey.action, options: Hotkey.actionNames)
                 }
                 .opacity(hotkey.enabled ? 1 : 0.45)
                 Spacer(minLength: 0)
@@ -429,6 +443,7 @@ private struct HotkeyRow: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .opacity(hovering ? 1 : 0)
                 .onHover { hoveringRemove = $0 }
                 .tip("Remove")
             }
@@ -440,10 +455,96 @@ private struct HotkeyRow: View {
         }
         .padding(.vertical, 6)
         .frame(minHeight: Row<EmptyView>.height)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.2), value: conflict || waits)
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 
     private func note(_ text: String, color: Color) -> some View {
         Text(text).font(tiktok(11.5)).foregroundStyle(color).lineLimit(1).padding(.leading, 2)
+    }
+}
+
+/// A key drawn as a keycap: lit from above, sitting a little proud of the glass, pressed down when clicked; red while
+/// it waits for the key you want.
+private struct Keycap: ButtonStyle {
+    let capturing: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        configuration.label
+            .font(tiktok(12.5, "Medium"))
+            .foregroundStyle(capturing ? accent : .white.opacity(0.96))
+            .padding(.horizontal, 9)
+            .frame(minWidth: 40, minHeight: 24)
+            .background {
+                shape.fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.1)], startPoint: .top, endPoint: .bottom))
+                    .overlay(shape.strokeBorder(capturing ? accent.opacity(0.8) : .white.opacity(0.24)))
+                    .shadow(color: .black.opacity(0.5), radius: 0, y: configuration.isPressed ? 0 : 2)
+            }
+            .offset(y: configuration.isPressed ? 1.5 : 0)
+            .contentShape(shape)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+/// A choice set inline in a sentence: just its words and a small chevron, lit on hover; clicking opens the list.
+private struct InlineMenu<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [(Value, String)]
+    @State private var hovering = false
+
+    var body: some View {
+        Menu {
+            Picker("", selection: $selection) {
+                ForEach(options.indices, id: \.self) { Text(options[$0].1).tag(options[$0].0) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 3) {
+                Text(options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 7.5, weight: .bold)).opacity(0.6)
+            }
+            .font(tiktok(12.5))
+            .foregroundStyle(.white.opacity(hovering ? 1 : 0.8))
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(hovering ? 0.09 : 0)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering = $0 }
+    }
+}
+
+/// The last line of the hotkeys: a dashed outline inviting another one.
+private struct AddRow: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                Text("Add hotkey")
+            }
+            .font(tiktok(12.5, "Medium"))
+            .foregroundStyle(.white.opacity(hovering ? 0.92 : 0.6))
+            .frame(maxWidth: .infinity)
+            .frame(height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.white.opacity(hovering ? 0.35 : 0.2), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

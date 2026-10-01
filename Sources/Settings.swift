@@ -9,6 +9,7 @@ struct Settings: Codable, Equatable {
     var cleanupEnabled = false
     var cleanupProvider = "groq"
     var cleanupModels: [String: String] = [:]  // the model picked on each provider; none yet means its first
+    var cleanupInstructions = ""                // the user's own rules for the cleanup model, added to its prompt
     var captionsShown = true
     var captionPosition = CaptionPosition.top
     var captionFont = "TikTok Sans"
@@ -20,6 +21,8 @@ struct Settings: Codable, Equatable {
     var hotkeys: [Hotkey] = []
     var saveAudio = false
     var audioSplitSeconds = 2.0
+    var autoUnload = false
+    var autoUnloadMinutes = 30
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     /// Where cleanup can run, each with its models, the default first (chosen by measured latency and accuracy on
@@ -34,6 +37,7 @@ struct Settings: Codable, Equatable {
     ]
     static let localCleanup = "local"
     static let captionFonts = ["TikTok Sans", "SF Pro", "SF Pro Rounded", "New York", "Menlo"]
+    static let idleChoices = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 h"), (120, "2 h"), (360, "6 h")]
 
     private static let key = "settings"
 
@@ -77,6 +81,7 @@ extension Settings {
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
         cleanupProvider = value(.cleanupProvider, fallback.cleanupProvider)
         cleanupModels = value(.cleanupModels, fallback.cleanupModels)
+        cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
         captionsShown = value(.captionsShown, fallback.captionsShown)
         captionPosition = value(.captionPosition, fallback.captionPosition)
         captionFont = value(.captionFont, fallback.captionFont)
@@ -88,5 +93,7 @@ extension Settings {
         hotkeys = value(.hotkeys, SavedHotkeys(hotkeys: fallback.hotkeys)).hotkeys  // older saves carried a mode
         saveAudio = value(.saveAudio, fallback.saveAudio)
         audioSplitSeconds = value(.audioSplitSeconds, fallback.audioSplitSeconds)
+        autoUnload = value(.autoUnload, fallback.autoUnload)
+        autoUnloadMinutes = value(.autoUnloadMinutes, fallback.autoUnloadMinutes)
     }
 }

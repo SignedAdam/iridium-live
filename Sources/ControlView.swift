@@ -4,10 +4,11 @@ import SwiftUI
 /// Room around the glass inside its window, for the glass's own shadow.
 let floatingMargin: CGFloat = 28
 
-/// The whole control: one glass body whose bottom is the bar. Opening the notes or the settings grows it upward and
-/// wider in one spring; switching between them slides the panes past each other (notes sit left of settings, like
-/// their buttons) while the glass settles to the new pane's height. Panes keep their full width and are uncovered by
-/// the growing glass rather than squeezed. Drag anywhere that is not a control to move it.
+/// The whole control: one glass body around the bar. Opening the notes or the settings grows it, away from the bar and
+/// wider, in one spring: upward, or downward when the control sits too high on the screen for the tallest pane to fit
+/// above. Switching panes slides them past each other (notes sit left of settings, like their buttons) while the glass
+/// settles to the new pane's height. Panes keep their full width and are uncovered by the growing glass rather than
+/// squeezed. Drag anywhere that is not a control to move it.
 struct ControlView: View {
     @Bindable var model: AppModel
     let notes: NotesEditor
@@ -15,37 +16,62 @@ struct ControlView: View {
 
     var body: some View {
         let size = model.glassSize
+        let down = model.opensDown
+        let barRegion = AppModel.barSize.height + model.linesHeight
         VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                pane(.notes) { NotesPane(model: model, editor: notes).frame(width: AppModel.paneWidth, height: model.notesHeight) }
-                pane(.history) { HistoryPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.historyHeight) }
-                pane(.settings) { SettingsPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.settingsHeight) }
+            if down {
+                ControlBar(model: model)
+                lines
+                seam
+                panes
+            } else {
+                panes
+                seam
+                lines
+                ControlBar(model: model)
             }
-            .frame(width: AppModel.paneWidth)
-            .frame(height: max(0, model.paneHeight - AppModel.seam), alignment: .bottom)
-            .clipped()
-            Rectangle().fill(.white.opacity(0.12))
-                .frame(height: model.pane == nil ? 0 : AppModel.seam)
-                .padding(.horizontal, 18)
-            // Narrow strips whose lowest line hangs into the bar's empty top margin: not clipped, so lines fade.
-            StatusLines(model: model)
-                .frame(height: model.linesHeight, alignment: .top)
-            ControlBar(model: model)
         }
-        .frame(width: size.width, height: size.height, alignment: .bottom)
+        .frame(width: size.width, height: size.height, alignment: down ? .top : .bottom)
         .background(Glass(cornerRadius: AppModel.barSize.height / 2, tint: model.settings.glassTint))
         .clipShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .gesture(DragGesture(minimumDistance: 2).onChanged { _ in mover.drag() }.onEnded { _ in mover.end() })
         .overlayPreferenceValue(TipKey.self) { tips in
-            TipLayer(tips: tips, barTop: size.height - AppModel.barSize.height - model.linesHeight)
+            TipLayer(tips: tips, bar: down ? 0...barRegion : (size.height - barRegion)...size.height, barOnTop: down)
         }
         .shadow(color: .black.opacity(0.32), radius: 16, y: 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: down ? .top : .bottom)
         .padding(floatingMargin)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.pane)
         .animation(.easeOut(duration: 0.22), value: model.notesHeight)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
+    }
+
+    /// The panes, stacked; only the open one shows, flush against the bar.
+    private var panes: some View {
+        let edge: Alignment = model.opensDown ? .top : .bottom
+        return ZStack(alignment: edge) {
+            pane(.notes) {
+                NotesPane(model: model, editor: notes)
+                    .frame(width: AppModel.paneWidth, height: model.notesView == .library ? AppModel.libraryHeight : model.notesHeight)
+            }
+            pane(.history) { HistoryPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.historyHeight) }
+            pane(.settings) { SettingsPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.settingsHeight) }
+        }
+        .frame(width: AppModel.paneWidth)
+        .frame(height: max(0, model.paneHeight - AppModel.seam), alignment: edge)
+        .clipped()
+    }
+
+    private var seam: some View {
+        Rectangle().fill(.white.opacity(0.12))
+            .frame(height: model.pane == nil ? 0 : AppModel.seam)
+            .padding(.horizontal, 18)
+    }
+
+    /// Narrow strips whose line nearest the bar hangs into the bar's empty margin: not clipped, so lines fade.
+    private var lines: some View {
+        StatusLines(model: model).frame(height: model.linesHeight, alignment: model.opensDown ? .bottom : .top)
     }
 
     /// A pane shows only while selected; the others wait just off to its side, faded out.
@@ -59,14 +85,17 @@ struct ControlView: View {
     }
 }
 
-/// The lines just above the bar, whatever else is open: what the control is doing (where the words go while
-/// recording, "Finishing" while the engine works through what it heard after a stop) and, in red, that memory is
-/// tight. Only labels: drags pass through them to the glass (the settings button carries a red dot too).
+/// The lines beside the bar, whatever else is open: what the control is doing (where the words go while recording,
+/// "Finishing" while the engine works through what it heard after a stop) and, in red, that memory is tight; the
+/// memory line sits nearest the bar. Only labels: drags pass through them to the glass (the settings button carries
+/// a red dot too).
 struct StatusLines: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        let down = model.opensDown
         VStack(spacing: AppModel.lineSpacing - 15) {
+            if down { memoryLine }
             if let activity = model.activity {
                 HStack(spacing: 6) {
                     if model.recording {
@@ -80,19 +109,23 @@ struct StatusLines: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .transition(.opacity)
             }
-            if model.memoryWarning {
-                HStack(spacing: 6) {
-                    Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
-                    Text(memoryText).font(tiktok(12, "Medium"))
-                }
-                .frame(height: 15)
-                .foregroundStyle(accent)
-                .transition(.opacity)
-            }
+            if !down { memoryLine }
         }
-        .padding(.top, 3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(down ? .bottom : .top, 3)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: down ? .bottom : .top)
         .allowsHitTesting(false)
+    }
+
+    @ViewBuilder private var memoryLine: some View {
+        if model.memoryWarning {
+            HStack(spacing: 6) {
+                Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
+                Text(memoryText).font(tiktok(12, "Medium"))
+            }
+            .frame(height: 15)
+            .foregroundStyle(accent)
+            .transition(.opacity)
+        }
     }
 
     private var memoryText: String {
@@ -113,64 +146,12 @@ struct Spinner: View {
     }
 }
 
-/// The notes pane: the editor, a placeholder while empty, the outline of the text area while you edit, and a slim
-/// indicator of where you are whenever there is more text than fits.
-struct NotesPane: View {
-    @Bindable var model: AppModel
-    let editor: NotesEditor
-
-    var body: some View {
-        let outline = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        NotesEditorView(editor: editor)
-            .background {
-                outline.fill(.white.opacity(model.notesEditing ? 0.045 : 0))
-                    .overlay(outline.strokeBorder(.white.opacity(model.notesEditing ? 0.22 : 0), lineWidth: 1))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-            }
-            .overlay(alignment: .topLeading) {
-                if model.notesEmpty {
-                    Text("Speak for notes")
-                        .font(tiktok(15))
-                        .foregroundStyle(.white.opacity(0.34))
-                        .padding(.leading, NotesEditor.inset.width + 5)
-                        .padding(.top, NotesEditor.inset.height)
-                        .allowsHitTesting(false)
-                }
-            }
-            .overlay(alignment: .trailing) {
-                ScrollIndicator(metrics: model.notesScroll)
-                    .padding(.trailing, 5)
-                    .padding(.vertical, 12)
-            }
-            .animation(.easeOut(duration: 0.2), value: model.notesEditing)
-    }
-}
-
-/// A slim thumb on the right edge: how much of the text is visible and where. Only there when the text overflows.
-struct ScrollIndicator: View {
-    let metrics: ScrollMetrics
-
-    var body: some View {
-        GeometryReader { geometry in
-            let track = geometry.size.height
-            let thumb = max(18, track * metrics.visibleFraction)
-            Capsule().fill(.white.opacity(0.38))
-                .frame(width: 3, height: thumb)
-                .offset(y: (track - thumb) * metrics.position)
-        }
-        .frame(width: 3)
-        .opacity(metrics.overflows ? 1 : 0)
-        .animation(.easeOut(duration: 0.2), value: metrics.overflows)
-        .allowsHitTesting(false)
-    }
-}
-
-/// Moves the control's window with the pointer, for drags on the glass that no control claims.
+/// Moves the control's window with the pointer, for drags on the glass that no control claims; says when a drag ends.
 @MainActor
 final class WindowMover {
     private weak var window: NSWindow?
     private var start: (mouse: NSPoint, origin: NSPoint)?
+    var onEnd: () -> Void = {}
 
     init(_ window: NSWindow) {
         self.window = window
@@ -185,6 +166,8 @@ final class WindowMover {
     }
 
     func end() {
+        guard start != nil else { return }
         start = nil
+        onEnd()
     }
 }

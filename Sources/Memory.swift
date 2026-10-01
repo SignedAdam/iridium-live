@@ -75,3 +75,21 @@ final class MemoryMonitor {
         return [pid] + children.prefix(max(0, Int(count))).filter { $0 > 0 }.flatMap(processTree)
     }
 }
+
+/// Unloads the models once nothing has been recorded for a while (Settings: Unload when idle). Armed when a
+/// recording ends and again when its last phrase is in; disarmed while recording.
+@MainActor
+final class IdleUnloader {
+    private var timer: Timer?
+    var unload: () -> Void = {}
+
+    /// Starts the countdown afresh, or stops it when `minutes` is nil.
+    func arm(after minutes: Int?) {
+        timer?.invalidate()
+        timer = nil
+        guard let minutes else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: Double(minutes) * 60, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.unload() }
+        }
+    }
+}

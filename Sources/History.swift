@@ -10,6 +10,22 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var raw: String?
     var destination: String?  // "Notes", the app it was typed into, or both
     var timing: PhraseTiming?
+    var audio: [AudioRef]?    // where the phrase is in the saved recordings, while audio is being saved
+}
+
+/// A stretch of a saved recording: the WAV file and the seconds within it.
+struct AudioRef: Codable, Equatable, Sendable {
+    let file: String
+    let start: Double
+    let end: Double
+
+    init?(engine object: [String: Any]) {
+        guard let file = object["file"] as? String, let start = object["start_s"] as? Double,
+              let end = object["end_s"] as? Double else { return nil }
+        self.file = file
+        self.start = start
+        self.end = end
+    }
 }
 
 /// Every phrase ever said, whether or not notes or typing were on: one JSON object per line in `history.jsonl`,
