@@ -30,7 +30,10 @@ final class InstructionsPanel {
             InstructionsPanel.open?.panel.orderOut(nil)
             InstructionsPanel.open = nil
         }
-        panel.contentView = NSHostingView(rootView: InstructionsEditor(text: text, save: { save($0); close() }, cancel: close))
+        let host = NSHostingView(rootView: InstructionsEditor(text: text, save: { save($0); close() }, cancel: close)
+            .frame(width: size.width, height: size.height))
+        host.sizingOptions = []  // the panel keeps its size; the editor scrolls instead of growing it
+        panel.contentView = host
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         panel.animator().alphaValue = 1

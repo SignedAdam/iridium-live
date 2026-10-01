@@ -426,13 +426,14 @@ private struct HotkeyRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 GlassSwitch(isOn: $hotkey.enabled)
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Button(action: capture) {
                         Text(capturing ? "Press a key" : hotkey.label).lineLimit(1)
                     }
                     .buttonStyle(Keycap(capturing: capturing))
+                    .fixedSize()
                     .tip("Click, then press a key or a lone modifier")
                     InlineMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames)
                     InlineMenu(selection: $hotkey.action, options: Hotkey.actionNames)
@@ -481,7 +482,7 @@ private struct Keycap: ButtonStyle {
         configuration.label
             .font(tiktok(12.5, "Medium"))
             .foregroundStyle(capturing ? accent : .white.opacity(0.96))
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .frame(minWidth: 40, minHeight: 24)
             .background {
                 shape.fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.1)], startPoint: .top, endPoint: .bottom))
@@ -514,7 +515,7 @@ private struct InlineMenu<Value: Hashable>: View {
             }
             .font(tiktok(12.5))
             .foregroundStyle(.white.opacity(hovering ? 1 : 0.8))
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
             .frame(height: 24)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(hovering ? 0.09 : 0)))
             .contentShape(Rectangle())

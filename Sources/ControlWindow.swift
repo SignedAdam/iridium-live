@@ -70,7 +70,7 @@ final class ControlWindowController {
             context.duration = 0.5
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().alphaValue = opacity
-            window.animator().setFrameOrigin(target.origin)
+            window.animator().setFrame(target, display: true)  // a window's frame animates; its origin alone does not
         }
     }
 
