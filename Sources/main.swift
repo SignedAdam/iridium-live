@@ -36,7 +36,6 @@ MainActor.assumeIsolated {
     let dock = ChatDock(model: model, directory: support)
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
-
     // Microphone, Accessibility, the cleanup keys and opening at login, in a window of their own. It never holds the
     // app up: whatever is missing only costs the part of the app that needs it.
     if Setup.shared.needsOnboarding { OnboardingPanel.show(on: screen) }
@@ -56,6 +55,7 @@ MainActor.assumeIsolated {
                     model.recording = true
                     model.finishing = false
                     idle.arm(after: nil)
+                    typist.startSession()
                     if model.notingNow { notes.startParagraph() }
                 } else {
                     model.stopped()
@@ -68,12 +68,37 @@ MainActor.assumeIsolated {
                 if !dock.hidesCaptions { captions.show(event.text) }
                 let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
                                          destination: model.destination, timing: event.timing,
-                                         audio: event.audio.isEmpty ? nil : event.audio)
+                                         audio: event.audio.isEmpty ? nil : event.audio, phrase: event.id,
+                                         session: event.session)
                 history.append(entry)
                 usage.record(entry)
                 model.history.append(entry)
                 if model.notingNow { notes.append(entry) }
                 if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
+            case "session":
+                // The recording as one text: the notes take it in place of exactly what they appended, the typed
+                // text is corrected where that is still ours to do, and the phrase it ended keeps what it cost.
+                let polish = PolishRun(text: event.text, heard: event.heard ?? event.text, cleanup: event.cleanup)
+                if let last = event.phrases.last, let at = model.history.lastIndex(where: { $0.phrase == last }) {
+                    model.history[at].polish = polish
+                    history.update(model.history[at])
+                    usage.record(polish: polish, of: model.history[at])
+                }
+                if event.polished, polish.text != polish.heard {
+                    notes.replaceDictated(with: polish.text)
+                    if !control.window.isKeyWindow { typist.revise(to: polish.text) }
+                }
+            case "rewritten":
+                guard event.id == "note" else { break }
+                model.cleaningNote = false
+                notes.replaceAll(with: event.text)
+                if let cleanup = event.cleanup { usage.record(rewrite: cleanup, at: Date()) }
+            case "benchmark":
+                guard let phrase = event.phrase,
+                      let at = model.history.lastIndex(where: { $0.phrase == phrase }) else { break }
+                model.history[at].benchmarks = event.results
+                history.update(model.history[at])
+                usage.record(benchmarks: event.results, of: model.history[at])
             case "type":
                 if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
                 // While our window has the keyboard (editing the notes, using a control), keys would land in it.
@@ -99,8 +124,15 @@ MainActor.assumeIsolated {
     engine.send("hold \(model.settings.typingHold)")
     if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
     if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
+    engine.send(model.settings.cleanupPolish ? "polish on" : "polish off")
+    if model.settings.cleanupBenchmark { engine.send("benchmark on") }
     if model.settings.saveAudio { archive(model.settings) }
-    model.onRecord = { engine.send($0 ? "start" : "stop") }
+    // What the dictation is about to continue goes with it: the cleanup model reads the end of the note in front of
+    // every phrase, and the pass over the whole recording knows what it was written into.
+    model.onRecord = { recording in
+        if recording, model.notingNow { engine.send("context " + jsonString(notes.dictationContext)) }
+        engine.send(recording ? "start" : "stop")
+    }
     model.onUnload = { engine.send("unload") }
     idle.unload = {
         if !model.recording, !model.finishing, model.speech.state != "unloaded" { engine.send("unload") }
@@ -113,6 +145,8 @@ MainActor.assumeIsolated {
     }
     model.onCancel = { engine.send("cancel") }
     model.onDeleteHistory = { history.delete($0) }
+    model.onCleanUpNote = { text in engine.send("rewrite note " + jsonString(text)) }
+    model.onShowBenchmarks = { BenchmarkPanel.show(history: model.history, on: control.window.screen ?? screen) }
     // The app typed words land in, for the line above the bar and the history (never ourselves: our panels do not
     // take the keyboard from it).
     let ourselves = ProcessInfo.processInfo.processIdentifier
@@ -170,6 +204,8 @@ MainActor.assumeIsolated {
         }
         if new.speechModel != old.speechModel { engine.send("asr \(new.speechModel)") }
         if new.cleanupInstructions != old.cleanupInstructions { engine.send("instructions " + jsonString(new.cleanupInstructions)) }
+        if new.cleanupPolish != old.cleanupPolish { engine.send(new.cleanupPolish ? "polish on" : "polish off") }
+        if new.cleanupBenchmark != old.cleanupBenchmark { engine.send(new.cleanupBenchmark ? "benchmark on" : "benchmark off") }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }

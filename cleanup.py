@@ -9,12 +9,20 @@ the input) and verifies whole drafts in one pass, and a phrase with nothing to f
 that cannot spare the memory: no model is loaded, and a request that is slow or fails hands the raw phrase back.
 The speaker can add instructions of their own (`set_instructions`), which sit under the fixed rules wherever the
 phrase is cleaned and send every phrase to the model, clean or not: they may ask for what the skip cannot see.
+Each phrase is cleaned with what came before it in the same recording in front of it, as read-only context: the
+model sees the earlier phrases and whatever the app says the dictation is being written into, and still returns
+only the phrase it was given, so a correction that reaches back across a phrase boundary has something to reach.
+`whole` runs the same model over a finished dictation or a whole note in one pass, which is what fixes the
+corrections, the sentence boundaries and the consistency that no single phrase can see. `Bench` runs every other
+model of the same provider over a phrase in the background, for comparing them on the speaker's own dictation.
 """
 from __future__ import annotations
 
 import json
 import os
+import queue
 import re
+import threading
 import time
 from typing import NamedTuple
 
@@ -26,6 +34,10 @@ REMOTE = "openrouter:"  # a cleanup key starting with this names an OpenRouter m
 MAX_NEW = 160        # a dictated phrase is short; past this the model is not cleaning any more
 NGRAM = (3, 2, 1)    # n-gram sizes tried when drafting, longest first; a bad draft costs one forward pass, no more
 DRAFT = 10           # tokens drafted per step
+#: How much of the context in front of a phrase the model is shown. The whole note would be prompt tokens paid for
+#: on every phrase, at every provider; the sentence or two a spoken correction can reach back over is near the end.
+CONTEXT_CHARS = 600
+WHOLE_MAX_NEW = 1400  # the whole-dictation pass writes a text, not a phrase
 
 
 class Stats(NamedTuple):
@@ -111,6 +123,30 @@ def preface() -> str:
     if not _instructions:
         return ""
     return f"The user's preferences, which win over the rules and the examples above:\n{_instructions}\n\nPhrase:\n"
+
+
+def context_block(context: str) -> str:
+    """What goes between the fixed prompt and the phrase: the text the phrase continues, which the model reads and
+    never rewrites. It is the end of it that matters — a spoken correction reaches back a sentence or two — so only
+    the last `CONTEXT_CHARS` are shown, cut at a space so the context never starts mid-word."""
+    context = " ".join(context.split())
+    if not context:
+        return ""
+    if len(context) > CONTEXT_CHARS:
+        context = context[-CONTEXT_CHARS:]
+        context = context[context.find(" ") + 1:]
+    return (f"Text written so far, for context only. Do not repeat it, do not rewrite it, do not answer it. It "
+            f"tells you what the phrase continues, and a correction in the phrase may undo something in it:\n"
+            f"…{context}\n\nClean up only this phrase and output only it:\n")
+
+
+#: What goes in front of a whole dictation or note instead of a phrase. The rules are the same ones; what changes is
+#: that the model now sees every phrase at once, so the corrections, sentence boundaries and inconsistencies that
+#: span two phrases are the ones it can finally fix.
+WHOLE = ("This is a whole dictation, already cleaned phrase by phrase. Write it out as finished text: apply the "
+         "spoken corrections that reach back into an earlier sentence, fix the sentence boundaries and the "
+         "punctuation between phrases, and keep names, numbers and style consistent throughout. Change nothing "
+         "else, add nothing, answer nothing, and keep every paragraph break. Output the text only:\n")
 
 
 _FILLERS = re.compile(r"\b(uh+|um+|erm?|ah+|hmm+|mhm|like|you know|i mean|sort of|kind of|basically|literally)\b", re.I)
@@ -205,16 +241,30 @@ class Cleaner:
         self.reset_cache()
         self._prefill(self._encode(self.head))
 
-    def rewrite(self, text: str) -> tuple[str, Stats]:
-        """The phrase as it should be typed, and what the cleanup cost. A phrase with nothing to fix never
-        reaches the model, and a rewrite that stopped looking like a rewrite is thrown away for the raw phrase."""
+    def rewrite(self, text: str, context: str = "") -> tuple[str, Stats]:
+        """The phrase as it should be typed, and what the cleanup cost. `context` is what the phrase continues,
+        which the model reads and never writes back. A phrase with nothing to fix never reaches the model, and a
+        rewrite that stopped looking like a rewrite is thrown away for the raw phrase."""
         self.accepted = self.steps = 0
         if not needs_cleanup(text):
             return text, Stats("local", self.model_id, skipped=True)
-        out = self.clean(text)
+        out = self.clean(text, context)
         stats = Stats("local", self.model_id, skipped=False, prompt_tokens=self.prompt_tokens,
                       completion_tokens=self.completion_tokens)
         return (out if plausible(text, out) else text), stats
+
+    def whole(self, text: str) -> tuple[str, Stats]:
+        """A finished dictation or a whole note in one pass. Nothing is skipped here: what this pass fixes spans
+        phrases, which is exactly what the per-phrase test cannot see."""
+        self.accepted = self.steps = 0
+        body = self._encode(WHOLE + text)
+        prompt = self._encode(self.head) + body + self._encode(self.tail)
+        out = self.generate(prompt, self._encode(text), max_new=min(WHOLE_MAX_NEW, len(body) + 128))
+        self.prompt_tokens, self.completion_tokens = len(prompt), len(out)
+        written = self.tokenizer.decode(out).strip()
+        stats = Stats("local", self.model_id, skipped=False, prompt_tokens=self.prompt_tokens,
+                      completion_tokens=self.completion_tokens)
+        return (written if plausible(text, written) else text), stats
 
     @property
     def note(self) -> str:
@@ -246,7 +296,8 @@ class Cleaner:
         self.cached = list(tokens)
         return logits[0, -1]
 
-    def generate(self, tokens: list[int], corpus: list[int], speculate: bool = True) -> list[int]:
+    def generate(self, tokens: list[int], corpus: list[int], speculate: bool = True,
+                 max_new: int = MAX_NEW) -> list[int]:
         """Greedy decode. With `speculate`, each step drafts the continuation by matching the last n-gram of the
         output inside `corpus` and verifies the whole draft in one forward pass; rejected drafts are trimmed back
         out of the cache, so the result is the same token sequence either way."""
@@ -255,7 +306,7 @@ class Cleaner:
 
         token = int(mx.argmax(self._prefill(tokens)).item())
         out, self.accepted, self.steps = [], 0, 0
-        while token not in self.eos and len(out) < MAX_NEW:
+        while token not in self.eos and len(out) < max_new:
             out.append(token)
             draft = _lookup(corpus, out, DRAFT) if speculate else []
             logits = self.model(mx.array([token] + draft)[None], cache=self.cache)
@@ -268,17 +319,20 @@ class Cleaner:
                 del self.cached[len(self.cached) - (len(draft) - taken):]
             self.accepted += taken
             for i in range(taken):
-                if picks[i] in self.eos or len(out) >= MAX_NEW:
+                if picks[i] in self.eos or len(out) >= max_new:
                     return out
                 out.append(picks[i])
             token = picks[taken]
         return out
 
-    def clean(self, text: str, speculate: bool = True) -> str:
-        """The model's rewrite of one phrase, prefilling only the phrase: the prefix is already in the cache."""
-        body = self._encode(text)
+    def clean(self, text: str, context: str = "", speculate: bool = True) -> str:
+        """The model's rewrite of one phrase. Only the context and the phrase are prefilled: the fixed prompt is
+        already in the cache, and the context of a recording only ever grows, so each phrase of it prefills the
+        words that were added since the last one. The draft corpus is the phrase alone — the rewrite copies the
+        phrase, never the context."""
+        body = self._encode(context_block(context) + text)
         prompt = self._encode(self.head) + body + self._encode(self.tail)
-        out = self.generate(prompt, body, speculate)
+        out = self.generate(prompt, self._encode(text), speculate)
         self.prompt_tokens, self.completion_tokens = len(prompt), len(out)
         return self.tokenizer.decode(out).strip()
 
@@ -321,6 +375,9 @@ PROVIDERS = {
 # 1.3 s; 2.5 s clears their p90 with room for one reconnect, and is still short enough that a stalled request reads
 # as a hiccup rather than a hang — the raw phrase is typed instead, which is what the speaker said anyway.
 TIMEOUT_S = 2.5
+# A whole dictation or note is not latency the speaker waits on mid-phrase: it is asked for once, when the recording
+# has already stopped or the note is being cleaned on purpose, and it writes far more tokens than a phrase does.
+WHOLE_TIMEOUT_S = 15.0
 THINKING = 256  # tokens granted on top when a model will not stop reasoning: its rewrite comes after the thinking
 #: The statuses worth a word of their own: the API's own sentence is long, and these are what goes wrong.
 SAYS = {401: "key rejected", 402: "no credits", 403: "model not allowed", 404: "no such model",
@@ -383,19 +440,28 @@ class Remote:
                       for message in ({"role": "user", "content": phrase},
                                       {"role": "assistant", "content": clean})]
 
-    def rewrite(self, text: str) -> tuple[str, Stats]:
-        """The phrase as it should be typed, and what the cleanup cost. The phrase is never lost: a clean phrase,
-        a missing key, a timeout, an API error and an implausible rewrite all return the raw text."""
+    def rewrite(self, text: str, context: str = "") -> tuple[str, Stats]:
+        """The phrase as it should be typed, and what the cleanup cost. `context` is the text the phrase continues,
+        sent for the model to read and never to rewrite. The phrase is never lost: a clean phrase, a missing key, a
+        timeout, an API error and an implausible rewrite all return the raw text."""
+        return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True)
+
+    def whole(self, text: str) -> tuple[str, Stats]:
+        """A finished dictation or a whole note in one pass, under the longer budget a text deserves. Nothing is
+        skipped: what this pass fixes spans phrases, which the per-phrase test cannot see."""
+        return self._run(text, context="", whole=True, deadline=WHOLE_TIMEOUT_S, skippable=False)
+
+    def _run(self, text: str, *, context: str, whole: bool, deadline: float, skippable: bool) -> tuple[str, Stats]:
         self.note = ""
         self.connect_ms, self.trip_ms = None, 0.0
-        if not needs_cleanup(text):
+        if skippable and not needs_cleanup(text):
             return text, self._stats(skipped=True)
         if message := missing_key(self.key):
             self.note = message
             self._state(False, message)
             return text, self._stats(error=message)
         try:
-            out, usage = self._ask(text, time.monotonic() + TIMEOUT_S)
+            out, usage = self._ask(text, time.monotonic() + deadline, context, whole)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
@@ -430,13 +496,13 @@ class Remote:
             self.failed = True
             self.notify("error", message)
 
-    def _ask(self, text: str, deadline: float) -> tuple[str, dict]:
+    def _ask(self, text: str, deadline: float, context: str = "", whole: bool = False) -> tuple[str, dict]:
         """The rewrite and what the provider says it cost, in one round trip — two when the model turns out not to
         take the way it was asked not to think."""
-        status, data = self._round_trip(self._body(text), deadline)
+        status, data = self._round_trip(self._body(text, context, whole), deadline)
         while status != 200 and b"reasoning" in data.lower() and self.quiet + 1 < len(self.provider.quiet):
             self.quiet += 1  # this model does not take that way of being quietened: try the next one down
-            status, data = self._round_trip(self._body(text), deadline)
+            status, data = self._round_trip(self._body(text, context, whole), deadline)
         if status != 200:
             raise RuntimeError(f"{status} {SAYS.get(status) or _message(data)}")
         try:
@@ -444,7 +510,9 @@ class Remote:
             out = body["choices"][0]["message"]["content"]
         except Exception:
             raise RuntimeError(f"bad response: {_message(data)}") from None
-        return " ".join((out or "").split()).strip('"'), self._usage(body)
+        # A phrase is one line; a whole text keeps the paragraphs it was given, tidied line by line.
+        lines = [" ".join(line.split()) for line in (out or "").splitlines()]
+        return ("\n".join(lines) if whole else " ".join(lines)).strip().strip('"'), self._usage(body)
 
     def _usage(self, body: dict) -> dict:
         """What the response says the request cost, as `Stats` fields. Groq times every request in `usage`, in
@@ -465,15 +533,18 @@ class Remote:
                 "generate_ms": _ms(generate_s), "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens, "cost_usd": cost}
 
-    def _body(self, text: str) -> bytes:
+    def _body(self, text: str, context: str = "", whole: bool = False) -> bytes:
         """The phrase, with generation pinned down: no sampling, no reasoning, and only as many tokens as a rewrite
         of this phrase can need — a model that starts explaining is cut off instead of waited for. The system
-        message and the preface are built here, so instructions the user changed between phrases are in this one."""
-        room = max(32, min(MAX_NEW, len(text) // 2 + 24)) + (THINKING if self.quiet else 0)
+        message, the preface and the context are built here, so instructions the user changed between phrases, and
+        the text this phrase continues, are in this one. A whole dictation is given room to be written out."""
+        room = (min(WHOLE_MAX_NEW, len(text) // 2 + 300) if whole
+                else max(32, min(MAX_NEW, len(text) // 2 + 24))) + (THINKING if self.quiet else 0)
+        lead = WHOLE if whole else context_block(context)
         return json.dumps({
             "model": self.model,
             "messages": ([{"role": "system", "content": system_prompt()}] + self.shots
-                         + [{"role": "user", "content": preface() + text}]),
+                         + [{"role": "user", "content": preface() + lead + text}]),
             "temperature": 0,
             "stream": False,
             self.provider.budget: room,
@@ -533,3 +604,97 @@ def _message(data: bytes) -> str:
         text = data.decode(errors="replace")
     text = " ".join(text.split())
     return text[:120] + ("…" if len(text) > 120 else "")
+
+
+#: Every model the app offers on each provider, in the order the app lists them (`Settings.cleanupProviders` in
+#: Sources/Settings.swift). Benchmarking runs the ones that are not the chosen model over the same phrase.
+BENCH_MODELS = {
+    "groq": ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+    "openrouter": ["openai/gpt-oss-120b:nitro", "qwen/qwen3.8-27b:nitro", "inclusionai/ling-3.0-flash"],
+}
+BENCH_PACE_S = 0.35         # quiet between two requests to the same model, so a fast speaker cannot burst a provider
+BENCH_BACKOFF_S = 1.0       # the first wait after a 429, doubling for every 429 in a row...
+BENCH_BACKOFF_MAX_S = 60.0  # ...up to this, and back to the first wait after a request that worked
+BENCH_QUEUE = 4             # phrases waiting to be benchmarked; past this the oldest is dropped, never the newest
+
+
+class Bench:
+    """Runs every other model of the chosen provider over a phrase, in a thread of its own.
+
+    What the speaker waits for is the cleanup of their own model, so nothing here is ever on that path: the phrase
+    is handed over after it has been typed, the comparisons run behind it, and a speaker who outruns them loses the
+    oldest phrase in the queue rather than the newest. Each model keeps its own pace and its own backoff, so one
+    model being rate limited neither delays the others nor stops the run; what it said instead is recorded as that
+    model's error for the phrase.
+    """
+
+    def __init__(self, emit):
+        self.emit = emit            # emit(phrase_id, [result, ...]) once a phrase has been through every model
+        self.jobs: queue.Queue = queue.Queue()
+        self.models: dict[str, Remote] = {}
+        self.ready: dict[str, float] = {}   # per model, the monotonic time it may be asked again
+        self.delay: dict[str, float] = {}   # ...and how long the next 429 would hold it off
+        self.thread: threading.Thread | None = None
+
+    def configure(self, key: str | None) -> None:
+        """Compare against the other models of `key`'s provider. A local model, no model and benchmarking switched
+        off all pass None, which leaves nothing to run."""
+        for remote in self.models.values():
+            remote.close()
+        name = key.split(":", 1)[0] if key else ""
+        others = [model for model in BENCH_MODELS.get(name, []) if f"{name}:{model}" != key]
+        self.models = {model: Remote(f"{name}:{model}") for model in others}
+        self.ready = {model: 0.0 for model in others}
+        self.delay = {model: BENCH_BACKOFF_S for model in others}
+        if self.models and self.thread is None:
+            self.thread = threading.Thread(target=self._work, daemon=True)
+            self.thread.start()
+
+    def submit(self, phrase: str, text: str, context: str) -> None:
+        """Compare the models on one phrase, which its own model has already cleaned."""
+        if not self.models:
+            return
+        while self.jobs.qsize() >= BENCH_QUEUE:
+            try:
+                self.jobs.get_nowait()
+            except queue.Empty:
+                break
+        self.jobs.put((phrase, text, context, dict(self.models)))
+
+    def _work(self) -> None:
+        while True:
+            phrase, text, context, models = self.jobs.get()
+            results: dict[str, dict] = {}
+            threads = [threading.Thread(target=self._into, args=(results, model, remote, text, context), daemon=True)
+                       for model, remote in models.items()]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            if results:
+                self.emit(phrase, [results[model] for model in models if model in results])
+
+    def _into(self, results: dict, model: str, remote: Remote, text: str, context: str) -> None:
+        """One model's answer, on a thread of its own: a model being held off after a 429 must not hold up the
+        others, and one phrase through every model is one event."""
+        results[model] = self._one(model, remote, text, context)
+
+    def _one(self, model: str, remote: Remote, text: str, context: str) -> dict:
+        """One model's answer to one phrase, after whatever wait that model is under."""
+        wait = self.ready.get(model, 0.0) - time.monotonic()
+        if wait > 0:
+            time.sleep(min(wait, BENCH_BACKOFF_MAX_S))
+        at = time.perf_counter()
+        out, stats = remote.rewrite(text, context)
+        ms = round((time.perf_counter() - at) * 1000)
+        error = stats.error
+        if error and "429" in error:
+            self.delay[model] = min(self.delay.get(model, BENCH_BACKOFF_S) * 2, BENCH_BACKOFF_MAX_S)
+            self.ready[model] = time.monotonic() + self.delay[model]
+        else:
+            if not error:
+                self.delay[model] = BENCH_BACKOFF_S
+            self.ready[model] = time.monotonic() + BENCH_PACE_S
+        return {"provider": remote.name, "model": model, "text": "" if error else out, "ms": ms,
+                "prompt_tokens": stats.prompt_tokens, "completion_tokens": stats.completion_tokens,
+                "cost_usd": stats.cost_usd, "error": error}

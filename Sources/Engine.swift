@@ -15,6 +15,14 @@ struct EngineEvent: Sendable {
     let timing: PhraseTiming?  // "final" events: how long each step took
     let pending: Bool        // "work" events: still finishing what was recorded
     let audio: [AudioRef]    // "final" events while audio is saved: where the phrase is in the recordings
+    let id: String?          // "final" events: the phrase's own id; "rewritten": the request it answers
+    let session: Int?        // "final" and "session" events: the recording they belong to
+    let heard: String?       // "session" events: its phrases as they were typed, run together
+    let phrases: [String]    // ... and their ids
+    let polished: Bool       // "session" events: the whole of it went through the model
+    let cleanup: PhraseTiming.Cleanup?  // "session" and "rewritten" events: what that one pass cost
+    let phrase: String?      // "benchmark" events: the phrase the other models answered
+    let results: [BenchmarkRun]  // ... and what each of them wrote
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -33,6 +41,16 @@ struct EngineEvent: Sendable {
         timing = PhraseTiming(engine: object["timing"])
         pending = object["pending"] as? Bool ?? false
         audio = (object["audio"] as? [[String: Any]] ?? []).compactMap(AudioRef.init(engine:))
+        id = object["id"] as? String
+        session = object["session"] as? Int
+        heard = object["heard"] as? String
+        phrases = object["phrases"] as? [String] ?? []
+        polished = object["polished"] as? Bool ?? false
+        // A phrase's "timing" holds its steps with the cleanup inside them; a session's and a rewrite's is the one
+        // call they are.
+        cleanup = kind == "final" ? nil : engineValue(object["timing"])
+        phrase = object["phrase"] as? String
+        results = (object["results"] as? [[String: Any]] ?? []).compactMap { engineValue($0) }
     }
 }
 

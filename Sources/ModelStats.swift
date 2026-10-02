@@ -27,8 +27,10 @@ struct ModelStats {
 
     var benchmark: Benchmark? { Self.benchmarks["\(provider):\(model)"] }
 
+    /// How this model has done for you: its own phrase cleanups, the passes it made over whole recordings, and every
+    /// phrase it answered while benchmarking, which are all calls to the same model.
     func yours(in history: [HistoryEntry]) -> Yours {
-        let runs = history.compactMap(\.timing?.cleanup).filter { $0.provider == provider && $0.model == model }
+        let runs = history.flatMap(\.calls).filter { $0.provider == provider && $0.model == model }
         var yours = Yours()
         yours.skipped = runs.filter(\.skipped).count
         yours.failed = runs.filter { $0.error != nil }.count
@@ -91,7 +93,7 @@ struct ModelStatsCard: View {
                     if let note = bench.note { remark(note) }
                 }
             }
-            block(yours.sent + yours.skipped == 0 ? "Yours" : "Yours, \(yours.sent + yours.skipped) phrases") {
+            block(yours.sent + yours.skipped == 0 ? "Yours" : "Yours, \(yours.sent + yours.skipped) calls") {
                 if yours.sent + yours.skipped == 0 {
                     remark("Not used yet")
                 } else {

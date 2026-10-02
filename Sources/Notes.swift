@@ -5,7 +5,7 @@ import SwiftUI
 /// level). Hosted in SwiftUI by `NotesEditorView`; reports its size, emptiness, editing state and scroll position to
 /// the model. Every change is kept by `NotesLibrary`, in whichever note is open.
 @MainActor
-final class NotesEditor: NSObject, NSTextViewDelegate {
+final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate {
     static let inset = NSSize(width: 18, height: 14)
     private static let maxTextHeight: CGFloat = 240
     private static let followSlack: CGFloat = 24  // this close to the end counts as "at the end"
@@ -19,6 +19,8 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
     private var startsParagraph = false
     private var glides = 0  // follow-the-end scroll animations in flight
     private var hiding: Task<Void, Never>?
+    private var block: NSRange?     // what the recording in progress has appended, while it is still ours to replace
+    private var applying = false    // our own edit is going in: it is not the speaker touching the block
 
     /// Only the notes on screen take clicks and set the pointer; hidden notes give up the keyboard. Once faded out the
     /// editor is hidden outright, so no text cursor shows over the pane that replaced it.
@@ -72,9 +74,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.selectedTextAttributes = [.backgroundColor: NSColor.white.withAlphaComponent(0.24)]
         text.typingAttributes = attributes
         text.textStorage?.setAttributedString(NSAttributedString(string: library.initialText, attributes: attributes))
+        text.textStorage?.delegate = self
         text.delegate = self
         text.onFocusChange = { [unowned self] in reportEditing() }
         text.onCommand = { [unowned self] command in run(command) }
+        text.canCleanUp = { [model] in model.settings.cleanupEnabled && !model.cleaningNote }
         library.onOpen = { [unowned self] text in show(text) }
         view.documentView = text
         view.isHidden = true  // until the notes pane opens
@@ -97,9 +101,17 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         report()
     }
 
-    /// The next phrase begins a new line (a new recording).
+    /// The end of the note the next phrase lands after, for the cleanup model to read: enough of it to carry a
+    /// sentence the dictation may correct, never enough to be worth sending whole.
+    var dictationContext: String {
+        String(text.string.suffix(2000))
+    }
+
+    /// The next phrase begins a new line (a new recording), and a new block: what this recording appends is tracked
+    /// as one stretch, so the whole of it can be replaced once it has been polished.
     func startParagraph() {
         startsParagraph = true
+        block = nil
     }
 
     /// Add a finished phrase at the end, leaving the cursor, the selection and any edit in progress where they are.
@@ -114,15 +126,75 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
             piece = startsParagraph ? (last == "\n" ? "" : "\n") + phrase : (last.isWhitespace ? "" : " ") + phrase
         }
         startsParagraph = false
+        let start = storage.length + (piece as NSString).length - (phrase as NSString).length
         // Dictated text is not an edit: ⌘Z steps back through what you typed, and a phrase landing mid-edit never
         // joins your typing's undo step.
+        applying = true
         text.breakUndoCoalescing()
         text.undoManager?.disableUndoRegistration()
         storage.replaceCharacters(in: NSRange(location: storage.length, length: 0),
                                   with: NSAttributedString(string: piece, attributes: attributes))
         text.undoManager?.enableUndoRegistration()
+        applying = false
+        let from = block?.location ?? start
+        block = NSRange(location: from, length: storage.length - from)
         text.didChangeText()
         if following { followEnd(animated: true) }
+    }
+
+    /// The recording is over and the whole of it came back polished: it replaces exactly what it appended, where it
+    /// stands, as long as the speaker has not edited inside that block since. Like the phrases themselves, this is
+    /// not an undo step. Says whether the text was replaced.
+    @discardableResult
+    func replaceDictated(with polished: String) -> Bool {
+        guard let range = block, let storage = text.textStorage, !polished.isEmpty,
+              NSMaxRange(range) <= storage.length else { return false }
+        block = nil
+        guard (storage.string as NSString).substring(with: range) != polished else { return false }
+        let following = isAtEnd
+        let selection = text.selectedRange()
+        applying = true
+        text.breakUndoCoalescing()
+        text.undoManager?.disableUndoRegistration()
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: polished, attributes: attributes))
+        text.undoManager?.enableUndoRegistration()
+        applying = false
+        if selection.location >= NSMaxRange(range) {  // the cursor was past the block: it keeps its place in the text
+            let moved = selection.location + (polished as NSString).length - range.length
+            text.setSelectedRange(NSRange(location: min(moved, storage.length), length: 0))
+        }
+        text.didChangeText()
+        if following { followEnd(animated: true) }
+        return true
+    }
+
+    /// "Clean up note": the model's version of the whole note, in one undoable edit, so ⌘Z brings the note back as
+    /// it was.
+    func replaceAll(with cleaned: String) {
+        guard let storage = text.textStorage, !cleaned.isEmpty, cleaned != text.string else { return }
+        let whole = NSRange(location: 0, length: storage.length)
+        applying = true
+        text.breakUndoCoalescing()
+        if text.shouldChangeText(in: whole, replacementString: cleaned) {
+            storage.replaceCharacters(in: whole, with: NSAttributedString(string: cleaned, attributes: attributes))
+            text.didChangeText()
+            text.breakUndoCoalescing()
+        }
+        applying = false
+        block = nil
+    }
+
+    /// The block the current recording appended moves with whatever the speaker does around it, and is given up as
+    /// soon as they edit inside it: from then on the text is theirs, and polishing leaves it alone.
+    func textStorage(_ storage: NSTextStorage, didProcessEditing edited: NSTextStorageEditActions,
+                     range: NSRange, changeInLength delta: Int) {
+        guard edited.contains(.editedCharacters), !applying, let current = block else { return }
+        let before = NSRange(location: range.location, length: range.length - delta)  // the range as it was edited
+        if NSMaxRange(before) <= current.location {
+            block = NSRange(location: current.location + delta, length: current.length)
+        } else if before.location < NSMaxRange(current) {
+            block = nil
+        }
     }
 
     /// Show another note's text. It is not an edit: it starts its own undo history and is not written back.
@@ -131,6 +203,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
         text.textStorage?.setAttributedString(NSAttributedString(string: note, attributes: attributes))
         text.typingAttributes = attributes
         text.setSelectedRange(NSRange(location: (note as NSString).length, length: 0))
+        block = nil
         startsParagraph = true
         report()
         followEnd(animated: false)
@@ -145,6 +218,8 @@ final class NotesEditor: NSObject, NSTextViewDelegate {
             if library.currentNote == nil { name(library.save(text.string)) } else { library.flush() }
         case .newNote:
             library.newNote(from: text.string)
+        case .cleanUp:
+            model.cleanUpNote(text.string)
         case .myNotes:
             model.showMyNotes()
         }
@@ -266,6 +341,7 @@ enum NotesCommand {
     case saveSelection(String)
     case save
     case newNote
+    case cleanUp
     case myNotes
 }
 
@@ -276,6 +352,7 @@ enum NotesCommand {
 final class NotesTextView: NSTextView {
     var onFocusChange: () -> Void = {}
     var onCommand: (NotesCommand) -> Void = { _ in }
+    var canCleanUp: () -> Bool = { false }  // the cleanup model is on, and no note is being cleaned already
     var isActive = false
     private var pointerArea: NSTrackingArea?
 
@@ -400,6 +477,10 @@ final class NotesTextView: NSTextView {
         })
         items.append(MenuItem(id: "new", title: "New note", symbol: "square.and.pencil", shortcut: "⌘N") {
             [weak self] in self?.onCommand(.newNote)
+        })
+        items.append(MenuItem(id: "cleanup", title: "Clean up note", symbol: "wand.and.sparkles",
+                              enabled: !string.isEmpty && canCleanUp()) {
+            [weak self] in self?.onCommand(.cleanUp)
         })
         items.append(MenuItem(id: "library", title: "My notes", symbol: "list.bullet") {
             [weak self] in self?.onCommand(.myNotes)

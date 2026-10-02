@@ -10,6 +10,8 @@ struct Settings: Codable, Equatable {
     var cleanupProvider = "groq"
     var cleanupModels: [String: String] = [:]  // the model picked on each provider; none yet means its first
     var cleanupInstructions = ""                // the user's own rules for the cleanup model, added to its prompt
+    var cleanupPolish = true                    // one more pass over the whole of a recording when it stops
+    var cleanupBenchmark = false                // every other model of the provider answers each phrase as well
     var captionsShown = true
     var captionPosition = CaptionPosition.top
     var captionFont = "TikTok Sans"
@@ -82,6 +84,8 @@ extension Settings {
         cleanupProvider = value(.cleanupProvider, fallback.cleanupProvider)
         cleanupModels = value(.cleanupModels, fallback.cleanupModels)
         cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
+        cleanupPolish = value(.cleanupPolish, fallback.cleanupPolish)
+        cleanupBenchmark = value(.cleanupBenchmark, fallback.cleanupBenchmark)
         captionsShown = value(.captionsShown, fallback.captionsShown)
         captionPosition = value(.captionPosition, fallback.captionPosition)
         captionFont = value(.captionFont, fallback.captionFont)

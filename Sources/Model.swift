@@ -118,6 +118,11 @@ final class AppModel {
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
     var onUnload: () -> Void = {}
     var onEditInstructions: () -> Void = {}
+    /// "Clean up note": the note's whole text goes to the cleanup model, and comes back as one undoable edit.
+    var onCleanUpNote: (String) -> Void = { _ in }
+    /// A note is at the model right now: the menu item waits for it rather than asking twice.
+    var cleaningNote = false
+    var onShowBenchmarks: () -> Void = {}
     /// The chat apps as saved; the dock owns them and the settings section shows them.
     var chatApps: ChatApps?
     var onEditChatApps: () -> Void = {}
@@ -196,6 +201,13 @@ final class AppModel {
     func showMyNotes() {
         notesView = .library
         if pane != .notes { go(to: .notes) }
+    }
+
+    /// "Clean up note" in the notes' own menu: the whole note to the model, once at a time.
+    func cleanUpNote(_ text: String) {
+        guard settings.cleanupEnabled, !cleaningNote, !text.isEmpty else { return }
+        cleaningNote = true
+        onCleanUpNote(text)
     }
 
     /// Remove a phrase from the history, on screen and on disk.

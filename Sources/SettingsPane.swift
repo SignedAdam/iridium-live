@@ -101,6 +101,15 @@ struct SettingsPane: View {
                             Button(model.settings.cleanupInstructions.isEmpty ? "Add" : "Edit", action: model.onEditInstructions)
                                 .buttonStyle(GlassButton())
                         }
+                        Row("Polish each recording", detail: "One more pass over the whole of it when you stop") {
+                            GlassSwitch(isOn: $model.settings.cleanupPolish)
+                        }
+                        Row("Benchmark other models", detail: "They answer every phrase too, so you spend several times as much") {
+                            HStack(spacing: 8) {
+                                Button("Results", action: model.onShowBenchmarks).buttonStyle(GlassButton())
+                                GlassSwitch(isOn: $model.settings.cleanupBenchmark)
+                            }
+                        }
                     }
                     .dimmed(!model.settings.cleanupEnabled)
                 }
@@ -189,6 +198,83 @@ struct SettingsPane: View {
 
     private func gigabytes(_ bytes: UInt64, unit: Bool = true) -> String {
         String(format: unit ? "%.1f GB" : "%.1f", Double(bytes) / 1_073_741_824)
+    }
+}
+
+/// What the app needs from the system and from the user: the two grants, with a button that leads straight to
+/// whichever pane fixes them, the API keys (held in the keychain, never shown back), and starting with the Mac.
+@MainActor
+private struct SetupSection: View {
+    private let setup = Setup.shared
+    @State private var editing: String?
+    @State private var typed = ""
+
+    var body: some View {
+        Section("Setup") {
+            Row("Microphone", detail: microphone, alert: setup.microphone == .denied) {
+                if setup.microphone == .granted {
+                    Figure("Granted")
+                } else {
+                    Button(setup.microphone == .notAsked ? "Allow" : "Open Settings", action: setup.askForMicrophone)
+                        .buttonStyle(GlassButton())
+                }
+            }
+            Row("Accessibility", detail: setup.accessibility ? nil : "Typing and hotkeys need it.",
+                alert: !setup.accessibility) {
+                if setup.accessibility {
+                    Figure("Granted")
+                } else {
+                    Button("Allow", action: setup.askForAccessibility).buttonStyle(GlassButton())
+                }
+            }
+            ForEach(ApiKey.all) { key in
+                Row("\(key.name) key", detail: setup.keys[key.id] == true ? "In the keychain" : nil) {
+                    if editing == key.id {
+                        HStack(spacing: 6) {
+                            SecureField(key.site, text: $typed)
+                                .textFieldStyle(.plain)
+                                .font(tiktok(12))
+                                .padding(.horizontal, 9)
+                                .frame(width: 150, height: 24)
+                                .background(Pill(fill: 0.08))
+                                .onSubmit { store(key) }
+                            Button("Save") { store(key) }.buttonStyle(GlassButton())
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Button(setup.keys[key.id] == true ? "Change" : "Set") { typed = ""; editing = key.id }
+                                .buttonStyle(GlassButton())
+                            if setup.keys[key.id] == true {
+                                Button("Remove") { setup.store(nil, for: key) }.buttonStyle(GlassButton())
+                            }
+                        }
+                    }
+                }
+            }
+            Row("Open at login", detail: setup.isBundled ? nil : "Needs the app in /Applications.") {
+                GlassSwitch(isOn: Binding(get: { setup.openAtLogin }, set: { setup.setOpenAtLogin($0) }))
+                    .disabled(!setup.isBundled)
+            }
+            if let trouble = setup.trouble {
+                Row("Trouble", detail: trouble, alert: true) { EmptyView() }
+            }
+        }
+        .onAppear { setup.watch() }
+        .onDisappear { setup.unwatch() }
+    }
+
+    private var microphone: String? {
+        switch setup.microphone {
+        case .granted: nil
+        case .denied: "Turned off for Iridium Live."
+        case .notAsked: "Not asked for yet."
+        }
+    }
+
+    private func store(_ key: ApiKey) {
+        setup.store(typed, for: key)
+        typed = ""
+        editing = nil
     }
 }
 
@@ -577,82 +663,5 @@ private struct AddRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-}
-
-/// What the app needs from the system and from the user: the two grants, with a button that leads straight to
-/// whichever pane fixes them, the API keys (held in the keychain, never shown back), and starting with the Mac.
-@MainActor
-private struct SetupSection: View {
-    private let setup = Setup.shared
-    @State private var editing: String?
-    @State private var typed = ""
-
-    var body: some View {
-        Section("Setup") {
-            Row("Microphone", detail: microphone, alert: setup.microphone == .denied) {
-                if setup.microphone == .granted {
-                    Figure("Granted")
-                } else {
-                    Button(setup.microphone == .notAsked ? "Allow" : "Open Settings", action: setup.askForMicrophone)
-                        .buttonStyle(GlassButton())
-                }
-            }
-            Row("Accessibility", detail: setup.accessibility ? nil : "Typing and hotkeys need it.",
-                alert: !setup.accessibility) {
-                if setup.accessibility {
-                    Figure("Granted")
-                } else {
-                    Button("Allow", action: setup.askForAccessibility).buttonStyle(GlassButton())
-                }
-            }
-            ForEach(ApiKey.all) { key in
-                Row("\(key.name) key", detail: setup.keys[key.id] == true ? "In the keychain" : nil) {
-                    if editing == key.id {
-                        HStack(spacing: 6) {
-                            SecureField(key.site, text: $typed)
-                                .textFieldStyle(.plain)
-                                .font(tiktok(12))
-                                .padding(.horizontal, 9)
-                                .frame(width: 150, height: 24)
-                                .background(Pill(fill: 0.08))
-                                .onSubmit { store(key) }
-                            Button("Save") { store(key) }.buttonStyle(GlassButton())
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            Button(setup.keys[key.id] == true ? "Change" : "Set") { typed = ""; editing = key.id }
-                                .buttonStyle(GlassButton())
-                            if setup.keys[key.id] == true {
-                                Button("Remove") { setup.store(nil, for: key) }.buttonStyle(GlassButton())
-                            }
-                        }
-                    }
-                }
-            }
-            Row("Open at login", detail: setup.isBundled ? nil : "Needs the app in /Applications.") {
-                GlassSwitch(isOn: Binding(get: { setup.openAtLogin }, set: { setup.setOpenAtLogin($0) }))
-                    .disabled(!setup.isBundled)
-            }
-            if let trouble = setup.trouble {
-                Row("Trouble", detail: trouble, alert: true) { EmptyView() }
-            }
-        }
-        .onAppear { setup.watch() }
-        .onDisappear { setup.unwatch() }
-    }
-
-    private var microphone: String? {
-        switch setup.microphone {
-        case .granted: nil
-        case .denied: "Turned off for Iridium Live."
-        case .notAsked: "Not asked for yet."
-        }
-    }
-
-    private func store(_ key: ApiKey) {
-        setup.store(typed, for: key)
-        typed = ""
-        editing = nil
     }
 }

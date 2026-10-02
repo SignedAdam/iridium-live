@@ -25,6 +25,14 @@ long, "archive off" stops; "instructions JSON" sets the speaker's own instructio
 JSON string so they can hold newlines (an empty JSON string clears them). They go under the fixed rules of the
 cleanup prompt wherever the phrase is cleaned, and while they are set no phrase is clean enough to skip the model.
 Nothing comes back for them except an error event if the JSON is not a string.
+"context JSON" gives the text the next recording is about to continue (the note above the cursor, say), as a JSON
+string: the cleanup model reads the end of it in front of every phrase of that recording and never writes it back.
+It is cleared by the next "start" unless it is sent again, so it is sent just before one. "polish on|off" (on by
+default) runs one more pass over the whole of a recording once it stops, which is what fixes the corrections,
+sentence boundaries and inconsistencies that span two phrases. "rewrite ID JSON" cleans one whole text the same
+way, out of band, and answers with its id. "benchmark on|off" runs every other model of the chosen provider over
+each phrase in the background, after the phrase has been typed, for comparing them on real dictation; it never
+runs local models and never delays a phrase.
 All act at once, even while a model is still loading: audio waits and is transcribed as soon as the model is
 ready, and any model that is not on disk is fetched first. Events on stdout, one JSON object per line:
   {"kind": "state", "recording": bool}             at startup and after every change
@@ -39,18 +47,26 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
                                                    (final also carries "raw" and "cleanup_ms" when cleanup is on)
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
                                                    whether typing is on)
+  {"kind": "session", "session": N, "text": ...,   one per recording that produced a final, after its last final
+   "heard": ..., "phrases": [...], "polished":     and before work falls to false: "heard" is those finals joined
+   bool, "timing": ...}                            by single spaces, "text" the whole of it polished (equal to
+                                                   "heard" when polishing is off or the pass did not land), and
+                                                   "timing" what that pass cost, in the shape a final's "cleanup"
+                                                   has. A cancelled recording says nothing.
+  {"kind": "rewritten", "id": ..., "text": ...,    the answer to one "rewrite", with what the pass cost
+   "timing": ...}
+  {"kind": "benchmark", "phrase": ID,              what the provider's other models made of one phrase, each with
+   "results": [...]}                               "provider", "model", "text", "ms", "prompt_tokens",
+                                                   "completion_tokens", "cost_usd" and "error"
   {"kind": "archive", "file": ..., "seconds": ...} a recording was closed on disk
-Every final carries "timing", all milliseconds, for where the speaker's wait went: "speech_ms" is how much audio
-the phrase holds, "endpoint_ms" the silence from its last speech frame until it closed (or until "stop" cut it),
-"queue_ms" how long it then waited behind earlier work, "decode_ms" its final transcription, "total_ms" the whole
-wait from that last speech frame to this event, and "cleanup" null with cleanup off or an object with the
-provider, the model, whether the phrase was clean enough to skip the model, "ms" as the speaker waits for it, the
-connection and network time, what the provider reports of its own queue, prompt and generation time, the token
-counts, the cost in dollars and any error that left the phrase raw.
-While audio is being archived, a final also carries "audio": where the phrase can be heard, as
-[{"file": ..., "start_s": ..., "end_s": ...}] in seconds from each file's first sample, with one entry per file
-it touches. A phrase thrown away by "cancel" says nothing at all, and nothing of it stays on disk.
-Decode timings go to stderr.
+Every final carries "id", unique, and "session", the number of the recording it belongs to, which counts up from
+one at every start. It also carries "timing", all milliseconds, for where the speaker's wait went: "speech_ms" is
+how much audio the phrase holds, "endpoint_ms" the silence from its last speech frame until it closed (or until
+"stop" cut it), "queue_ms" how long it then waited behind earlier work, "decode_ms" its final transcription,
+"total_ms" the whole wait from that last speech frame to this event, and "cleanup" null with cleanup off or an
+object with the provider, the model, whether the phrase was clean enough to skip the model, "ms" as the speaker
+waits for it, the connection and network time, what the provider reports of its own queue, prompt and generation
+time, the token counts, the cost in dollars and any error that left the phrase raw.
 """
 import argparse
 import gc
@@ -90,6 +106,48 @@ class Block(NamedTuple):
     """One captured block, carrying the wall time of its first sample: the archive names files by it."""
     at: float
     samples: np.ndarray
+
+
+class Job(NamedTuple):
+    """Work sent through the audio queue so that it runs on the transcriber thread, in the order the speaker asked
+    for it: the start of a recording, which numbers it and takes the context the app sent, and a whole-text
+    rewrite, which needs the loaded cleanup model."""
+    kind: str
+    data: tuple
+
+
+class Dictation:
+    """One recording as the cleanup model sees it: which recording it is, the text it continues (sent by the app
+    just before it started) and the phrases it has produced so far, cleaned. Every phrase is cleaned with all of
+    that in front of it as context, and the whole of it is polished once more when the recording stops."""
+
+    def __init__(self) -> None:
+        self.number = 0
+        self.context = ""
+        self.index = 0
+        self.phrases: list[tuple[str, str]] = []
+
+    def start(self, context: str) -> None:
+        self.number += 1
+        self.context = context
+        self.index = 0
+        self.phrases = []
+
+    def claim(self) -> str:
+        """The id of the phrase about to be decoded, unique for the life of the engine."""
+        self.index += 1
+        return f"{self.number}-{self.index}"
+
+    def before(self) -> str:
+        """What the next phrase continues: the app's context, then this recording's phrases so far."""
+        return " ".join(piece for piece in [self.context, *(text for _, text in self.phrases)] if piece)
+
+    def add(self, phrase: str, text: str) -> None:
+        self.phrases.append((phrase, text))
+
+    def drop(self) -> None:
+        """A cancelled recording: nothing of it is polished or reported."""
+        self.phrases = []
 
 
 class TimedSpeech:
@@ -430,6 +488,12 @@ def main() -> None:
     speech_slot = ModelSlot("asr", events, control, audio)
     cleanup_slot = ModelSlot("cleanup", events, control, audio)
     stable = StablePrefix(TYPE_HOLD_S)
+    dictation = Dictation()
+    bench = cleanup_model.Bench(
+        lambda phrase, results: events.send({"kind": "benchmark", "phrase": phrase, "results": results}))
+    polishing = True       # one pass over the whole of a recording when it stops
+    benchmarking = False   # the provider's other models run over each phrase, behind the speaker
+    context = ""           # what the next recording continues, until a start takes it
 
     def resume() -> None:
         """Anything that needs a model brings back what `unload` dropped, the speech model first."""
@@ -438,10 +502,19 @@ def main() -> None:
             cleanup_slot.resume()
 
     def read_commands() -> None:
+        nonlocal polishing, benchmarking, context
+
+        def comparing() -> None:
+            """The models to compare against: the chosen provider's others, and none at all while benchmarking is
+            off or cleanup runs on this Mac."""
+            bench.configure(cleanup_slot.want if benchmarking else None)
+
         for line in sys.stdin:
             command, _, argument = line.strip().partition(" ")
             if command == "start":
                 resume()
+                audio.put(Job("start", (context,)))  # ...which numbers the recording, before any of its audio
+                context = ""
                 recorder.start()
             elif command == "stop":
                 recorder.stop()
@@ -452,6 +525,12 @@ def main() -> None:
             elif command == "cleanup":
                 resume()
                 cleanup_slot.request(None if argument == "off" else argument)
+                comparing()
+            elif command == "polish":
+                polishing = argument != "off"
+            elif command == "benchmark":
+                benchmarking = argument == "on"
+                comparing()
             elif command == "asr" and argument in asr.MODELS:
                 resume()
                 speech_slot.request(argument)
@@ -459,16 +538,25 @@ def main() -> None:
                 recorder.stop()  # the phrase in flight is finished, and the queue carries that before the unload
                 speech_slot.suspend()
                 cleanup_slot.suspend()
-            elif command == "instructions":
+            elif command in ("instructions", "context", "rewrite"):
+                payload = argument
+                identifier = ""
+                if command == "rewrite":
+                    identifier, _, payload = argument.partition(" ")
                 try:
-                    text = json.loads(argument)
+                    text = json.loads(payload)
                     if not isinstance(text, str):
                         raise ValueError("not a string")
                 except Exception as exc:
-                    cleanup_slot.say("error", cleanup_slot.key, message=f"instructions: {exc}")
+                    cleanup_slot.say("error", cleanup_slot.key, message=f"{command}: {exc}")
                 else:
-                    if cleanup_model.set_instructions(text):
-                        cleanup_slot.refresh()
+                    if command == "instructions":
+                        if cleanup_model.set_instructions(text):
+                            cleanup_slot.refresh()
+                    elif command == "context":
+                        context = text
+                    else:
+                        audio.put(Job("rewrite", (identifier, text)))
             elif command == "archive":
                 mode, _, rest = argument.partition(" ")
                 seconds, _, directory = rest.partition(" ")
@@ -517,23 +605,28 @@ def main() -> None:
 
     def on_final(text: str, timing: seg.Timing) -> None:
         """One phrase is done. With cleanup on, the rewrite runs here, in the transcriber loop: audio keeps
-        queueing behind it and the phrase is typed once, cleaned. The event carries where the wait went, from
-        the last word the phrase held to this line leaving, and where the phrase can be heard in the archive."""
+        queueing behind it and the phrase is typed once, cleaned, with everything said earlier in this recording
+        in front of it as context. The event carries where the wait went, from the last word the phrase held to
+        this line leaving, and where the phrase can be heard in the archive."""
         if discarding.is_set():
             return
         # Asked before the rewrite, which can take seconds: this is where the phrase sits in the files as they
         # stand now, and the archive has every frame of it already.
         heard = archive.locate(timing.started, timing.started + timing.speech_s)
+        phrase = dictation.claim()
+        before = dictation.before()
         final = {"kind": "final", "text": text}
         cleanup = None
         if cleaner := cleanup_slot.model:
             at = time.perf_counter()
-            rewritten, stats = cleaner.rewrite(text)
+            rewritten, stats = cleaner.rewrite(text, before)
             ms = (time.perf_counter() - at) * 1000
             cleanup = stats._replace(ms=round(ms))._asdict()
             final = {"kind": "final", "text": rewritten, "raw": text,
                      "cleanup_ms": 0.0 if stats.skipped else round(ms, 1)}
             print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
+        final["id"] = phrase
+        final["session"] = dictation.number
         final["timing"] = {"speech_ms": round(timing.speech_s * 1000),
                            "endpoint_ms": round((timing.closed - timing.last_speech) * 1000),
                            "queue_ms": round((timing.decode_at - timing.closed) * 1000),
@@ -545,6 +638,33 @@ def main() -> None:
         send(final)
         send({"kind": "type", "text": final["text"], "final": True})
         stable.reset()
+        dictation.add(phrase, final["text"])
+        if cleanup is not None and not cleanup["skipped"]:
+            bench.submit(phrase, text, before)  # the same phrase and the same context, behind the speaker
+
+    def whole(text: str) -> tuple[str, dict | None]:
+        """One whole text through the cleanup model, and what the pass cost. With no model loaded the text comes
+        back as it was, which is what the speaker already has."""
+        cleaner = cleanup_slot.model
+        if cleaner is None:
+            return text, None
+        at = time.perf_counter()
+        written, stats = cleaner.whole(text)
+        ms = (time.perf_counter() - at) * 1000
+        print(f"whole   {ms:5.0f} ms  {len(text)} chars", file=sys.stderr, flush=True)
+        return written, stats._replace(ms=round(ms))._asdict()
+
+    def finish_dictation() -> None:
+        """A recording that said something has stopped: its phrases as one text, polished in one more pass when
+        polishing is on and a model is loaded. Sent after the last final and before the work falls away."""
+        if not dictation.phrases:
+            return
+        said = " ".join(text for _, text in dictation.phrases)
+        text, cost = (whole(said) if polishing else (said, None))
+        events.send({"kind": "session", "session": dictation.number, "text": text, "heard": said,
+                     "phrases": [phrase for phrase, _ in dictation.phrases],
+                     "polished": bool(cost) and not cost["error"], "timing": cost})
+        dictation.drop()
 
     session = seg.Segmenter(speech, vad, on_partial=on_partial, on_final=on_final, on_frame=archive.feed)
     try:
@@ -577,13 +697,22 @@ def main() -> None:
                 if stable.typed:  # the phrase ended without a final decode: what is typed stands
                     send({"kind": "type", "text": " ".join(stable.typed), "final": True})
                     stable.reset()
+                finish_dictation()  # the whole recording, polished, before the speaker is told the work is done
                 work.set(False)
             elif block is CANCEL:
                 session.discard()  # the phrase in flight is not decoded, typed or kept
                 archive.discard()
                 stable.reset()
+                dictation.drop()   # ...and the recording it belonged to is never polished or reported
                 work.set(False)
                 discarding.clear()  # everything of that recording is behind us; the next one speaks again
+            elif isinstance(block, Job):
+                if block.kind == "start":
+                    dictation.start(block.data[0])
+                else:
+                    identifier, text = block.data
+                    written, cost = whole(text)
+                    events.send({"kind": "rewritten", "id": identifier, "text": written, "timing": cost})
             else:
                 session.feed(block.samples, block.at)
     except (KeyboardInterrupt, BrokenPipeError):

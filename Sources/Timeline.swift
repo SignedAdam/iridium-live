@@ -3,6 +3,8 @@ import SwiftUI
 /// How long each step of one finished phrase took, as the engine measured it (see `live.py`): from the last word
 /// spoken to the text arriving, and what AI cleanup did and cost.
 struct PhraseTiming: Codable, Equatable, Sendable {
+    /// What one call to the cleanup model cost: a phrase's rewrite, the pass over a whole recording, or one of the
+    /// models a benchmark compared it against.
     struct Cleanup: Codable, Equatable, Sendable {
         var provider: String
         var model: String
@@ -18,6 +20,25 @@ struct PhraseTiming: Codable, Equatable, Sendable {
         var costUsd: Double?
         var error: String?
 
+        init(provider: String, model: String, skipped: Bool, ms: Double, connectMs: Double? = nil,
+             networkMs: Double? = nil, queueMs: Double? = nil, promptMs: Double? = nil, generateMs: Double? = nil,
+             promptTokens: Double? = nil, completionTokens: Double? = nil, costUsd: Double? = nil,
+             error: String? = nil) {
+            self.provider = provider
+            self.model = model
+            self.skipped = skipped
+            self.ms = ms
+            self.connectMs = connectMs
+            self.networkMs = networkMs
+            self.queueMs = queueMs
+            self.promptMs = promptMs
+            self.generateMs = generateMs
+            self.promptTokens = promptTokens
+            self.completionTokens = completionTokens
+            self.costUsd = costUsd
+            self.error = error
+        }
+
         var providerName: String { Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider }
         var modelName: String { Settings.cleanupModels(on: provider).first { $0.0 == model }?.1 ?? model }
     }
@@ -30,14 +51,27 @@ struct PhraseTiming: Codable, Equatable, Sendable {
     var totalMs: Double
 }
 
+/// The pass over a whole recording once it stopped: the text it wrote, what the phrases read before it, and what the
+/// pass cost. Kept on the last phrase of that recording, which is where the timeline shows it.
+struct PolishRun: Codable, Equatable, Sendable {
+    var text: String
+    var heard: String
+    var cleanup: PhraseTiming.Cleanup?
+}
+
+/// Reads one object out of an engine event (snake_case keys); nil when there is none or it does not fit.
+func engineValue<T: Decodable>(_ object: Any?) -> T? {
+    guard let object, JSONSerialization.isValidJSONObject([object]),
+          let data = try? JSONSerialization.data(withJSONObject: [object]) else { return nil }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return (try? decoder.decode([T].self, from: data))?.first
+}
+
 extension PhraseTiming {
-    /// Reads the `timing` object of a `final` event (snake_case keys); nil when there is none.
+    /// Reads the `timing` object of a `final` event; nil when there is none.
     init?(engine object: Any?) {
-        guard let object, JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let timing = try? decoder.decode(PhraseTiming.self, from: data) else { return nil }
+        guard let timing: PhraseTiming = engineValue(object) else { return nil }
         self = timing
     }
 }
@@ -76,10 +110,14 @@ struct TimingSummary: View {
 
 /// One phrase's timing in full: a bar of its steps in order, a line per step (cleanup broken into its network and
 /// provider parts), the total from the last word to the text, then the model, tokens and cost, and what was heard
-/// when cleanup changed it.
+/// when cleanup changed it. The last phrase of a recording also carries the pass over the whole of it, and any
+/// phrase benchmarked carries what the other models made of it.
 struct PhraseTimeline: View {
     let timing: PhraseTiming
     let heard: String?
+    var text = ""                       // the phrase as it was typed, which the benchmarked models are read against
+    var polish: PolishRun?
+    var benchmarks: [BenchmarkRun] = []
 
     private struct Step: Identifiable {
         let id: String
@@ -114,8 +152,41 @@ struct PhraseTimeline: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let polish { polished(polish) }
+            if !benchmarks.isEmpty {
+                block("Other models") {
+                    ForEach(benchmarks) { run in BenchmarkLine(run: run, chosen: text) }
+                }
+            }
         }
         .padding(.top, 4)
+    }
+
+    /// The pass over the whole recording, which ran after this phrase: what it cost, and the text it left behind
+    /// where that is not simply the phrases run together.
+    private func polished(_ polish: PolishRun) -> some View {
+        block("Whole recording") {
+            if let cleanup = polish.cleanup {
+                line(cleanup.error.map {
+                    Step(id: "polish", label: "Polishing failed: \($0)", ms: cleanup.ms, shade: 0.85, alert: true)
+                } ?? Step(id: "polish", label: "Polished on \(cleanup.provider == Settings.localCleanup ? "this Mac" : cleanup.providerName)",
+                          ms: cleanup.ms, shade: 0.7))
+            }
+            if polish.text != polish.heard {
+                Text(polish.text)
+                    .font(tiktok(11.5))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func block(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased()).font(tiktok(10, "Medium")).kerning(0.6).foregroundStyle(.white.opacity(0.42))
+            content()
+        }
+        .padding(.top, 2)
     }
 
     private var steps: [Step] {

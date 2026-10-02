@@ -22,13 +22,15 @@ struct UsageRecord: Codable, Equatable, Sendable {
     let ms: Double
     let entry: String     // the history entry this phrase is in
 
-    /// The record for a finished phrase, or nothing when cleanup did not call a model (off, skipped, failed, or the
-    /// provider reported no tokens).
-    init?(_ entry: HistoryEntry) {
-        guard let cleanup = entry.timing?.cleanup, !cleanup.skipped, cleanup.error == nil else { return nil }
+    /// The record for one model call, or nothing when there was no call to pay for (skipped, failed, or the provider
+    /// reported no tokens). `step` separates the calls one phrase can make — its own cleanup, the pass over the
+    /// recording it ended, and each model a benchmark compared it against — so none of them overwrites another in
+    /// the ledger.
+    init?(_ cleanup: PhraseTiming.Cleanup, of entry: HistoryEntry, step: String = "") {
+        guard !cleanup.skipped, cleanup.error == nil else { return nil }
         let input = Int(cleanup.promptTokens ?? 0), output = Int(cleanup.completionTokens ?? 0)
         guard input > 0 || output > 0 else { return nil }
-        self.id = "iridium-live:\(entry.id.uuidString)"
+        self.id = "iridium-live:\(entry.id.uuidString)\(step.isEmpty ? "" : ":" + step)"
         self.source = "iridium-live"
         self.app = "Iridium Live"
         self.conv = entry.id.uuidString
@@ -47,6 +49,12 @@ struct UsageRecord: Codable, Equatable, Sendable {
         self.costUsd = cleanup.costUsd ?? 0
         self.ms = cleanup.ms
         self.entry = entry.id.uuidString
+    }
+
+    /// The record for a finished phrase's own cleanup.
+    init?(_ entry: HistoryEntry) {
+        guard let cleanup = entry.timing?.cleanup else { return nil }
+        self.init(cleanup, of: entry)
     }
 }
 
@@ -69,6 +77,24 @@ final class UsageLog {
     /// Log a finished phrase, if cleanup called a model for it.
     func record(_ entry: HistoryEntry) {
         guard let record = UsageRecord(entry) else { return }
+        append([record])
+    }
+
+    /// Log the pass over the whole recording this phrase ended.
+    func record(polish: PolishRun, of entry: HistoryEntry) {
+        guard let cleanup = polish.cleanup, let record = UsageRecord(cleanup, of: entry, step: "polish") else { return }
+        append([record])
+    }
+
+    /// Log what the benchmark spent comparing the other models on this phrase.
+    func record(benchmarks: [BenchmarkRun], of entry: HistoryEntry) {
+        append(benchmarks.compactMap { UsageRecord($0.cleanup, of: entry, step: "bench:\($0.model)") })
+    }
+
+    /// Log one whole-text rewrite, which belongs to no phrase: "Clean up note" asked for it.
+    func record(rewrite cleanup: PhraseTiming.Cleanup, at time: Date) {
+        let stand = HistoryEntry(time: time, text: "")
+        guard let record = UsageRecord(cleanup, of: stand, step: "rewrite") else { return }
         append([record])
     }
 

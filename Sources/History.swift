@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// One finished phrase, as it was typed (cleaned, when AI cleanup ran) and as it was heard, where it went, and how
-/// long each step took.
+/// long each step took. The last phrase of a recording also carries the pass over the whole of it, and a phrase said
+/// while benchmarking carries what the provider's other models made of it.
 struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     let time: Date
@@ -11,6 +12,21 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var destination: String?  // "Notes", the app it was typed into, or both
     var timing: PhraseTiming?
     var audio: [AudioRef]?    // where the phrase is in the saved recordings, while audio is being saved
+    var phrase: String?       // the engine's id for it, which its benchmark results and its recording name
+    var session: Int?         // the recording it belongs to
+    var polish: PolishRun?    // on the last phrase of a recording, once the whole of it has been through the model
+    var benchmarks: [BenchmarkRun]?
+}
+
+extension HistoryEntry {
+    /// Every model call this phrase paid for: its own cleanup, the pass over the recording it ended, and each model
+    /// a benchmark compared it against.
+    var calls: [PhraseTiming.Cleanup] {
+        [timing?.cleanup, polish?.cleanup].compactMap { $0 } + (benchmarks ?? []).map(\.cleanup)
+    }
+
+    /// What all of that cost.
+    var spend: Double { calls.reduce(0) { $0 + ($1.costUsd ?? 0) } }
 }
 
 /// A stretch of a saved recording: the WAV file and the seconds within it.
@@ -77,6 +93,25 @@ final class HistoryStore {
                 (try? decoder.decode(HistoryEntry.self, from: Data(line.utf8)))?.id != id
             }
             try? Data(kept.map { $0 + "\n" }.joined().utf8).write(to: file, options: .atomic)
+        }
+    }
+
+    /// Write one entry again where it already stands: a phrase learns what the pass over its whole recording did,
+    /// and what the benchmarked models made of it, seconds after it was first appended.
+    func update(_ entry: HistoryEntry) {
+        let file = self.file
+        disk.async { @Sendable in
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let replacement = try? encoder.encode(entry) else { return }
+            let line = String(decoding: replacement, as: UTF8.self)
+            let lines = text.split(separator: "\n").map { old -> String in
+                (try? decoder.decode(HistoryEntry.self, from: Data(old.utf8)))?.id == entry.id ? line : String(old)
+            }
+            try? Data(lines.map { $0 + "\n" }.joined().utf8).write(to: file, options: .atomic)
         }
     }
 
@@ -155,7 +190,7 @@ struct HistoryPane: View {
                 : calendar.isDateInYesterday(day) ? "Yesterday"
                 : day.formatted(.dateTime.weekday(.wide).day().month(.wide))
             let entries = grouped[day]!.sorted { $0.time > $1.time }
-            return (day, title, entries, entries.reduce(0) { $0 + ($1.timing?.cleanup?.costUsd ?? 0) })
+            return (day, title, entries, entries.reduce(0) { $0 + $1.spend })
         }
     }
 
@@ -211,7 +246,8 @@ struct HistoryPane: View {
                     .allowsHitTesting(hovering)
                 }
                 if open, let timing = entry.timing {
-                    PhraseTimeline(timing: timing, heard: entry.raw)
+                    PhraseTimeline(timing: timing, heard: entry.raw, text: entry.text, polish: entry.polish,
+                                   benchmarks: entry.benchmarks ?? [])
                         .padding(.leading, 62)
                         .padding(.top, 8)
                         .transition(.opacity)
