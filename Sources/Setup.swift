@@ -23,7 +23,24 @@ final class Setup {
     private var timer: Timer?
     private var watchers = 0
 
-    private init() { refresh() }
+    /// True while the user is in System Settings because a button here sent them: the app's floating windows step
+    /// down to the normal level meanwhile, so Settings comes up in front of them rather than underneath. It ends
+    /// with the grant they went for, or when they move on to any other app.
+    private(set) var inSystemSettings = false
+    private static let settingsApps: Set<String> = ["com.apple.systempreferences",
+                                                    "com.apple.accessibility.universalAccessAuthWarn"]
+
+    private init() {
+        refresh()
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                          object: nil, queue: .main) { note in
+            let app = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MainActor.assumeIsolated {
+                guard let app, !Self.settingsApps.contains(app) else { return }
+                Setup.shared.inSystemSettings = false
+            }
+        }
+    }
 
     /// True until the first launch has been seen through, so the window comes back if it was dismissed early.
     private static let seenKey = "setupSeen"
@@ -36,12 +53,14 @@ final class Setup {
     func seen() { UserDefaults.standard.set(true, forKey: Self.seenKey) }
 
     func refresh() {
+        let heard = microphone == .granted, trusted = accessibility
         microphone = switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: .granted
         case .notDetermined: .notAsked
         default: .denied
         }
         accessibility = AXIsProcessTrusted()
+        if inSystemSettings, (microphone == .granted && !heard) || (accessibility && !trusted) { inSystemSettings = false }
         let held = Keychain.shared.stored()
         keys = Dictionary(uniqueKeysWithValues: ApiKey.all.map { ($0.id, held.contains($0.id)) })
         openAtLogin = isBundled && SMAppService.mainApp.status == .enabled
@@ -96,7 +115,8 @@ final class Setup {
 
     func openPane(_ anchor: String) {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
-        NSWorkspace.shared.open(url)
+        inSystemSettings = true
+        DispatchQueue.main.async { NSWorkspace.shared.open(url) }  // once the windows have stepped down
     }
 
     // MARK: - Keys

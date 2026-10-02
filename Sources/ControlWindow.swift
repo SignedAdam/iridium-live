@@ -57,6 +57,7 @@ final class ControlWindowController {
         window.contentView = holder
         mover.onEnd = { [weak self] in self?.settle() }
         follow()
+        followSystemSettings()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.recover() }
@@ -73,6 +74,15 @@ final class ControlWindowController {
             window.animator().alphaValue = opacity
             window.animator().setFrame(target, display: true)  // a window's frame animates; its origin alone does not
         }
+    }
+
+    /// Under System Settings while the user is there to grant something (the Settings pane's Setup rows send them),
+    /// floating again once they are done.
+    private func followSystemSettings() {
+        let away = withObservationTracking { Setup.shared.inSystemSettings } onChange: { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followSystemSettings() } }
+        }
+        window.level = away ? .normal : .floating
     }
 
     /// Out of sight, or back where it was: a short fade either way.

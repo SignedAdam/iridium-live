@@ -47,6 +47,18 @@ final class OnboardingPanel {
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         panel.animator().alphaValue = opacity
+        followSystemSettings()
+    }
+
+    /// Under System Settings while the user is there to grant something, and back in front, showing the new mark,
+    /// once they are done.
+    private func followSystemSettings() {
+        let away = withObservationTracking { setup.inSystemSettings } onChange: { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followSystemSettings() } }
+        }
+        guard panel.isVisible, (panel.level == .normal) != away else { return }
+        panel.level = away ? .normal : .floating
+        if !away { panel.orderFrontRegardless() }
     }
 }
 
