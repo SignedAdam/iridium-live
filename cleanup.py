@@ -489,7 +489,7 @@ class Remote:
         import http.client
 
         headers = {"Authorization": f"Bearer {os.environ[self.provider.key_env]}",
-                   "Content-Type": "application/json", "X-Title": "PhononLive", "Connection": "keep-alive"}
+                   "Content-Type": "application/json", "X-Title": "Iridium Live", "Connection": "keep-alive"}
         for retry in (True, False):
             left = deadline - time.monotonic()
             if left <= 0:

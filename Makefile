@@ -1,4 +1,4 @@
-# PhononLive.
+# Iridium Live.
 #   make                     build the app (only when a source changed)
 #   make run                 build if needed, then start it on the MacBook microphone
 #   make run WAV=clip.wav    Record plays the file at real time instead, through the same path
@@ -6,7 +6,7 @@
 # Start it from a terminal that has microphone access; typing and hotkeys also need Accessibility access for that
 # terminal. macOS asks the first time. Ctrl-C quits (notes and history are saved first).
 
-APP := .build/PhononLive
+APP := .build/IridiumLive
 SOURCES := $(wildcard Sources/*.swift)
 
 $(APP): $(SOURCES)

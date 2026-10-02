@@ -1,4 +1,4 @@
-"""Phrase segmentation for PhononLive, driven by Silero VAD v5.
+"""Phrase segmentation for Iridium Live, driven by Silero VAD v5.
 
 An energy gate cannot tell a key click from a syllable, so typing while recording used to open a phrase and
 Phonon-2 would hallucinate words out of the clicks. Silero scores every 32 ms frame as speech or not, which

@@ -1,11 +1,11 @@
 import Foundation
 
-/// One model call PhononLive paid for, in the shape the token ledger already stores: the fields
+/// One model call Iridium Live paid for, in the shape the token ledger already stores: the fields
 /// `~/dev/resume-site/scripts/collect-tokens.mjs` posts for Claude Code, Codex and omp (`id`, `source`, `conv`, `day`,
 /// `model`, `input`, `output`, `cacheRead`, `cacheWrite`, `total`), plus what only this app knows: the moment, the
 /// provider, what the call cost, how long it took, and the history entry it belongs to.
 struct UsageRecord: Codable, Equatable, Sendable {
-    let id: String        // "phonon-live:<entry id>": re-sending it replaces the ledger row
+    let id: String        // "iridium-live:<entry id>": re-sending it replaces the ledger row
     let source: String
     let app: String
     let conv: String
@@ -28,9 +28,9 @@ struct UsageRecord: Codable, Equatable, Sendable {
         guard let cleanup = entry.timing?.cleanup, !cleanup.skipped, cleanup.error == nil else { return nil }
         let input = Int(cleanup.promptTokens ?? 0), output = Int(cleanup.completionTokens ?? 0)
         guard input > 0 || output > 0 else { return nil }
-        self.id = "phonon-live:\(entry.id.uuidString)"
-        self.source = "phonon-live"
-        self.app = "PhononLive"
+        self.id = "iridium-live:\(entry.id.uuidString)"
+        self.source = "iridium-live"
+        self.app = "Iridium Live"
         self.conv = entry.id.uuidString
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = TimeZone(identifier: "UTC")

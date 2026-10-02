@@ -1,14 +1,14 @@
-// PhononLive: runs the speech engine (live.py) as a child process and puts it on screen: a floating glass control
+// Iridium Live: runs the speech engine (live.py) as a child process and puts it on screen: a floating glass control
 // (record; notes; typing into the focused app; settings) and live captions. Nothing takes focus unless you click into
 // the notes, so typing goes to the app you were in.
-// Usage: PhononLive FONT.ttf ENGINE-COMMAND...
+// Usage: IridiumLive FONT.ttf ENGINE-COMMAND...
 import AppKit
 
 signal(SIGPIPE, SIG_IGN)  // a dead engine must not take the app down mid-write; its exit ends the app instead
 MainActor.assumeIsolated {
     let arguments = Array(CommandLine.arguments.dropFirst())
     guard arguments.count >= 2 else {
-        FileHandle.standardError.write(Data("usage: PhononLive FONT.ttf ENGINE-COMMAND...\n".utf8))
+        FileHandle.standardError.write(Data("usage: IridiumLive FONT.ttf ENGINE-COMMAND...\n".utf8))
         exit(2)
     }
     CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: arguments[0]) as CFURL, .process, nil)
@@ -18,7 +18,8 @@ MainActor.assumeIsolated {
     let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
     let model = AppModel()
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("PhononLive")
+        .appendingPathComponent("Iridium Live")
+    Migration.fromPhononLive(to: support)
     let library = NotesLibrary(directory: support)
     let history = HistoryStore(directory: support)
     let usage = UsageLog(directory: support)

@@ -94,7 +94,7 @@ struct MyNotes: View {
         panel.message = "Where to put the notes"
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? library.exportAll(to: url.appendingPathComponent("PhononLive Notes"))
+        try? library.exportAll(to: url.appendingPathComponent("Iridium Live Notes"))
     }
 
     /// One note in the list: its name, when it was last written to, and how it begins.

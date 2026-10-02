@@ -1,8 +1,8 @@
-# PhononLive
+# Iridium Live
 
 Fast, private dictation for the Mac. Speak, and your words show up as live captions, collect in your notes, or get typed straight into whatever app you are in. Everything runs on your Mac: [Phonon-2](https://huggingface.co/FermionResearch/Phonon-2) transcribes on the GPU.
 
-![PhononLive: live captions and notes over a gradient wallpaper](docs/hero.png)
+![Iridium Live: live captions and notes over a gradient wallpaper](docs/hero.png)
 
 ## What it does
 
@@ -26,7 +26,7 @@ Measured on an M1 Max (32 GB):
 | | |
 |---|---|
 | Phonon-2 against Parakeet TDT v3 (Core ML via FluidAudio), 1,500 Open ASR Leaderboard clips | 86× vs 58× realtime, 55 ms vs 104 ms median per clip, 9.28% vs 9.27% average word error rate, with fermion's fp16 runtime. Phonon-2 is English only. |
-| Packed runtime (what PhononLive runs, to save memory), 300 of those clips | same word error rate as fp16 (8.18%), 79× realtime instead of 116× |
+| Packed runtime (what Iridium Live runs, to save memory), 300 of those clips | same word error rate as fp16 (8.18%), 79× realtime instead of 116× |
 | Live captions | the phrase is re-transcribed every 0.12 s of speech: about 20 ms per pass for a short phrase, 45 ms at 2 s, 80 ms at 6 s |
 | End of a phrase | 0.7 s of silence closes it. Silero voice detection decides what counts as speech, so key clicks are never transcribed. |
 | AI cleanup per phrase, 40 dictated phrases | Groq with Qwen3.8 27B: 143 ms median, 251 ms p90. Qwen3 4B on this Mac: 306 ms median. Phrases that are already clean skip the model. |
@@ -63,7 +63,7 @@ Models download by themselves the first time they are needed, with progress show
 | `archive.py` | the audio archive |
 | `downloads.py` | model downloads with progress |
 
-Your data lives in `~/Library/Application Support/PhononLive`:
+Your data lives in `~/Library/Application Support/Iridium Live`:
 
 - `notes.txt` (the unsaved note)
 - `Notes/` (every saved note as a file named after it, with `index.json` beside them: names, dates, favourites and the dictated phrases that went into each)

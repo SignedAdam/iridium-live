@@ -12,7 +12,7 @@
 #     "zstandard",
 # ]
 # ///
-"""Phonon-2 (or Parakeet) on MLX, driven over stdin/stdout by the PhononLive app.
+"""Phonon-2 (or Parakeet) on MLX, driven over stdin/stdout by the Iridium Live app.
 Commands on stdin, one per line. "start" opens the MacBook microphone (or plays --wav FILE at real time); "stop"
 closes it and finishes the phrase in flight; "cancel" closes it and throws that phrase away instead, so nothing
 of it is transcribed, typed or archived; "hold SECONDS" sets how long a word must read the same before it is
@@ -80,7 +80,9 @@ import segmenter as seg
 
 TYPE_HOLD_S = 0.7  # a word is typed once the phrase up to it has read the same for this much audio
 BLOCK = int(0.05 * seg.SAMPLE_RATE)
-CACHE_DIR = Path.home() / ".cache" / "phonon-live"
+CACHE_DIR = Path.home() / ".cache" / "iridium-live"
+if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():  # the app's former name: keep its models
+    (CACHE_DIR.parent / "phonon-live").rename(CACHE_DIR)
 STOP, QUIT, CONTROL, CANCEL = "stop", "quit", "control", "cancel"  # markers in the audio queue
 
 

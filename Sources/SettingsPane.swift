@@ -10,7 +10,7 @@ struct SettingsPane: View {
             VStack(alignment: .leading, spacing: 18) {
                 Section("Memory") {
                     if let reading = model.memory {
-                        Row("PhononLive") { Figure(gigabytes(reading.total)) }
+                        Row("Iridium Live") { Figure(gigabytes(reading.total)) }
                         Row("Your Mac", detail: reading.warning ? lowMemoryAdvice : nil, alert: true) {
                             Figure("\(gigabytes(reading.physical - min(reading.physical, reading.available), unit: false)) of \(String(format: "%.0f GB", Double(reading.physical) / 1_073_741_824))")
                         }
