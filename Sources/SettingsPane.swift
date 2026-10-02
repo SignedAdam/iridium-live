@@ -28,6 +28,7 @@ struct SettingsPane: View {
                     }
                     .dimmed(!model.settings.autoUnload)
                 }
+                SetupSection()
                 Section("Speech") {
                     Row("Model", detail: speechMemoryAdvice ?? status(model.speech),
                         alert: model.speech.state == "error" || speechMemoryAdvice != nil) {
@@ -576,5 +577,82 @@ private struct AddRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// What the app needs from the system and from the user: the two grants, with a button that leads straight to
+/// whichever pane fixes them, the API keys (held in the keychain, never shown back), and starting with the Mac.
+@MainActor
+private struct SetupSection: View {
+    private let setup = Setup.shared
+    @State private var editing: String?
+    @State private var typed = ""
+
+    var body: some View {
+        Section("Setup") {
+            Row("Microphone", detail: microphone, alert: setup.microphone == .denied) {
+                if setup.microphone == .granted {
+                    Figure("Granted")
+                } else {
+                    Button(setup.microphone == .notAsked ? "Allow" : "Open Settings", action: setup.askForMicrophone)
+                        .buttonStyle(GlassButton())
+                }
+            }
+            Row("Accessibility", detail: setup.accessibility ? nil : "Typing and hotkeys need it.",
+                alert: !setup.accessibility) {
+                if setup.accessibility {
+                    Figure("Granted")
+                } else {
+                    Button("Allow", action: setup.askForAccessibility).buttonStyle(GlassButton())
+                }
+            }
+            ForEach(ApiKey.all) { key in
+                Row("\(key.name) key", detail: setup.keys[key.id] == true ? "In the keychain" : nil) {
+                    if editing == key.id {
+                        HStack(spacing: 6) {
+                            SecureField(key.site, text: $typed)
+                                .textFieldStyle(.plain)
+                                .font(tiktok(12))
+                                .padding(.horizontal, 9)
+                                .frame(width: 150, height: 24)
+                                .background(Pill(fill: 0.08))
+                                .onSubmit { store(key) }
+                            Button("Save") { store(key) }.buttonStyle(GlassButton())
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Button(setup.keys[key.id] == true ? "Change" : "Set") { typed = ""; editing = key.id }
+                                .buttonStyle(GlassButton())
+                            if setup.keys[key.id] == true {
+                                Button("Remove") { setup.store(nil, for: key) }.buttonStyle(GlassButton())
+                            }
+                        }
+                    }
+                }
+            }
+            Row("Open at login", detail: setup.isBundled ? nil : "Needs the app in /Applications.") {
+                GlassSwitch(isOn: Binding(get: { setup.openAtLogin }, set: { setup.setOpenAtLogin($0) }))
+                    .disabled(!setup.isBundled)
+            }
+            if let trouble = setup.trouble {
+                Row("Trouble", detail: trouble, alert: true) { EmptyView() }
+            }
+        }
+        .onAppear { setup.watch() }
+        .onDisappear { setup.unwatch() }
+    }
+
+    private var microphone: String? {
+        switch setup.microphone {
+        case .granted: nil
+        case .denied: "Turned off for Iridium Live."
+        case .notAsked: "Not asked for yet."
+        }
+    }
+
+    private func store(_ key: ApiKey) {
+        setup.store(typed, for: key)
+        typed = ""
+        editing = nil
     }
 }

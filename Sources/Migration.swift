@@ -1,14 +1,15 @@
 import Foundation
 
-/// The app used to be called PhononLive. On the first launch under the new name, everything it kept comes along:
-/// the data folder (notes, saved notes, history, journal, backups, recordings) is moved, not copied, and the
-/// settings and the control's position are carried over. The token usage log is rebuilt from the history under the
-/// new source name, so the ledger never sees the old one.
+/// The app used to be called PhononLive, and until it was bundled it kept its settings under `IridiumLive` rather
+/// than its bundle id. On the first launch of the bundle, everything either of them kept comes along: the data
+/// folder (notes, saved notes, history, journal, backups, recordings) is moved, not copied, and the settings and the
+/// control's position are carried over from the newer of the two domains. The token usage log is rebuilt from the
+/// history under the new source name, so the ledger never sees the old one.
 enum Migration {
-    private static let oldDomains = ["PhononLive"]
+    private static let oldDomains = ["IridiumLive", "PhononLive"]
     private static let carried = ["settings", "barCenter"]
 
-    static func fromPhononLive(to support: URL) {
+    static func carryOver(to support: URL) {
         let manager = FileManager.default
         let old = support.deletingLastPathComponent().appendingPathComponent("PhononLive")
         if !manager.fileExists(atPath: support.path), manager.fileExists(atPath: old.path) {

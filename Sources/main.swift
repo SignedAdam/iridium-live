@@ -1,17 +1,19 @@
 // Iridium Live: runs the speech engine (live.py) as a child process and puts it on screen: a floating glass control
 // (record; notes; typing into the focused app; settings) and live captions. Nothing takes focus unless you click into
 // the notes, so typing goes to the app you were in.
-// Usage: IridiumLive FONT.ttf ENGINE-COMMAND...
+// Everything it runs on — the engine scripts, the font, uv — is found from the bundle and the usual install paths,
+// since a launch from Finder brings no shell with it. Usage: Iridium Live [--wav FILE] [--check]
 import AppKit
 
 signal(SIGPIPE, SIG_IGN)  // a dead engine must not take the app down mid-write; its exit ends the app instead
 MainActor.assumeIsolated {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard arguments.count >= 2 else {
-        FileHandle.standardError.write(Data("usage: IridiumLive FONT.ttf ENGINE-COMMAND...\n".utf8))
-        exit(2)
+    if arguments.contains("--check") {
+        print(AppResources.report())
+        exit(0)
     }
-    CTFontManagerRegisterFontsForURL(URL(fileURLWithPath: arguments[0]) as CFURL, .process, nil)
+    let wav = arguments.firstIndex(of: "--wav").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+    CTFontManagerRegisterFontsForURL(AppResources.font as CFURL, .process, nil)
 
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
@@ -19,7 +21,7 @@ MainActor.assumeIsolated {
     let model = AppModel()
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Iridium Live")
-    Migration.fromPhononLive(to: support)
+    Migration.carryOver(to: support)
     let library = NotesLibrary(directory: support)
     let history = HistoryStore(directory: support)
     let usage = UsageLog(directory: support)
@@ -35,9 +37,18 @@ MainActor.assumeIsolated {
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
 
+    // Microphone, Accessibility, the cleanup keys and opening at login, in a window of their own. It never holds the
+    // app up: whatever is missing only costs the part of the app that needs it.
+    if Setup.shared.needsOnboarding { OnboardingPanel.show(on: screen) }
+
     let engine: Engine
     do {
-        engine = try Engine(command: Array(arguments.dropFirst()) + ["--asr", model.settings.speechModel]) { event in
+        guard let command = AppResources.engineCommand(asr: model.settings.speechModel, wav: wav) else {
+            FileHandle.standardError.write(Data("uv was not found: install it from https://docs.astral.sh/uv\n".utf8))
+            exit(1)
+        }
+        engine = try Engine(command: command, environment: AppResources.engineEnvironment(),
+                            directory: AppResources.directory) { event in
             dock.handle(event)
             switch event.kind {
             case "state":

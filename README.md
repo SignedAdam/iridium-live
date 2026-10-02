@@ -12,8 +12,8 @@ Fast, private dictation for the Mac. Speak, and your words show up as live capti
 - **Typing into any app.** Words are typed once they have held steady for a moment (adjustable), and corrected in place if the model changes its mind.
 - **Hotkeys**, as many as you like, and several on the same key. Each one is switched on or off, types what you say or adds it to your notes, and works by hold, double-tap (stays on until the next press) or toggle (press to start, press again to stop). A hold on a key that also taps starts recording at once and drops it again if the key comes straight back up. A lone modifier such as right ⌘ counts only when pressed by itself, so ⌘C still copies.
 - **A button in your chat apps.** With WhatsApp or Telegram in front, a small Iridium button appears beside their Send button, in that app's own colours. Hold it to talk, or click it and click again to stop. While you talk, a panel sits just above the message box — time, level and the words so far — without covering it, so you can keep typing there. Each app chooses whether the words are typed straight into the box as you speak (**Stream**) or gathered and put in as one polished message at the end (**Collect**), and whether to press Send for you. Where the button and the box are comes from `chat-apps.json`, measured from a corner of the app's window so moving or resizing it changes nothing; **Detect** reads those numbers out of the app once, and every one of them, and every colour, stays editable in Settings → Chat apps → Customise. Any app can be added by bundle id.
-- **History** of every phrase, grouped by day and searchable, with each day's cleanup cost. Under each phrase: how long it took from your last word to the text, and what cleanup did. Click it for the full timeline: the pause before the phrase is sent on, transcription, and cleanup split into network, queueing, reading and writing, with tokens and cost. Hover to copy or delete.
-- **Optional AI cleanup.** A language model removes fillers, applies spoken corrections ("no wait…"), and formats numbers, dates, money and email addresses. It runs on [Groq](https://groq.com) (`GROQ_API_KEY`) or [OpenRouter](https://openrouter.ai) (`OPENROUTER_API_KEY`), which costs your Mac no memory, or on the Mac itself with a small local model. Hover a model in Settings to see its benchmark numbers beside your own. Add your own instructions (Settings, AI cleanup, Instructions) and they join the model's rules for every phrase. Phrases that are already clean skip the model unless you have instructions, and if a request fails or takes over 2.5 s, the phrase goes out as heard.
+- **History** of every phrase, grouped by day and searchable, with each day's cleanup cost. Under each phrase: how long it took from your last word to the text, and what cleanup did. Click it for the full timeline: the pause before the phrase is sent on, transcription, and cleanup split into network, queueing, reading and writing, with tokens and cost, then the pass over the whole recording and, while benchmarking is on, what every other model made of the phrase, with the words they wrote differently marked. Hover to copy or delete.
+- **Optional AI cleanup.** A language model removes fillers, applies spoken corrections ("no wait…"), and formats numbers, dates, money and email addresses. It runs on [Groq](https://groq.com) (`GROQ_API_KEY`) or [OpenRouter](https://openrouter.ai) (`OPENROUTER_API_KEY`), which costs your Mac no memory, or on the Mac itself with a small local model. Each phrase is cleaned with what you already said in this recording, and the note you are dictating into, in front of it, so a correction can reach back a sentence. When you stop, the whole recording goes through the model once more (**Polish each recording**): the result replaces exactly what was added to the note, and corrects what was typed into another app as long as you have not touched it since. Right-click the notes for **Clean up note** to put a whole note through the same pass, as one undoable edit. Hover a model in Settings to see its benchmark numbers beside your own, or switch on **Benchmark other models** to have every other model on the provider answer each phrase behind your back, with a results table of medians, agreement and spend. Add your own instructions (Settings, AI cleanup, Instructions) and they join the model's rules for every phrase. Phrases that are already clean skip the model unless you have instructions, and if a request fails or takes over 2.5 s, the phrase goes out as heard.
 - **Optional audio archive.** Recordings are saved as WAV files, split at pauses of a length you choose, into folders by date. Each phrase in the history records where it lies in them.
 - **Memory you can see.** The control turns red when the Mac runs low, and one click unloads the models; they can also unload by themselves after 5 minutes to 6 hours unused. They reload by themselves the next time you record.
 - **Notes are never lost.** Every change is saved within 0.3 s and again on quit. Each dictated phrase also goes into an append-only journal, and earlier versions are backed up whenever a lot of text disappears at once.
@@ -44,12 +44,28 @@ On this Mac, the cleanup borrows Wispr Flow's playbook:
 Requirements: an Apple silicon Mac, the Xcode command line tools (`swiftc`, `make`) and [uv](https://docs.astral.sh/uv/). Developed on macOS 26.
 
 ```sh
-make run               # builds the app when a source changed, then starts it
+make                   # build Iridium Live.app into .build/
+make run               # build if needed, then run it from this terminal
 make run WAV=clip.wav  # Record plays a file instead of the microphone
-make                   # build only
+make install           # put the app in /Applications
+make check             # print the paths the app resolves (engine, uv, font)
 ```
 
-Models download by themselves the first time they are needed, with progress shown in Settings. The terminal you start it from needs microphone access, plus Accessibility access for typing and hotkeys. macOS asks the first time.
+The app is a bundle: the engine scripts, the font and the icon ride inside it, and it finds `uv` in the usual install
+paths, so it works launched from Finder with no shell behind it. Models download by themselves the first time they
+are needed, with progress shown in Settings.
+
+On its first launch it opens a setup window: Microphone, Accessibility (typing and hotkeys), the Groq and OpenRouter
+keys for AI cleanup, and whether it opens at login. The keys are kept in the login keychain under the app's bundle id
+and handed to the engine in its environment; they can be imported from `~/.env` with one click if they are there.
+Everything is skippable, and the same rows live in Settings under **Setup**. `make run` instead borrows the
+terminal's microphone and Accessibility access, which is handy while developing.
+
+Without a code-signing certificate the app is signed ad-hoc, and an ad-hoc signature changes with every build, so
+macOS treats each build as a new app and asks for the Microphone and Accessibility grants again. `make cert` creates
+a self-signed code-signing certificate in the login keychain once, after which every build carries the same identity
+and the grants stick. It is a one-off, and it asks for the login password: macOS will not trust a certificate
+without it.
 
 ## How it is built
 
@@ -71,14 +87,15 @@ Your data lives in `~/Library/Application Support/Iridium Live`:
 - `journal.txt` (every dictated phrase)
 - `backups/`
 - `history.jsonl`
-- `usage.jsonl` (one line per AI cleanup call: tokens, cost and latency, for the token ledger)
-- `chat-apps.json` (the chat apps: their rectangles, colours and switches — safe to edit by hand)
+- `usage.jsonl` (one line per model call — phrase cleanups, the pass over a recording, a note cleaned up and every benchmarked model: tokens, cost and latency, for the token ledger)
 - `Recordings/` (only when Save audio is on)
+- `chat-apps.json` (the chat apps: their rectangles, colours and switches — safe to edit by hand)
 
 `usage.jsonl` is written for the token collector (`resume-site/scripts/collect-tokens.mjs`), which reads it like the
 Claude Code, Codex and omp logs and posts the rows to the ledger. Each line carries the collector's event fields
 (`id`, `source`, `conv`, `day`, `model`, `input`, `output`, `cacheRead`, `cacheWrite`, `total`) plus `app`, `ts`,
-`provider`, `costUsd`, `ms` and `entry`, the history entry the phrase is in. Calls that were skipped, failed or
+`provider`, `costUsd`, `ms` and `entry`, the history entry the call belongs to. One phrase can pay for several calls,
+so the id carries which one it was (`:polish`, `:bench:<model>`, `:rewrite`). Calls that were skipped, failed or
 reported no tokens are not logged. The first launch backfills the file from `history.jsonl`, by entry id, once.
 
 ## Credits

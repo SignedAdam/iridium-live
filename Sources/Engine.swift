@@ -44,16 +44,20 @@ func jsonString(_ text: String) -> String {
 }
 
 /// The engine as a child process: commands go to its stdin, events come back from its stdout, its stderr is ours.
-/// When it exits, so does the app.
+/// When it exits, so does the app. It is given its own environment rather than inheriting a shell's: launched from
+/// Finder there is none, and the API keys come from the keychain.
 @MainActor
 final class Engine {
     private let process = Process()
     private let commands = Pipe()
 
-    init(command: [String], onEvent: @escaping @MainActor @Sendable (EngineEvent) -> Void) throws {
+    init(command: [String], environment: [String: String], directory: URL,
+         onEvent: @escaping @MainActor @Sendable (EngineEvent) -> Void) throws {
         let events = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = command
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        process.environment = environment
+        process.currentDirectoryURL = directory
         process.standardInput = commands
         process.standardOutput = events
         try process.run()
