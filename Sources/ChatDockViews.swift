@@ -61,7 +61,8 @@ struct DockButton: View {
 }
 
 /// The panel just above the app's message box while a dictation runs: that it is recording, how long for, the input
-/// level, and the words so far. It never covers the box, so typing there still works, and it takes no clicks.
+/// level, and the words so far. It never covers the box, so typing there still works, and it takes no clicks. Across
+/// the chat it is square at the bottom and fades into the chat's own colour there, so it reads as part of the app.
 struct DockOverlay: View {
     let state: DockState
 
@@ -91,17 +92,32 @@ struct DockOverlay: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .animation(.easeOut(duration: 0.12), value: state.transcript)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, state.attached ? 16 : 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background {
+        .background { background(style) }
+        .opacity(style.opacity)
+    }
+
+    @ViewBuilder private func background(_ style: DockOverlayStyle) -> some View {
+        if state.attached {
+            let shape = UnevenRoundedRectangle(topLeadingRadius: style.cornerRadius, bottomLeadingRadius: 0,
+                                               bottomTrailingRadius: 0, topTrailingRadius: style.cornerRadius,
+                                               style: .continuous)
+            shape
+                .fill(LinearGradient(stops: [.init(color: style.background.color, location: 0),
+                                             .init(color: style.background.color, location: 0.3),
+                                             .init(color: style.joinColour.color, location: 1)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.14), .clear],
+                                                           startPoint: .top, endPoint: .center)))
+        } else {
             RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
                 .fill(style.background.color)
                 .overlay(RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
                     .strokeBorder(.white.opacity(0.12)))
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
         }
-        .opacity(style.opacity)
     }
 
     private var time: String {

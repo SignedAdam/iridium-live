@@ -93,15 +93,20 @@ struct DockButtonStyle: Codable, Equatable {
 
 /// How the panel above the message box looks while a dictation runs.
 struct DockOverlayStyle: Codable, Equatable {
-    var width = 360.0
+    var width = 360.0  // as a card
     var height = 86.0
-    var gap = 10.0  // above the message box
+    var gap = 10.0  // above the message box, or across the chat: above the input row
     var fontSize = 13.0
     var cornerRadius = 14.0
     var opacity = 1.0
     var background = Colour("#0B141AEE")
     var textColour = Colour("#E9EDEF")
     var accentColour = Colour("#25D366")
+    /// Across the chat: as wide as the app's chat pane, square at the bottom, fading from `background` down into
+    /// `joinColour` (the chat's own background) so it runs into the app. Apps that show no chat pane to
+    /// accessibility get the card.
+    var attached = true
+    var joinColour = Colour("#0A0A0A")
 }
 
 /// One chat app: where its message box and Send button are, how the dock looks on it, and what dictating there does.
@@ -306,5 +311,7 @@ extension DockOverlayStyle {
         background = container.value(.background, Colour("#0B141AEE"))
         textColour = container.value(.textColour, Colour("#E9EDEF"))
         accentColour = container.value(.accentColour, Colour("#25D366"))
+        attached = container.value(.attached, true)
+        joinColour = container.value(.joinColour, Colour("#0A0A0A"))
     }
 }

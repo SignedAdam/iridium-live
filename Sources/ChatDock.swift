@@ -21,6 +21,7 @@ final class DockState {
     var elapsed = 0.0
     var live = ""       // the phrase being spoken
     var collected = ""  // the finished phrases of this recording
+    var attached = false  // the overlay runs across the chat pane, joined to the input row, rather than as a card
 
     /// Everything heard so far, for the overlay.
     var transcript: String {
@@ -35,6 +36,14 @@ final class DockState {
         live = ""
         collected = ""
     }
+}
+
+/// Where a chat app's chat pane sits in its window: its left and right sides as insets from the window's, and the top
+/// of its input row above the window's bottom.
+struct ChatPane {
+    var left: CGFloat
+    var right: CGFloat
+    var rowTop: CGFloat
 }
 
 /// The chat dock: an Iridium button beside a chat app's Send button while that app is in front, and, while it is
@@ -54,6 +63,7 @@ final class ChatDock {
     private var delivered = true     // the recording in progress has had its text put in
     private var detected: Set<String> = []  // apps Detect has already been run on by itself
     private var boxEmpty = true  // the app's message box, last read: whether the voice button is showing
+    private var pane: (pid: pid_t, insets: ChatPane)?  // the chat pane, last read, for the overlay across it
     private static let latch = 0.3   // a press shorter than this leaves the recording running
 
     /// While a dictation into a chat app runs and its profile says so, the screen captions would only repeat what the
@@ -250,15 +260,44 @@ final class ChatDock {
 
         let showsOverlay = state.recording || state.finishing
         if showsOverlay {
-            let box = current.profile.box.resolve(in: window)
             let style = current.profile.overlayStyle
-            let width = style.width > 0 ? style.width : box.width
-            let rect = pixels(NSRect(x: box.minX, y: box.maxY + style.gap, width: width, height: style.height))
-            overlayPanel.setFrame(rect, display: true)
+            if style.attached, !watcher.dragging { pane = Self.readPane(current).map { (current.pid, $0) } }
+            let across = style.attached ? pane.flatMap { $0.pid == current.pid ? $0.insets : nil } : nil
+            if state.attached != (across != nil) { state.attached = across != nil }
+            let rect: NSRect
+            if let across {
+                let left = window.minX + across.left
+                rect = NSRect(x: left, y: window.minY + across.rowTop + style.gap,
+                              width: window.maxX - across.right - left, height: style.height)
+            } else {
+                let box = current.profile.box.resolve(in: window)
+                let width = style.width > 0 ? style.width : box.width
+                rect = NSRect(x: box.minX, y: box.maxY + style.gap, width: width, height: style.height)
+            }
+            let snapped = pixels(rect)
+            if overlayPanel.frame != snapped { overlayPanel.setFrame(snapped, display: true) }
             if !overlayPanel.isVisible { overlayPanel.orderFrontRegardless() }
         } else if overlayPanel.isVisible {
             overlayPanel.orderOut(nil)
         }
+    }
+
+    /// The chat pane around the message box, from the window's edges: its two sides, and the top of the input row
+    /// (the box and the buttons beside it). The box's own container is the pane where the app shows one (WhatsApp);
+    /// nil where it shows none (Telegram). Read between drags only: a drag moves the window, not the pane within it.
+    private static func readPane(_ current: (profile: ChatAppProfile, pid: pid_t, window: NSRect)) -> ChatPane? {
+        let window = current.window
+        let box = current.profile.box.resolve(in: window)
+        guard let field = Inserter.box(at: NSPoint(x: box.midX, y: box.midY), of: current.pid),
+              AX.textRoles.contains(AX.role(field)), let fieldFrame = AX.frame(field),
+              let parent = AX.attribute(field, kAXParentAttribute as String), CFGetTypeID(parent) == AXUIElementGetTypeID()
+        else { return nil }
+        let container = parent as! AXUIElement
+        guard let frame = AX.frame(container), frame.width > fieldFrame.width + 40 else { return nil }
+        let row = AX.children(container).compactMap { AX.frame($0) }
+            .filter { $0.height < frame.height / 2 && $0.minY < fieldFrame.maxY && $0.maxY > fieldFrame.minY }
+        let rowTop = row.map(\.maxY).max() ?? fieldFrame.maxY
+        return ChatPane(left: frame.minX - window.minX, right: window.maxX - frame.maxX, rowTop: rowTop - window.minY)
     }
 
     /// Where the button goes: its own place, or, with "Over the app's voice button", centred on that button while the

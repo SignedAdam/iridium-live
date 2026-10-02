@@ -210,13 +210,17 @@ private struct ChatAppsEditor: View {
     private func overlayLook(_ profile: Binding<ChatAppProfile>) -> some View {
         let style = profile.overlayStyle
         return DockGroup("Overlay") {
-            DockRow("Width") { DockNumber(value: style.width) }
+            DockRow("Shape") {
+                DockChoice(selection: style.attached, options: [(true, "Across the chat"), (false, "Card")])
+            }
+            if !style.wrappedValue.attached { DockRow("Width") { DockNumber(value: style.width) } }
             DockRow("Height") { DockNumber(value: style.height) }
-            DockRow("Gap above the box") { DockNumber(value: style.gap) }
+            DockRow("Gap above the input") { DockNumber(value: style.gap) }
             DockRow("Text size") { DockNumber(value: style.fontSize) }
             DockRow("Corner radius") { DockNumber(value: style.cornerRadius) }
             DockRow("Opacity") { DockNumber(value: style.opacity, step: 0.05) }
             DockRow("Background") { DockColour(colour: style.background) }
+            if style.wrappedValue.attached { DockRow("Chat colour") { DockColour(colour: style.joinColour) } }
             DockRow("Text") { DockColour(colour: style.textColour) }
             DockRow("Accent") { DockColour(colour: style.accentColour) }
         }
