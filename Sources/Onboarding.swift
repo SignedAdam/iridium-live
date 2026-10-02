@@ -17,11 +17,9 @@ final class OnboardingPanel {
     }
 
     private init(screen: NSScreen) {
-        let size = NSSize(width: 460, height: 404)
+        let width: CGFloat = 460
         let area = screen.visibleFrame
-        panel = KeyPanel(contentRect: NSRect(x: (area.midX - size.width / 2).rounded(),
-                                             y: (area.midY - size.height / 2).rounded(),
-                                             width: size.width, height: size.height),
+        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .floating
         panel.isOpaque = false
@@ -36,10 +34,15 @@ final class OnboardingPanel {
             panel.orderOut(nil)
             OnboardingPanel.open = nil
         }
-        let host = NSHostingView(rootView: OnboardingView(setup: setup, done: close)
-            .frame(width: size.width, height: size.height))
-        host.sizingOptions = []
-        panel.contentView = host
+        // The window follows the content's height (a key being typed adds a row), so nothing is ever cut off.
+        let controller = NSHostingController(rootView: OnboardingView(setup: setup, done: close)
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true))
+        controller.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = controller
+        let size = controller.view.fittingSize
+        panel.setFrame(NSRect(x: (area.midX - size.width / 2).rounded(), y: (area.midY - size.height / 2).rounded(),
+                              width: size.width, height: size.height), display: true)
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         panel.animator().alphaValue = 1
