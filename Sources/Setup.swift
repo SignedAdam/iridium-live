@@ -42,7 +42,7 @@ final class Setup {
         default: .denied
         }
         accessibility = AXIsProcessTrusted()
-        keys = Dictionary(uniqueKeysWithValues: ApiKey.all.map { ($0.id, Keychain.shared.value(for: $0.id) != nil) })
+        keys = Dictionary(uniqueKeysWithValues: ApiKey.all.map { ($0.id, Keychain.shared.has($0.id)) })
         openAtLogin = isBundled && SMAppService.mainApp.status == .enabled
     }
 

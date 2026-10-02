@@ -146,12 +146,16 @@ final class HotkeyMonitor {
     private var interrupted = false   // another key went down while a lone modifier was held
     private var pendingTap: (key: Hotkey.Key, at: Date)?  // a tap that may still become a double tap
     private var captureModifier: UInt16?
+    private var waiting: Timer?
 
-    /// Starts watching; false when macOS has not granted Accessibility access yet (the prompt is shown).
+    /// Starts watching; false while macOS has not granted Accessibility access. With `prompt`, macOS also shows its
+    /// own dialog asking for it, which only a click of ours should bring up.
     @discardableResult
-    func listen() -> Bool {
+    func listen(prompt: Bool = true) -> Bool {
         guard tap == nil else { return true }
-        guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else { return false }
+        let trusted = prompt ? AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                             : AXIsProcessTrusted()
+        guard trusted else { return false }
         let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, info in
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(info!).takeUnretainedValue()
@@ -165,7 +169,22 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         isListening = true
+        waiting?.invalidate()
+        waiting = nil
         return true
+    }
+
+    /// Starts watching as soon as Accessibility access is there, without asking for it (the setup window does):
+    /// at launch, and then once a second until it is granted.
+    func listenWhenAllowed(_ started: @escaping @MainActor () -> Void) {
+        if listen(prompt: false) { return started() }
+        guard waiting == nil else { return }
+        waiting = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.listen(prompt: false) else { return }
+                started()
+            }
+        }
     }
 
     /// True when the event is one of ours to keep from the app in front.

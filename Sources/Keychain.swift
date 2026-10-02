@@ -8,6 +8,16 @@ struct Keychain {
 
     static let shared = Keychain(service: AppResources.bundleID)
 
+    /// Whether a key is stored, without reading it: only the secret itself is guarded, so this never brings up the
+    /// keychain's "wants to use your confidential information" dialog.
+    func has(_ account: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     func value(for account: String) -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                     kSecAttrService as String: service,

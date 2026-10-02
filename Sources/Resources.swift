@@ -62,7 +62,7 @@ enum AppResources {
             font      \(FileManager.default.fileExists(atPath: font.path) ? font.path : "missing")
             uv        \(uv?.path ?? "missing")
             command   \(command)
-            keys      \(ApiKey.all.map { "\($0.name) \(Keychain.shared.value(for: $0.id) == nil ? "unset" : "set")" }.joined(separator: ", "))
+            keys      \(ApiKey.all.map { "\($0.name) \(Keychain.shared.has($0.id) ? "set" : "unset")" }.joined(separator: ", "))
             """
     }
 }

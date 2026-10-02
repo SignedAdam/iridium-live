@@ -186,7 +186,7 @@ MainActor.assumeIsolated {
         model.cancelRecording()
         typist.isEnabled = model.typingNow
     }
-    if !model.settings.hotkeys.isEmpty { model.hotkeysListening = hotkeys.listen() }
+    if !model.settings.hotkeys.isEmpty { hotkeys.listenWhenAllowed { model.hotkeysListening = true } }
     model.onCaptureHotkey = { id in
         model.hotkeysListening = hotkeys.listen()
         guard model.hotkeysListening else { return }
