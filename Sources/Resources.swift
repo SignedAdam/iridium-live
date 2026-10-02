@@ -37,8 +37,9 @@ enum AppResources {
     /// so the tools it shells out to are found with no login shell behind us.
     static func engineEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
+        let keys = Keychain.shared.values()
         for key in ApiKey.all {
-            if let value = Keychain.shared.value(for: key.id) { environment[key.variable] = value }
+            if let value = keys[key.id] { environment[key.variable] = value }
         }
         let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         if let directory = uv?.deletingLastPathComponent().path, !path.split(separator: ":").contains(Substring(directory)) {
@@ -62,7 +63,7 @@ enum AppResources {
             font      \(FileManager.default.fileExists(atPath: font.path) ? font.path : "missing")
             uv        \(uv?.path ?? "missing")
             command   \(command)
-            keys      \(ApiKey.all.map { "\($0.name) \(Keychain.shared.has($0.id) ? "set" : "unset")" }.joined(separator: ", "))
+            keys      \(ApiKey.all.map { "\($0.name) \(Keychain.shared.stored().contains($0.id) ? "set" : "unset")" }.joined(separator: ", "))
             """
     }
 }
