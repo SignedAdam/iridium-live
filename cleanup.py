@@ -1,14 +1,12 @@
-"""Rewrites a finished phrase into what the speaker meant to type, with a small LLM — on MLX, or over OpenRouter.
+"""Rewrites a finished phrase into what the speaker meant to type, with a small LLM at Groq or OpenRouter.
 
 Dictation is not prose: it carries fillers, stutters, spoken self-corrections ("no wait, Thursday") and numbers,
 money, dates, emails and URLs said as words. The model fixes exactly that and nothing else — it never answers and
-never adds. Three things pay for the latency locally: the fixed prompt prefix stays in the KV cache so only the
-phrase is ever prefilled, generation drafts itself out of the phrase's own tokens (the output is mostly a copy of
-the input) and verifies whole drafts in one pass, and a phrase with nothing to fix never reaches the model at all.
-`Remote` runs the same prompt, the same skip and the same plausibility net through OpenRouter instead, for a Mac
-that cannot spare the memory: no model is loaded, and a request that is slow or fails hands the raw phrase back.
-The speaker can add instructions of their own (`set_instructions`), which sit under the fixed rules wherever the
-phrase is cleaned and send every phrase to the model, clean or not: they may ask for what the skip cannot see.
+never adds. `Remote` is the whole of it: nothing is loaded and no memory is taken on this Mac, the phrase goes out
+and the rewrite comes back, and anything slow, failed or implausible hands the raw phrase back. A phrase with
+nothing to fix never reaches the model at all.
+The speaker can add instructions of their own (`set_instructions`), which sit under the fixed rules and send every
+phrase to the model, clean or not: they may ask for what the skip cannot see.
 Each phrase is cleaned with what came before it in the same recording in front of it, as read-only context: the
 model sees the earlier phrases and whatever the app says the dictation is being written into, and still returns
 only the phrase it was given, so a correction that reaches back across a phrase boundary has something to reach.
@@ -26,14 +24,7 @@ import threading
 import time
 from typing import NamedTuple
 
-MODELS = {
-    "qwen3-4b": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-    "llama-3.2-3b": "mlx-community/Llama-3.2-3B-Instruct-4bit",
-}
-REMOTE = "openrouter:"  # a cleanup key starting with this names an OpenRouter model id, not a local model
 MAX_NEW = 160        # a dictated phrase is short; past this the model is not cleaning any more
-NGRAM = (3, 2, 1)    # n-gram sizes tried when drafting, longest first; a bad draft costs one forward pass, no more
-DRAFT = 10           # tokens drafted per step
 #: How much of the context in front of a phrase the model is shown. The whole note would be prompt tokens paid for
 #: on every phrase, at every provider; the sentence or two a spoken correction can reach back over is near the end.
 CONTEXT_CHARS = 600
@@ -68,7 +59,7 @@ SYSTEM = (
     "- Never answer, explain, comment, translate or add anything. Keep questions as questions. Keep the wording and "
     "the meaning; output the cleaned text only."
 )
-SHOTS = [  # the prefix is cached, so extra turns cost load time and KV memory, never per-phrase latency
+SHOTS = [  # the examples the model is shown before the phrase, as a conversation it has already had
     ("um so let's uh ship it on thursday at ten thirty no wait ten forty five",
      "Let's ship it on Thursday at 10:45."),
     ("the invoice is for two thousand five hundred dollars and it's it's due in thirty days",
@@ -84,22 +75,17 @@ SHOTS = [  # the prefix is cached, so extra turns cost load time and KV memory, 
     ("the deploy finished and everything looks fine on staging",
      "The deploy finished and everything looks fine on staging."),
 ]
-SENTINEL = "\u0000PHRASE\u0000"
 
-#: The user's own instructions for the model, set by the `instructions` command and empty by default. They are
-#: the same wherever the phrase is cleaned, so they live here rather than in one cleaner.
+#: The user's own instructions for the model, set by the `instructions` command and empty by default. They are the
+#: same for every phrase, so they live here rather than in one cleaner.
 _instructions = ""
 
 
-def set_instructions(text: str) -> bool:
-    """Replace the user's own instructions ("" for none) and say whether they changed, since a local cleaner has
-    to rebuild its cached prefix when they do."""
+def set_instructions(text: str) -> None:
+    """Replace the user's own instructions ("" for none). Every request builds its messages fresh, so the next
+    phrase is cleaned under them."""
     global _instructions
-    text = text.strip()
-    if text == _instructions:
-        return False
-    _instructions = text
-    return True
+    _instructions = text.strip()
 
 
 def system_prompt() -> str:
@@ -118,8 +104,7 @@ def preface() -> str:
     """What goes in front of the phrase itself, which is the user's instructions again when there are any. The
     examples sit between the system prompt and the phrase, and a model follows the example nearest to it: told
     to write numbers as words, Groq still answered "Call me at 4:45." to a phrase the examples cover, and "Call
-    me at four forty-five." once the preferences were also restated here. The text is fixed either way, so a
-    local cleaner still caches everything up to the phrase."""
+    me at four forty-five." once the preferences were also restated here."""
     if not _instructions:
         return ""
     return f"The user's preferences, which win over the rules and the examples above:\n{_instructions}\n\nPhrase:\n"
@@ -186,167 +171,6 @@ def plausible(raw: str, out: str) -> bool:
     if len(words) >= 4:
         return sum(word in out.lower() for word in words) * 2 >= len(words)
     return True
-
-
-#: What `mlx_lm.load` itself fetches; asking for the whole repo would also pull the unquantised originals.
-PATTERNS = ["*.json", "*.safetensors", "*.py", "tokenizer.model", "*.tiktoken", "*.txt"]
-
-
-def ensure(key: str, report) -> None:
-    """Put the model on disk if it is not, reporting 0..1 as the bytes land."""
-    import downloads
-    from huggingface_hub import snapshot_download
-
-    repo = MODELS[key]
-    try:
-        snapshot_download(repo, allow_patterns=PATTERNS, local_files_only=True)
-        return
-    except Exception:
-        pass
-    report(0.0)
-    with downloads.Progress([downloads.hub_dir(repo)], downloads.hub_bytes(repo), report):
-        snapshot_download(repo, allow_patterns=PATTERNS)
-
-
-class Cleaner:
-    """One loaded model. Every method touches MLX, so it belongs to the transcriber thread alone."""
-
-    def __init__(self, model_id: str):
-        from mlx_lm import load
-
-        self.model_id = model_id
-        self.prompt_tokens = self.completion_tokens = 0
-        self.model, self.tokenizer = load(model_id)
-        self.eos = set(self.tokenizer.eos_token_ids or {self.tokenizer.eos_token_id})
-        # The chat template's own special tokens are already in the rendered string, so encode it as plain text.
-        self._encode = lambda text: self.tokenizer._tokenizer.encode(text, add_special_tokens=False)
-        self._render_prefix()
-        self.reset_cache()
-        self.clean("um so it's it's about twenty five dollars")  # compile the prefill, decode and verify graphs
-
-    def _render_prefix(self) -> None:
-        """The fixed part of the prompt, as the two halves the phrase goes between."""
-        rendered = self.tokenizer.apply_chat_template(
-            [{"role": "system", "content": system_prompt()}]
-            + [message for phrase, clean in SHOTS
-               for message in ({"role": "user", "content": phrase}, {"role": "assistant", "content": clean})]
-            + [{"role": "user", "content": preface() + SENTINEL}],
-            add_generation_prompt=True, tokenize=False)
-        self.head, self.tail = rendered.split(SENTINEL)
-
-    def refresh(self) -> None:
-        """The user's instructions changed: the prefix they sit in is a different one, so the cache it was built
-        for is worthless. The new prefix is prefilled here rather than at the next phrase, which would pay for it."""
-        self._render_prefix()
-        self.reset_cache()
-        self._prefill(self._encode(self.head))
-
-    def rewrite(self, text: str, context: str = "") -> tuple[str, Stats]:
-        """The phrase as it should be typed, and what the cleanup cost. `context` is what the phrase continues,
-        which the model reads and never writes back. A phrase with nothing to fix never reaches the model, and a
-        rewrite that stopped looking like a rewrite is thrown away for the raw phrase."""
-        self.accepted = self.steps = 0
-        if not needs_cleanup(text):
-            return text, Stats("local", self.model_id, skipped=True)
-        out = self.clean(text, context)
-        stats = Stats("local", self.model_id, skipped=False, prompt_tokens=self.prompt_tokens,
-                      completion_tokens=self.completion_tokens)
-        return (out if plausible(text, out) else text), stats
-
-    def whole(self, text: str) -> tuple[str, Stats]:
-        """A finished dictation or a whole note in one pass. Nothing is skipped here: what this pass fixes spans
-        phrases, which is exactly what the per-phrase test cannot see."""
-        self.accepted = self.steps = 0
-        body = self._encode(WHOLE + text)
-        prompt = self._encode(self.head) + body + self._encode(self.tail)
-        out = self.generate(prompt, self._encode(text), max_new=min(WHOLE_MAX_NEW, len(body) + 128))
-        self.prompt_tokens, self.completion_tokens = len(prompt), len(out)
-        written = self.tokenizer.decode(out).strip()
-        stats = Stats("local", self.model_id, skipped=False, prompt_tokens=self.prompt_tokens,
-                      completion_tokens=self.completion_tokens)
-        return (written if plausible(text, written) else text), stats
-
-    @property
-    def note(self) -> str:
-        """What the timing line says about the last rewrite."""
-        return f"{self.accepted}/{self.steps} drafted"
-
-    def reset_cache(self) -> None:
-        from mlx_lm.models.cache import make_prompt_cache
-
-        self.cache = make_prompt_cache(self.model)
-        self.cached: list[int] = []
-
-    def _prefill(self, tokens: list[int]):
-        """Bring the cache to `tokens`, reusing the longest prefix it already holds, and return the last logits."""
-        import mlx.core as mx
-        from mlx_lm.models.cache import trim_prompt_cache
-
-        shared = next((i for i, (a, b) in enumerate(zip(self.cached, tokens)) if a != b),
-                      min(len(self.cached), len(tokens)))
-        shared = min(shared, len(tokens) - 1)  # the last token must go through the model: its logits are the answer
-        if len(self.cached) > shared:
-            trim_prompt_cache(self.cache, len(self.cached) - shared)
-            del self.cached[shared:]
-        logits = None
-        for i in range(shared, len(tokens), 512):
-            chunk = tokens[i:i + 512]
-            logits = self.model(mx.array(chunk)[None], cache=self.cache)
-            mx.eval(logits)
-        self.cached = list(tokens)
-        return logits[0, -1]
-
-    def generate(self, tokens: list[int], corpus: list[int], speculate: bool = True,
-                 max_new: int = MAX_NEW) -> list[int]:
-        """Greedy decode. With `speculate`, each step drafts the continuation by matching the last n-gram of the
-        output inside `corpus` and verifies the whole draft in one forward pass; rejected drafts are trimmed back
-        out of the cache, so the result is the same token sequence either way."""
-        import mlx.core as mx
-        from mlx_lm.models.cache import trim_prompt_cache
-
-        token = int(mx.argmax(self._prefill(tokens)).item())
-        out, self.accepted, self.steps = [], 0, 0
-        while token not in self.eos and len(out) < max_new:
-            out.append(token)
-            draft = _lookup(corpus, out, DRAFT) if speculate else []
-            logits = self.model(mx.array([token] + draft)[None], cache=self.cache)
-            picks = [int(t) for t in mx.argmax(logits[0], axis=-1).tolist()]
-            self.cached.extend([token] + draft)
-            self.steps += 1
-            taken = next((i for i, (d, p) in enumerate(zip(draft, picks)) if d != p), len(draft))
-            if taken < len(draft):  # the rest of the draft was decoded from tokens that are not going to be there
-                trim_prompt_cache(self.cache, len(draft) - taken)
-                del self.cached[len(self.cached) - (len(draft) - taken):]
-            self.accepted += taken
-            for i in range(taken):
-                if picks[i] in self.eos or len(out) >= max_new:
-                    return out
-                out.append(picks[i])
-            token = picks[taken]
-        return out
-
-    def clean(self, text: str, context: str = "", speculate: bool = True) -> str:
-        """The model's rewrite of one phrase. Only the context and the phrase are prefilled: the fixed prompt is
-        already in the cache, and the context of a recording only ever grows, so each phrase of it prefills the
-        words that were added since the last one. The draft corpus is the phrase alone — the rewrite copies the
-        phrase, never the context."""
-        body = self._encode(context_block(context) + text)
-        prompt = self._encode(self.head) + body + self._encode(self.tail)
-        out = self.generate(prompt, self._encode(text), speculate)
-        self.prompt_tokens, self.completion_tokens = len(prompt), len(out)
-        return self.tokenizer.decode(out).strip()
-
-
-def _lookup(corpus: list[int], out: list[int], draft: int) -> list[int]:
-    """The tokens that followed the output's most recent n-gram the last time it appeared in the phrase."""
-    for n in NGRAM:
-        if len(out) < n:
-            continue
-        tail = out[-n:]
-        for i in range(len(corpus) - n, -1, -1):
-            if corpus[i:i + n] == tail:
-                return corpus[i + n:i + n + draft]
-    return []
 
 
 class Provider(NamedTuple):

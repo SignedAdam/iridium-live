@@ -169,8 +169,7 @@ struct PhraseTimeline: View {
             if let cleanup = polish.cleanup {
                 line(cleanup.error.map {
                     Step(id: "polish", label: "Polishing failed: \($0)", ms: cleanup.ms, shade: 0.85, alert: true)
-                } ?? Step(id: "polish", label: "Polished on \(cleanup.provider == Settings.localCleanup ? "this Mac" : cleanup.providerName)",
-                          ms: cleanup.ms, shade: 0.7))
+                } ?? Step(id: "polish", label: "Polished on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.7))
             }
             if polish.text != polish.heard {
                 Text(polish.text)
@@ -202,8 +201,7 @@ struct PhraseTimeline: View {
             steps.append(Step(id: "cleanup", label: "Already clean, not sent", ms: cleanup.ms, shade: 0.85))
             return steps
         }
-        let place = cleanup.provider == Settings.localCleanup ? "this Mac" : cleanup.providerName
-        steps.append(Step(id: "cleanup", label: "Cleanup on \(place)", ms: cleanup.ms, shade: 0.85))
+        steps.append(Step(id: "cleanup", label: "Cleanup on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.85))
         let parts: [(String, Double?)] = [("Connecting", cleanup.connectMs), ("Network", cleanup.networkMs),
                                           ("Queued at \(cleanup.providerName)", cleanup.queueMs),
                                           ("Reading the prompt", cleanup.promptMs), ("Writing", cleanup.generateMs)]

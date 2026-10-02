@@ -4,7 +4,6 @@
 #     "fermion-research==0.2.4",
 #     "mlx==0.32.3",
 #     "mlx-audio==0.5.7",
-#     "mlx-lm==0.31.3",
 #     "onnxruntime==1.30.0",
 #     "scipy",
 #     "sounddevice",
@@ -16,15 +15,15 @@
 Commands on stdin, one per line. "start" opens the MacBook microphone (or plays --wav FILE at real time); "stop"
 closes it and finishes the phrase in flight; "cancel" closes it and throws that phrase away instead, so nothing
 of it is transcribed, typed or archived; "hold SECONDS" sets how long a word must read the same before it is
-typed; "cleanup off|qwen3-4b|llama-3.2-3b|openrouter:MODEL|groq:MODEL" turns the rewrite model off, on locally, or
-on at a provider (OPENROUTER_API_KEY or GROQ_API_KEY out of the environment; nothing is downloaded or loaded, and a
-request that fails or runs long leaves the phrase raw); "asr phonon-2|parakeet" switches the speech model; "unload"
-drops every model from memory (the next start brings back what was loaded; a remote cleanup model holds none, so it
-keeps working); "archive on SECONDS DIRECTORY" keeps a copy of the recorded audio as WAV files cut at silences that
-long, "archive off" stops; "instructions JSON" sets the speaker's own instructions for the cleanup model, as a
-JSON string so they can hold newlines (an empty JSON string clears them). They go under the fixed rules of the
-cleanup prompt wherever the phrase is cleaned, and while they are set no phrase is clean enough to skip the model.
-Nothing comes back for them except an error event if the JSON is not a string.
+typed; "cleanup off|openrouter:MODEL|groq:MODEL" turns the rewrite model off or on at a provider
+(OPENROUTER_API_KEY or GROQ_API_KEY out of the environment; nothing is downloaded or loaded, a key that does not
+name a provider answers with a cleanup error, and a request that fails or runs long leaves the phrase raw);
+"asr phonon-2|parakeet" switches the speech model; "unload" drops the speech model from memory (the next start
+brings it back; the cleanup model holds none, so it keeps working); "archive on SECONDS DIRECTORY" keeps a copy of
+the recorded audio as WAV files cut at silences that long, "archive off" stops; "instructions JSON" sets the
+speaker's own instructions for the cleanup model, as a JSON string so they can hold newlines (an empty JSON string
+clears them). They go under the fixed rules of the cleanup prompt, and while they are set no phrase is clean
+enough to skip the model. Nothing comes back for them except an error event if the JSON is not a string.
 "context JSON" gives the text the next recording is about to continue (the note above the cursor, say), as a JSON
 string: the cleanup model reads the end of it in front of every phrase of that recording and never writes it back.
 It is cleared by the next "start" unless it is sent again, so it is sent just before one. "polish on|off" (on by
@@ -32,7 +31,7 @@ default) runs one more pass over the whole of a recording once it stops, which i
 sentence boundaries and inconsistencies that span two phrases. "rewrite ID JSON" cleans one whole text the same
 way, out of band, and answers with its id. "benchmark on|off" runs every other model of the chosen provider over
 each phrase in the background, after the phrase has been typed, for comparing them on real dictation; it never
-runs local models and never delays a phrase.
+delays a phrase.
 All act at once, even while a model is still loading: audio waits and is transcribed as soon as the model is
 ready, and any model that is not on disk is fetched first. Events on stdout, one JSON object per line:
   {"kind": "state", "recording": bool}             at startup and after every change
@@ -240,6 +239,8 @@ class ModelSlot:
     MLX is not safe to drive from two threads, so nothing here touches it except `apply`. A slot only reaches the
     `control` queue once its files are on disk, and the CONTROL marker in the audio queue is what wakes the
     transcriber up to look. Downloads run on their own thread, so a 600 MB fetch never stops audio from queueing.
+    Only the speech model is ever on this Mac: cleanup runs at a provider, so its slot holds a connection and no
+    memory, and nothing of it is downloaded, loaded or unloaded.
     """
 
     def __init__(self, kind: str, events: Events, control: queue.Queue, audio: queue.Queue):
@@ -247,16 +248,15 @@ class ModelSlot:
         self.want: str | None = None    # what the user asked for
         self.key: str | None = None     # what is loaded
         self.suspended = False          # `unload`: dropped from memory, but still wanted
-        self.rebuild = False            # the loaded model has to take in changed cleanup instructions
         self.model = None
 
     def say(self, state: str, key: str | None, **extra) -> None:
         self.events.send({"kind": self.kind, "state": state, "model": self.model_id(key), **extra})
 
     def model_id(self, key: str | None) -> str | None:
-        if self.remote(key):
-            return key  # a remote cleanup model is named by the key itself: "<provider>:<model id>"
-        return (asr.MODELS if self.kind == "asr" else cleanup_model.MODELS).get(key) if key else None
+        if self.kind == "cleanup":
+            return key  # a cleanup model is named by the key itself: "<provider>:<model id>"
+        return asr.MODELS.get(key) if key else None
 
     def remote(self, key: str | None) -> bool:
         """Is `key` a model that lives on someone else's machine? Nothing to download, load, or unload."""
@@ -273,7 +273,11 @@ class ModelSlot:
             self.say("off", None)
             self._hand_over()
             return
-        if self.remote(key):  # nothing to fetch and nothing to load: all it needs is a key in the environment
+        if self.kind == "cleanup":  # nothing to fetch and nothing to load: all it needs is a key in the environment
+            if not self.remote(key):
+                self.say("error", key, message="cleanup runs at a provider: use groq:MODEL or openrouter:MODEL")
+                self.want = self.key
+                return
             if message := cleanup_model.missing_key(key):
                 self.say("error", key, message=message)
                 self.want = self.key
@@ -283,7 +287,7 @@ class ModelSlot:
         def fetch() -> None:
             try:
                 report = _throttled(lambda fraction: self.say("downloading", key, progress=fraction))
-                (asr.ensure if self.kind == "asr" else cleanup_model.ensure)(key, report)
+                asr.ensure(key, report)
             except Exception as exc:  # a failed download must not take the engine down
                 self.say("error", key, message=str(exc))
                 self.want = self.key
@@ -299,12 +303,6 @@ class ModelSlot:
 
     def resume(self) -> None:
         self.suspended = False
-        self._hand_over()
-
-    def refresh(self) -> None:
-        """The user's cleanup instructions changed. A loaded local model rebuilds the prefix it caches, which is
-        MLX work and so belongs to the transcriber thread; a remote one reads them at its next phrase."""
-        self.rebuild = True
         self._hand_over()
 
     @property
@@ -324,10 +322,7 @@ class ModelSlot:
     def apply(self) -> bool:
         """Transcriber thread: make the loaded model match `want`, or none of it while suspended."""
         key = self.target
-        rebuild, self.rebuild = self.rebuild, False  # a model loaded below is built with the instructions anyway
         if key == self.key:
-            if rebuild and isinstance(self.model, cleanup_model.Cleaner):
-                self.model.refresh()
             return False
         if isinstance(self.model, cleanup_model.Remote):
             self.model.close()  # the kept connection belongs to the model that opened it
@@ -345,8 +340,7 @@ class ModelSlot:
             return True
         self.say("loading", key)
         try:
-            self.model = (asr.load(key, CACHE_DIR) if self.kind == "asr" else cleanup_model.Cleaner(
-                cleanup_model.MODELS[key]))
+            self.model = asr.load(key, CACHE_DIR)
         except Exception as exc:
             self.say("error", key, message=str(exc))
             self.want = None
@@ -496,17 +490,17 @@ def main() -> None:
     context = ""           # what the next recording continues, until a start takes it
 
     def resume() -> None:
-        """Anything that needs a model brings back what `unload` dropped, the speech model first."""
-        if speech_slot.suspended or cleanup_slot.suspended:
+        """Anything that needs a model brings back what `unload` dropped. Only the speech model is ever dropped:
+        cleanup runs at a provider and holds nothing to bring back."""
+        if speech_slot.suspended:
             speech_slot.resume()
-            cleanup_slot.resume()
 
     def read_commands() -> None:
         nonlocal polishing, benchmarking, context
 
         def comparing() -> None:
             """The models to compare against: the chosen provider's others, and none at all while benchmarking is
-            off or cleanup runs on this Mac."""
+            off or no cleanup model is set."""
             bench.configure(cleanup_slot.want if benchmarking else None)
 
         for line in sys.stdin:
@@ -523,7 +517,6 @@ def main() -> None:
             elif command == "hold":
                 stable.hold_s = min(max(float(argument), 0.2), 3.0)
             elif command == "cleanup":
-                resume()
                 cleanup_slot.request(None if argument == "off" else argument)
                 comparing()
             elif command == "polish":
@@ -537,7 +530,6 @@ def main() -> None:
             elif command == "unload":
                 recorder.stop()  # the phrase in flight is finished, and the queue carries that before the unload
                 speech_slot.suspend()
-                cleanup_slot.suspend()
             elif command in ("instructions", "context", "rewrite"):
                 payload = argument
                 identifier = ""
@@ -551,8 +543,7 @@ def main() -> None:
                     cleanup_slot.say("error", cleanup_slot.key, message=f"{command}: {exc}")
                 else:
                     if command == "instructions":
-                        if cleanup_model.set_instructions(text):
-                            cleanup_slot.refresh()
+                        cleanup_model.set_instructions(text)
                     elif command == "context":
                         context = text
                     else:

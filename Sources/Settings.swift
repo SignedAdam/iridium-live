@@ -28,16 +28,14 @@ struct Settings: Codable, Equatable {
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     /// Where cleanup can run, each with its models, the default first (chosen by measured latency and accuracy on
-    /// dictated phrases). Groq and OpenRouter are called over the network with `GROQ_API_KEY` / `OPENROUTER_API_KEY`;
-    /// Local runs mlx-lm models on this Mac, about 2.5 GB of memory while on.
+    /// dictated phrases). Both are called over the network with `GROQ_API_KEY` / `OPENROUTER_API_KEY`, so cleanup
+    /// costs this Mac no memory at all.
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", [("openai/gpt-oss-120b:nitro", "GPT-OSS 120B"), ("qwen/qwen3.8-27b:nitro", "Qwen3.8 27B"),
                                       ("inclusionai/ling-3.0-flash", "Ling 3.0 Flash")]),
-        (localCleanup, "Local", [("qwen3-4b", "Qwen3 4B"), ("llama-3.2-3b", "Llama 3.2 3B")]),
     ]
-    static let localCleanup = "local"
     static let captionFonts = ["TikTok Sans", "SF Pro", "SF Pro Rounded", "New York", "Menlo"]
     static let idleChoices = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 h"), (120, "2 h"), (360, "6 h")]
 
@@ -66,10 +64,10 @@ struct Settings: Codable, Equatable {
         set { cleanupModels[cleanupProvider] = newValue }
     }
 
-    /// The engine command for the cleanup as set: off, a model on this Mac, or `provider:model` over the network.
+    /// The engine command for the cleanup as set: off, or `provider:model` at a provider.
     var cleanupCommand: String {
         guard cleanupEnabled else { return "cleanup off" }
-        return cleanupProvider == Self.localCleanup ? "cleanup \(cleanupModel)" : "cleanup \(cleanupProvider):\(cleanupModel)"
+        return "cleanup \(cleanupProvider):\(cleanupModel)"
     }
 }
 
@@ -81,7 +79,10 @@ extension Settings {
         speechModel = value(.speechModel, fallback.speechModel)
         typingHold = value(.typingHold, fallback.typingHold)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
-        cleanupProvider = value(.cleanupProvider, fallback.cleanupProvider)
+        // Cleanup used to be able to run on this Mac; it no longer can, so a save that names a provider nobody
+        // offers any more (and only that) comes back as the default. The models picked at the other providers stay.
+        let provider = value(.cleanupProvider, fallback.cleanupProvider)
+        cleanupProvider = Settings.cleanupProviders.contains { $0.id == provider } ? provider : fallback.cleanupProvider
         cleanupModels = value(.cleanupModels, fallback.cleanupModels)
         cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
         cleanupPolish = value(.cleanupPolish, fallback.cleanupPolish)

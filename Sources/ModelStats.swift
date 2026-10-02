@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// What is known about one cleanup model: how it did on the benchmark of 40 dictated phrases (fillers, spoken
-/// corrections, numbers, money, times, emails; measured on this Mac, 1 October 2026), and how it has done for you, from
+/// corrections, numbers, money, times, emails; measured 1 October 2026), and how it has done for you, from
 /// the timings in your history.
 struct ModelStats {
     struct Benchmark {
@@ -61,10 +61,6 @@ struct ModelStats {
                                                        note: "Measured on its free endpoint"),
         "openrouter:inclusionai/ling-3.0-flash": Benchmark(medianMs: 825, p90Ms: 1177, usable: "27 of 31", exact: "18 of 31",
                                                            perThousand: "$0.01", note: "Measured on its free endpoint"),
-        "local:qwen3-4b": Benchmark(medianMs: 306, p90Ms: 470, usable: "37 of 40", exact: "16 of 40", perThousand: "Free",
-                                    note: "About 2.5 GB of memory while on"),
-        "local:llama-3.2-3b": Benchmark(medianMs: 119, perThousand: "Free",
-                                        note: "Timed on an earlier set of phrases; about 2 GB of memory while on"),
     ]
 }
 
@@ -80,7 +76,7 @@ struct ModelStatsCard: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(tiktok(13.5, "Medium")).foregroundStyle(.white.opacity(0.95))
-                Text(stats.provider == Settings.localCleanup ? "on this Mac" : "on \(providerName)")
+                Text("on \(providerName)")
                     .font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
             }
             if let bench = stats.benchmark {

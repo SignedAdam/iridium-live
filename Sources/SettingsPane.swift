@@ -87,7 +87,7 @@ struct SettingsPane: View {
                         Row("Runs on") {
                             Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                         }
-                        Row("Model", detail: cleanupMemoryAdvice, alert: true) {
+                        Row("Model") {
                             let provider = model.settings.cleanupProvider
                             let options = Settings.cleanupModels(on: provider)
                             GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
@@ -169,12 +169,6 @@ struct SettingsPane: View {
     /// Memory is tight while the speech model is loaded: said under the speech model, where it can be changed.
     private var speechMemoryAdvice: String? {
         model.memoryWarning && model.speech.state == "ready" ? "Memory is low. Unloading frees about 1 GB." : nil
-    }
-
-    /// Memory is tight while a local cleanup model is loaded: said under that model.
-    private var cleanupMemoryAdvice: String? {
-        model.memoryWarning && model.settings.cleanupEnabled && model.settings.cleanupProvider == Settings.localCleanup
-            && model.cleanup.state == "ready" ? "Memory is low. Groq frees about 2.5 GB." : nil
     }
 
     /// The start of the user's cleanup instructions, as a reminder under the row.
