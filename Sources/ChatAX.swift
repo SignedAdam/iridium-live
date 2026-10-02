@@ -168,14 +168,15 @@ enum Detector {
 /// Putting the finished text into an app's message box and sending it.
 @MainActor
 enum Inserter {
-    /// Text goes in through accessibility: the box is focused, then the text replaces the (empty) selection at the
-    /// cursor. That keeps whatever the user had already typed, needs no keystrokes, and cannot be swallowed by the
-    /// app being busy. Apps whose composer does not accept a written selection (some web views) fall back to the
-    /// pasteboard, which every app understands; the clipboard is put back afterwards.
-    static func insert(_ text: String, at centre: NSPoint, of pid: pid_t, how: ChatAppProfile.Insertion) -> Bool {
-        guard !text.isEmpty else { return false }
-        if how == .accessibility, let box = box(at: centre, of: pid), write(text, into: box) { return true }
-        return paste(text, at: centre, of: pid)
+    /// Text goes in through accessibility where the box takes a written selection: the box is focused, then the text
+    /// replaces the (empty) selection at the cursor, keeping whatever was already typed. Every other box gets the
+    /// pasteboard, which every app understands. (A box's whole value written through accessibility can look accepted
+    /// yet never reach the app: WhatsApp's composer stays empty and keeps its voice button where Send would be.)
+    /// True once the box really holds the text; false when it never came to, after a second and a half at most.
+    static func insert(_ text: String, at centre: NSPoint, of pid: pid_t, how: ChatAppProfile.Insertion) async -> Bool {
+        guard !text.isEmpty, let box = box(at: centre, of: pid) else { return false }
+        if how == .accessibility, write(text, into: box) { return true }
+        return await paste(text, into: box)
     }
 
     /// The message box under a point: the text area itself, or the nearest one around what is there.
@@ -186,22 +187,20 @@ enum Inserter {
 
     /// Focuses the box and writes the text at its cursor; true when the box really took it.
     static func write(_ text: String, into box: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(box, kAXSelectedTextAttribute as CFString, &settable) == .success,
+              settable.boolValue else { return false }
         AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        let before = (AX.string(box, kAXValueAttribute as String) ?? "")
-        if AXUIElementSetAttributeValue(box, kAXSelectedTextAttribute as CFString, text as CFString) == .success,
-           AX.string(box, kAXValueAttribute as String) != before {
-            return true
-        }
-        // Some composers only answer to a whole new value.
-        guard AXUIElementSetAttributeValue(box, kAXValueAttribute as CFString, (before + text) as CFString) == .success
-        else { return false }
-        return AX.string(box, kAXValueAttribute as String) != before
+        let before = AX.string(box, kAXValueAttribute as String) ?? ""
+        return AXUIElementSetAttributeValue(box, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+            && AX.string(box, kAXValueAttribute as String) != before
     }
 
-    /// The fallback: the text on the pasteboard, ⌘V to the app, and the clipboard restored a moment later.
-    private static func paste(_ text: String, at centre: NSPoint, of pid: pid_t) -> Bool {
-        guard let box = box(at: centre, of: pid) else { return false }
+    /// The text on the pasteboard and ⌘V to the app; the clipboard is put back once the app has taken the text (or
+    /// given up on it), never before, so the paste cannot pick up the old clipboard instead.
+    private static func paste(_ text: String, into box: AXUIElement) async -> Bool {
         AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        let before = AX.string(box, kAXValueAttribute as String) ?? ""
         let pasteboard = NSPasteboard.general
         let saved = pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data] in
             Dictionary(uniqueKeysWithValues: item.types.compactMap { type in item.data(forType: type).map { (type, $0) } })
@@ -215,13 +214,24 @@ enum Inserter {
             event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
             event?.post(tap: .cghidEventTap)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            pasteboard.clearContents()
-            for contents in saved {
-                let item = NSPasteboardItem()
-                for (type, data) in contents { item.setData(data, forType: type) }
-                pasteboard.writeObjects([item])
-            }
+        let landed = await changes(box, from: before, within: .milliseconds(1500))
+        pasteboard.clearContents()
+        for contents in saved {
+            let item = NSPasteboardItem()
+            for (type, data) in contents { item.setData(data, forType: type) }
+            pasteboard.writeObjects([item])
+        }
+        return landed
+    }
+
+    /// True as soon as the box reads something other than `before`; false when `limit` passes first. A box that
+    /// cannot be read counts as unchanged.
+    static func changes(_ box: AXUIElement, from before: String, within limit: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + limit
+        while (AX.string(box, kAXValueAttribute as String) ?? before) == before {
+            guard clock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
         }
         return true
     }

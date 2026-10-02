@@ -193,14 +193,17 @@ final class ChatDock {
         if let app = NSRunningApplication.runningApplications(withBundleIdentifier: target.bundleID).first,
            let window = AX.focusedWindow(of: app.processIdentifier), let frame = AX.frame(window) {
             let pid = app.processIdentifier
-            var inserted = target.collects ? false : !message.isEmpty
-            if target.collects, !message.isEmpty {
-                let box = profile.box.resolve(in: frame)
-                inserted = Inserter.insert(message, at: NSPoint(x: box.midX, y: box.midY), of: pid,
-                                           how: profile.insertion)
-            }
-            if inserted, profile.autoSend {
-                let send = profile.sendButton.isSet ? profile.sendButton.resolve(in: frame) : nil
+            let box = profile.box.resolve(in: frame)
+            let send = profile.sendButton.isSet ? profile.sendButton.resolve(in: frame) : nil
+            let collects = target.collects
+            Task {
+                let inserted = collects
+                    ? await Inserter.insert(message, at: NSPoint(x: box.midX, y: box.midY), of: pid, how: profile.insertion)
+                    : !message.isEmpty
+                // Send is pressed only once the text is in, and a moment after: an app may show its Send button only
+                // while the box holds text (WhatsApp keeps its voice button there until then).
+                guard inserted, profile.autoSend else { return }
+                try? await Task.sleep(for: .milliseconds(150))
                 _ = Inserter.send(how: profile.send, button: send.map { NSPoint(x: $0.midX, y: $0.midY) }, of: pid)
             }
         }
