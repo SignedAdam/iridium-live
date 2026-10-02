@@ -31,10 +31,14 @@ MainActor.assumeIsolated {
     let hotkeys = HotkeyMonitor()
     let idle = IdleUnloader()
     let recordings = support.appendingPathComponent("Recordings")
+    let dock = ChatDock(model: model, directory: support)
+    model.chatApps = dock.apps
+    model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
 
     let engine: Engine
     do {
         engine = try Engine(command: Array(arguments.dropFirst()) + ["--asr", model.settings.speechModel]) { event in
+            dock.handle(event)
             switch event.kind {
             case "state":
                 if event.recording {
@@ -48,9 +52,9 @@ MainActor.assumeIsolated {
                 }
             case "ready": model.ready = true
             case "level": if model.recording { model.receive(level: event.value) }
-            case "partial": captions.show(event.text)
+            case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":
-                captions.show(event.text)
+                if !dock.hidesCaptions { captions.show(event.text) }
                 let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
                                          destination: model.destination, timing: event.timing,
                                          audio: event.audio.isEmpty ? nil : event.audio)

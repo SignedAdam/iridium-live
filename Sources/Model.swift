@@ -44,6 +44,8 @@ final class AppModel {
     var lastRecording: (file: String, seconds: Double)?
     var finishing = false  // recording has stopped, the engine is still working through what it heard
     var frontApp: String?  // the app in front, where typed words land
+    /// The chat app a dock dictation is going to, while it runs: it takes over where the words go.
+    var chatTarget: ChatTarget?
     var hotkeysListening = false
     var capturingHotkey: UUID?  // the hotkey row waiting for a key press
     /// What the recording in progress is for, when a hotkey started it; nil when started from the record button.
@@ -64,13 +66,19 @@ final class AppModel {
     /// tallest pane to fit above.
     var opensDown = false
 
-    /// Words are typed into the focused app: the typing switch is on, or a "type it" hotkey is recording.
-    var typingNow: Bool { typing || session == .insert }
-    /// Finished phrases go to the notes: notes are being kept, or an "add to notes" hotkey is recording.
-    var notingNow: Bool { notesCapturing || session == .note }
+    /// Words are typed into the focused app: a chat app's dock is streaming into it, the typing switch is on, or a
+    /// "type it" hotkey is recording. A dock recording that collects types nothing: its message goes in at the end.
+    var typingNow: Bool {
+        if let chatTarget { return !chatTarget.collects }
+        return typing || session == .insert
+    }
+    /// Finished phrases go to the notes: notes are being kept, or an "add to notes" hotkey is recording. A dock
+    /// dictation is a message, never a note.
+    var notingNow: Bool { chatTarget == nil && (notesCapturing || session == .note) }
 
-    /// Where finished phrases are going, in a few words: "Notes", the app in front, or both.
+    /// Where finished phrases are going, in a few words: a chat app, "Notes", the app in front, or both.
     var destination: String? {
+        if let chatTarget { return chatTarget.name }
         let app = typingNow ? frontApp ?? "the app in front" : nil
         switch (app, notingNow) {
         case let (app?, true): return "\(app) and notes"
@@ -83,6 +91,7 @@ final class AppModel {
     /// What the control is doing, for the line above the bar: where the words are going while recording, and that it
     /// is still finishing after a stop. Nothing worth saying otherwise.
     var activity: String? {
+        if let chatTarget { return recording ? "Dictating to \(chatTarget.name)" : "Finishing" }
         if recording {
             switch (typingNow, notingNow) {
             case (true, true): return "Typing into \(frontApp ?? "the app in front") and notes"
@@ -109,6 +118,9 @@ final class AppModel {
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
     var onUnload: () -> Void = {}
     var onEditInstructions: () -> Void = {}
+    /// The chat apps as saved; the dock owns them and the settings section shows them.
+    var chatApps: ChatApps?
+    var onEditChatApps: () -> Void = {}
 
     /// How long to wait before unloading the models, counting from now: nil while recording or when switched off.
     var idleUnloadMinutes: Int? { settings.autoUnload && !recording ? settings.autoUnloadMinutes : nil }

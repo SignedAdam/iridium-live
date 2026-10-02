@@ -55,6 +55,23 @@ struct SettingsPane: View {
                     }
                     .padding(.vertical, 8)
                 }
+                if let chatApps = model.chatApps {
+                    Section("Chat apps") {
+                        Row("Button beside Send", detail: "In a chat app, dictate straight into the message box") {
+                            GlassSwitch(isOn: Bindable(chatApps).enabled)
+                        }
+                        ForEach(Bindable(chatApps).apps) { $profile in
+                            Row(profile.name.isEmpty ? profile.bundleID : profile.name,
+                                detail: profile.isPlaced ? nil : "Needs Detect", alert: !profile.isPlaced) {
+                                HStack(spacing: 8) {
+                                    Button("Customise", action: model.onEditChatApps).buttonStyle(GlassButton())
+                                    GlassSwitch(isOn: $profile.enabled)
+                                }
+                            }
+                            .dimmed(!chatApps.enabled)
+                        }
+                    }
+                }
                 Section("Typing") {
                     Row("Wait before typing") {
                         GlassSlider(value: $model.settings.typingHold, range: 0.2...3, step: 0.1) { String(format: "%.1f s", $0) }
