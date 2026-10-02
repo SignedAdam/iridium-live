@@ -41,7 +41,7 @@ struct Hotkey: Codable, Equatable, Identifiable {
     }
 
     static let actionNames: [(Action, String)] = [(.insert, "Type it"), (.note, "Add to notes")]
-    static let gestureNames: [(Gesture, String)] = [(.hold, "Hold"), (.doubleTap, "Double-tap"), (.press, "Press")]
+    static let gestureNames: [(Gesture, String)] = [(.hold, "Hold"), (.doubleTap, "Double-tap"), (.press, "Toggle")]
 
     /// The hotkeys that cannot be told apart: an enabled binding whose key and gesture another enabled binding
     /// already claimed. The first one wins, the later ones are these and do nothing.
