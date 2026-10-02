@@ -180,6 +180,9 @@ private struct ChatAppsEditor: View {
             RectRow("Iridium button", rect: profile.button)
             RectRow("Message box", rect: profile.box)
             RectRow("App’s Send button", rect: profile.sendButton)
+            DockRow("Over the app’s voice button") {
+                DockToggle(isOn: profile.overVoiceButton)
+            }
         }
     }
 

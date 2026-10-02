@@ -40,8 +40,8 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
   {"kind": "ready"}                                the speech model is loaded, once, at startup
   {"kind": "level", "value": 0..1}                 input level of each 50 ms block while recording
   {"kind": "work", "pending": bool}                true when a "stop" left work behind (audio queued, a phrase
-                                                   open or decoding, a cleanup running), false once the last
-                                                   final of that recording is out; only changes are sent
+                                                   open or decoding, a cleanup running); false once every stop or
+                                                   cancel has been seen through, even one that left nothing behind
   {"kind": "partial" | "final", "text": ...}       caption: the whole in-flight phrase, replacing the previous one
                                                    (final also carries "raw" and "cleanup_ms" when cleanup is on)
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
@@ -219,7 +219,7 @@ class Events:
 
 class Work:
     """Whether the speaker is still waiting after recording stopped. The app shows that the engine is finishing
-    something it cannot hear any more, so only the changes are worth an event."""
+    something it cannot hear any more, so changes are worth an event, and so is the end of every stop."""
 
     def __init__(self, events: Events):
         self.events = events
@@ -231,6 +231,13 @@ class Work:
             if pending != self.pending:
                 self.pending = pending
                 self.events.send({"kind": "work", "pending": pending})
+
+    def done(self) -> None:
+        """A stop (or cancel) has been seen through. Said even when nothing was pending: a recording that heard
+        nothing has no final and no session, and whoever waits on the stop must still hear that it is over."""
+        with self.lock:
+            self.pending = False
+            self.events.send({"kind": "work", "pending": False})
 
 
 class ModelSlot:
@@ -382,6 +389,7 @@ class Recorder:
             except Exception as exc:  # no microphone or no permission: say why and stay stopped
                 print(f"could not start recording: {exc}", file=sys.stderr, flush=True)
                 self.events.send({"kind": "state", "recording": False})
+                self.events.send({"kind": "work", "pending": False})  # nothing was heard, so nothing is left to wait for
                 return
         print("recording", file=sys.stderr, flush=True)
         self.events.send({"kind": "state", "recording": True})
@@ -689,13 +697,13 @@ def main() -> None:
                     send({"kind": "type", "text": " ".join(stable.typed), "final": True})
                     stable.reset()
                 finish_dictation()  # the whole recording, polished, before the speaker is told the work is done
-                work.set(False)
+                work.done()
             elif block is CANCEL:
                 session.discard()  # the phrase in flight is not decoded, typed or kept
                 archive.discard()
                 stable.reset()
                 dictation.drop()   # ...and the recording it belonged to is never polished or reported
-                work.set(False)
+                work.done()
                 discarding.clear()  # everything of that recording is behind us; the next one speaks again
             elif isinstance(block, Job):
                 if block.kind == "start":

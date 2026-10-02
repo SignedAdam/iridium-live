@@ -121,6 +121,8 @@ struct ChatAppProfile: Codable, Equatable, Identifiable {
     var button = AnchoredRect()
     var box = AnchoredRect(corner: .bottomLeft)
     var sendButton = AnchoredRect()  // the app's own Send button, for auto-send
+    /// The button sits on the app's own voice button (the Send button's place while the box is empty), in its stead.
+    var overVoiceButton = false
     var buttonStyle = DockButtonStyle()
     var overlayStyle = DockOverlayStyle()
 
@@ -259,6 +261,7 @@ extension ChatAppProfile {
         button = container.value(.button, AnchoredRect())
         box = container.value(.box, AnchoredRect(corner: .bottomLeft))
         sendButton = container.value(.sendButton, AnchoredRect())
+        overVoiceButton = container.value(.overVoiceButton, false)
         buttonStyle = container.value(.buttonStyle, DockButtonStyle())
         overlayStyle = container.value(.overlayStyle, DockOverlayStyle())
     }

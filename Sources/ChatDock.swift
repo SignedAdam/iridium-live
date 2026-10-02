@@ -53,6 +53,7 @@ final class ChatDock {
     private var elapsedTimer: Timer?
     private var delivered = true     // the recording in progress has had its text put in
     private var detected: Set<String> = []  // apps Detect has already been run on by itself
+    private var boxEmpty = true  // the app's message box, last read: whether the voice button is showing
     private static let latch = 0.3   // a press shorter than this leaves the recording running
 
     /// While a dictation into a chat app runs and its profile says so, the screen captions would only repeat what the
@@ -243,7 +244,7 @@ final class ChatDock {
     private func place() {
         guard let current, current.profile.isPlaced else { hide(); return }
         let window = current.window
-        let button = pixels(current.profile.button.resolve(in: window))
+        let button = pixels(buttonFrame(current))
         if buttonPanel.frame != button { buttonPanel.setFrame(button, display: true) }
         if !buttonPanel.isVisible { buttonPanel.orderFrontRegardless() }
 
@@ -258,6 +259,23 @@ final class ChatDock {
         } else if overlayPanel.isVisible {
             overlayPanel.orderOut(nil)
         }
+    }
+
+    /// Where the button goes: its own place, or, with "Over the app's voice button", centred on that button while the
+    /// message box is empty. Once the box holds text the app shows Send there instead, and the button steps back to
+    /// its own place so Send stays in reach. The box is read between drags only: what it holds cannot change mid-drag.
+    private func buttonFrame(_ current: (profile: ChatAppProfile, pid: pid_t, window: NSRect)) -> NSRect {
+        let own = current.profile.button.resolve(in: current.window)
+        guard current.profile.overVoiceButton, current.profile.sendButton.isSet else { return own }
+        if !watcher.dragging {
+            let box = current.profile.box.resolve(in: current.window)
+            boxEmpty = Inserter.box(at: NSPoint(x: box.midX, y: box.midY), of: current.pid).map { element in
+                (AX.attribute(element, kAXNumberOfCharactersAttribute as String) as? Int).map { $0 == 0 } ?? true
+            } ?? true
+        }
+        guard boxEmpty else { return own }
+        let voice = current.profile.sendButton.resolve(in: current.window)
+        return NSRect(x: voice.midX - own.width / 2, y: voice.midY - own.height / 2, width: own.width, height: own.height)
     }
 
     private func hide() {

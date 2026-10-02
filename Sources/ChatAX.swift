@@ -254,7 +254,8 @@ enum Inserter {
 }
 
 /// Watches one app's windows so the dock can follow them: moves, resizes, minimising, the focused window changing and
-/// the app hiding all come back as one call to `onChange`. A slow tick covers apps that stay quiet during a live drag.
+/// the app hiding all come back as one call to `onChange`. A tick covers what the app does not report: every frame
+/// while a mouse button is down (apps such as WhatsApp say nothing during a live drag), four times a second otherwise.
 @MainActor
 final class WindowWatcher {
     var onChange: () -> Void = {}
@@ -262,6 +263,7 @@ final class WindowWatcher {
     private var application: AXUIElement?
     private var window: AXUIElement?
     private var ticker: Timer?
+    private var mouse: Any?
 
     private static let applicationNotifications = [kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
                                                    kAXApplicationHiddenNotification, kAXApplicationShownNotification,
@@ -291,8 +293,25 @@ final class WindowWatcher {
             for name in Self.windowNotifications { add(name, to: window) }
         }
         if ticker == nil {
-            ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
-                MainActor.assumeIsolated { self.onChange() }
+            schedule(fast: false)
+            mouse = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+                let down = event.type == .leftMouseDown
+                MainActor.assumeIsolated { if let self, self.ticker != nil { self.schedule(fast: down) } }
+            }
+        }
+    }
+
+    /// Whether a drag may be under way: a mouse button is held.
+    var dragging: Bool { NSEvent.pressedMouseButtons != 0 }
+
+    private func schedule(fast: Bool) {
+        ticker?.invalidate()
+        let interval = fast ? 1 / Double(NSScreen.main?.maximumFramesPerSecond ?? 60) : 0.25
+        ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.onChange()
+                if self.ticker != nil { self.schedule(fast: self.dragging) }  // nil: onChange stopped the watching
             }
         }
     }
@@ -300,6 +319,8 @@ final class WindowWatcher {
     func stop() {
         ticker?.invalidate()
         ticker = nil
+        if let mouse { NSEvent.removeMonitor(mouse) }
+        mouse = nil
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
