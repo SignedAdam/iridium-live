@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import ApplicationServices
 import Observation
+import Security
 import ServiceManagement
 
 /// What the app needs from the system and from the user, with its current state: the microphone it records from, the
@@ -97,11 +98,14 @@ final class Setup {
     // MARK: - Accessibility
 
     /// Asks for Accessibility access: the system's own prompt, and the pane it leads to, since the prompt only
-    /// appears the first time. `watch()` picks the grant up as soon as it is given. Any entry already in the list is
-    /// cleared first: an entry made for an earlier build of the app (each build is signed on its own unless the
-    /// stable certificate is in use) shows as switched on yet never applies to this one.
+    /// appears the first time. `watch()` picks the grant up as soon as it is given. An entry made for an earlier build
+    /// of the app (each build is signed on its own unless the stable certificate is in use) shows as switched on yet
+    /// never applies to this one, so the first Allow of each build clears it. Only the first: a second click would
+    /// clear the entry the first one just made, and macOS does not make it again.
     func askForAccessibility() {
-        if let bundleID = Bundle.main.bundleIdentifier, isBundled {
+        if isBundled, let bundleID = Bundle.main.bundleIdentifier, let build = Self.build,
+           UserDefaults.standard.string(forKey: Self.clearedKey) != build {
+            UserDefaults.standard.set(build, forKey: Self.clearedKey)
             let reset = Process()
             reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
             reset.arguments = ["reset", "Accessibility", bundleID]
@@ -112,6 +116,20 @@ final class Setup {
         accessibility = prompted
         if !prompted { openPane("Privacy_Accessibility") }
     }
+
+    private static let clearedKey = "accessibilityClearedFor"
+
+    /// This build's code directory hash: what macOS tells one build of the app from another by.
+    private static let build: String? = {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
+              let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else { return nil }
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }()
 
     func openPane(_ anchor: String) {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
