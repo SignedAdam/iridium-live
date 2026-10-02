@@ -28,7 +28,7 @@ final class ControlWindowController {
 
     /// The whole control's opacity (applied to the window, so the blur behind the glass fades with it).
     var opacity: CGFloat {
-        didSet { window.animator().alphaValue = opacity }
+        didSet { if !model.settings.controlHidden { window.animator().alphaValue = opacity } }
     }
 
     init(model: AppModel, notes: NotesEditor, screen: NSScreen) {
@@ -62,8 +62,9 @@ final class ControlWindowController {
             MainActor.assumeIsolated { self?.recover() }
         }
 
-        // Arrive softly: fade in while rising a few points.
+        // Arrive softly: fade in while rising a few points (unless it was hidden when the app last quit).
         window.alphaValue = 0
+        guard !model.settings.controlHidden else { return }
         window.setFrameOrigin(NSPoint(x: target.minX, y: target.minY - 10))
         window.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -71,6 +72,27 @@ final class ControlWindowController {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().alphaValue = opacity
             window.animator().setFrame(target, display: true)  // a window's frame animates; its origin alone does not
+        }
+    }
+
+    /// Out of sight, or back where it was: a short fade either way.
+    func setHidden(_ hidden: Bool) {
+        if hidden {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.18
+                window.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.model.settings.controlHidden else { return }
+                    self.window.orderOut(nil)
+                }
+            })
+        } else {
+            window.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                window.animator().alphaValue = opacity
+            }
         }
     }
 

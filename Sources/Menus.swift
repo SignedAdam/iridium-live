@@ -65,6 +65,11 @@ enum MenuPanel {
         }
     }
 
+    /// True for a moment after a menu closed: the click that closed it was also on whatever opens it, which must then
+    /// not open it again.
+    static var justClosed: Bool { closedAt.map { Date().timeIntervalSince($0) < 0.3 } ?? false }
+    private static var closedAt: Date?
+
     static func dismiss() {
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors = []
@@ -75,6 +80,7 @@ enum MenuPanel {
         hovered.id = nil
         card?.orderOut(nil)
         card = nil
+        if panel != nil { closedAt = Date() }
         panel?.orderOut(nil)
         panel = nil
     }
@@ -418,5 +424,32 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
         MenuItem(id: "library", title: "My notes", symbol: "tray.full", action: { model.showMyNotes() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: { model.toggleSettings() }),
+        .separator(),
+        MenuItem(id: "hide", title: "Hide control", symbol: "eye.slash", action: { model.hideControl() }),
+        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { NSApp.terminate(nil) }),
+    ]
+}
+
+/// The menu bar icon's menu: recording, the control shown or hidden, the panes (which bring the control back), the
+/// models and quitting.
+@MainActor
+func statusMenuItems(_ model: AppModel) -> [MenuItem] {
+    let hidden = model.settings.controlHidden
+    let shown: (@escaping @MainActor () -> Void) -> @MainActor () -> Void = { open in { model.showControl(); open() } }
+    return [
+        MenuItem(id: "record", title: model.recording ? "Stop recording" : "Start recording",
+                 symbol: model.recording ? "stop.circle" : "record.circle", action: { model.toggleRecording() }),
+        .separator(),
+        MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
+                 action: { hidden ? model.showControl() : model.hideControl() }),
+        MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: shown { model.toggleNotes() }),
+        MenuItem(id: "library", title: "My notes", symbol: "tray.full", action: shown { model.showMyNotes() }),
+        MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: shown { model.toggleHistory() }),
+        MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: shown { model.toggleSettings() }),
+        .separator(),
+        MenuItem(id: "unload", title: "Unload models", symbol: "eject", enabled: model.speech.state != "unloaded",
+                 action: { model.onUnload() }),
+        .separator(),
+        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { NSApp.terminate(nil) }),
     ]
 }

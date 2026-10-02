@@ -197,6 +197,16 @@ final class AppModel {
         toggle(.history)
     }
 
+    /// Puts the floating control out of sight. Hotkeys, captions and the chat button carry on; the menu bar icon
+    /// brings it back.
+    func hideControl() {
+        settings.controlHidden = true
+    }
+
+    func showControl() {
+        settings.controlHidden = false
+    }
+
     /// Opens the notes pane on the list of saved notes ("My notes"), leaving note keeping as it was.
     func showMyNotes() {
         notesView = .library

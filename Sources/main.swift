@@ -34,11 +34,14 @@ MainActor.assumeIsolated {
     let idle = IdleUnloader()
     let recordings = support.appendingPathComponent("Recordings")
     let dock = ChatDock(model: model, directory: support)
+    let statusItem = StatusItem(model: model)
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
     // Microphone, Accessibility, the cleanup keys and opening at login, in a window of their own. It never holds the
     // app up: whatever is missing only costs the part of the app that needs it.
-    if Setup.shared.needsOnboarding { OnboardingPanel.show(on: screen) }
+    if Setup.shared.needsOnboarding {
+        OnboardingPanel.show(on: screen, tint: model.settings.glassTint, opacity: model.settings.controlOpacity)
+    }
 
     let engine: Engine
     do {
@@ -213,6 +216,7 @@ MainActor.assumeIsolated {
         if new.hotkeys != old.hotkeys { hotkeys.hotkeys = new.hotkeys }
         captions.apply(new)
         control.opacity = new.controlOpacity
+        if new.controlHidden != old.controlHidden { control.setHidden(new.controlHidden) }
     }
     let memory = MemoryMonitor(enginePID: engine.pid)
     memory.onReading = { model.memory = $0 }
@@ -240,5 +244,5 @@ MainActor.assumeIsolated {
         source.activate()
         return source
     }
-    withExtendedLifetime((memory, exits)) { app.run() }
+    withExtendedLifetime((memory, exits, statusItem)) { app.run() }
 }

@@ -11,12 +11,13 @@ final class OnboardingPanel {
     private let panel: KeyPanel
     private let setup = Setup.shared
 
-    static func show(on screen: NSScreen) {
+    /// Shows the setup window on `screen`, drawn with the same glass tint and opacity as the control.
+    static func show(on screen: NSScreen, tint: Double, opacity: Double) {
         if let open { open.panel.makeKeyAndOrderFront(nil); return }
-        open = OnboardingPanel(screen: screen)
+        open = OnboardingPanel(screen: screen, tint: tint, opacity: opacity)
     }
 
-    private init(screen: NSScreen) {
+    private init(screen: NSScreen, tint: Double, opacity: Double) {
         let width: CGFloat = 460
         let area = screen.visibleFrame
         panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
@@ -35,7 +36,7 @@ final class OnboardingPanel {
             OnboardingPanel.open = nil
         }
         // The window follows the content's height (a key being typed adds a row), so nothing is ever cut off.
-        let controller = NSHostingController(rootView: OnboardingView(setup: setup, done: close)
+        let controller = NSHostingController(rootView: OnboardingView(setup: setup, tint: tint, done: close)
             .frame(width: width)
             .fixedSize(horizontal: false, vertical: true))
         controller.sizingOptions = [.preferredContentSize]
@@ -45,7 +46,7 @@ final class OnboardingPanel {
                               width: size.width, height: size.height), display: true)
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
-        panel.animator().alphaValue = 1
+        panel.animator().alphaValue = opacity
     }
 }
 
@@ -56,8 +57,10 @@ private final class KeyPanel: NSPanel {
 
 private struct OnboardingView: View {
     @Bindable var setup: Setup
+    let tint: Double
     let done: () -> Void
     @State private var editing: String?
+    @State private var keysLater = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -65,7 +68,7 @@ private struct OnboardingView: View {
                 Text("Iridium Live")
                     .font(tiktok(17, "Medium"))
                     .foregroundStyle(.white.opacity(0.95))
-                Text("Four things, all optional. Skip any of them and only that part waits.")
+                Text("The first two let it hear you and type for you. The rest is up to you.")
                     .font(tiktok(12))
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
@@ -81,20 +84,26 @@ private struct OnboardingView: View {
                     Button("Allow", action: setup.askForAccessibility).buttonStyle(PanelButton(prominent: true))
                 }
             }
-            Step(title: "AI cleanup", detail: keysDetail, done: setup.keys.values.contains(true)) {
-                if !setup.importable().isEmpty {
-                    Button("Import from ~/.env", action: setup.importFromDotEnv).buttonStyle(PanelButton(prominent: false))
+            Step(title: "AI cleanup", detail: keysDetail, done: setup.keys.values.contains(true), optional: true) {
+                if !setup.keys.values.contains(true) {
+                    Button(keysLater ? "Set up now" : "Set up later") {
+                        withAnimation(.easeOut(duration: 0.2)) { keysLater.toggle() }
+                    }
+                    .buttonStyle(PanelButton(prominent: false))
                 }
             }
-            VStack(spacing: 0) {
-                ForEach(ApiKey.all) { key in
-                    KeyRow(key: key, stored: setup.keys[key.id] == true,
-                           editing: Binding(get: { editing == key.id },
-                                            set: { editing = $0 ? key.id : nil }),
-                           save: { setup.store($0, for: key) })
+            if !keysLater {
+                VStack(spacing: 0) {
+                    ForEach(ApiKey.all) { key in
+                        KeyRow(key: key, stored: setup.keys[key.id] == true,
+                               editing: Binding(get: { editing == key.id },
+                                                set: { editing = $0 ? key.id : nil }),
+                               save: { setup.store($0, for: key) })
+                    }
                 }
+                .padding(.leading, 26)
+                .transition(.opacity)
             }
-            .padding(.leading, 26)
             Step(title: "Open at login", detail: setup.isBundled ? "Start Iridium Live with the Mac."
                                                                  : "Needs the app in /Applications.",
                  done: setup.openAtLogin) {
@@ -111,7 +120,7 @@ private struct OnboardingView: View {
             }
         }
         .padding(20)
-        .background(Glass(cornerRadius: 18, tint: 1))
+        .background(Glass(cornerRadius: 18, tint: tint))
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .padding(10)
         .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
@@ -131,26 +140,43 @@ private struct OnboardingView: View {
 
     private var keysDetail: String {
         let held = ApiKey.all.filter { setup.keys[$0.id] == true }.map(\.name)
-        return held.isEmpty ? "A key for Groq or OpenRouter lets cleanup run off this Mac."
-                            : "\(held.joined(separator: " and ")) ready."
+        if !held.isEmpty { return "\(held.joined(separator: " and ")) ready." }
+        return keysLater ? "Later, in Settings under Setup. Dictation works without it."
+                         : "Optional. A Groq or OpenRouter key lets a model tidy what you say."
     }
 }
 
-/// One step: a mark that fills in when it is settled, what it is for, and its control on the right.
+/// One step: a mark that lights up soft green when it is settled, what it is for (tagged when it is optional), and
+/// its control on the right.
 private struct Step<Control: View>: View {
+    static var settled: Color { Color(red: 0.45, green: 0.88, blue: 0.6) }
+
     let title: String
     let detail: String
     let done: Bool
+    var optional = false
     @ViewBuilder let control: Control
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 14))
-                .foregroundStyle(done ? .white.opacity(0.9) : .white.opacity(0.28))
+                .foregroundStyle(done ? Self.settled : .white.opacity(0.28))
+                .shadow(color: Self.settled.opacity(done ? 0.55 : 0), radius: 5)
                 .frame(width: 14, height: 18)
+                .animation(.easeOut(duration: 0.3), value: done)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(tiktok(13.5, "Medium")).foregroundStyle(.white.opacity(0.92))
+                HStack(spacing: 7) {
+                    Text(title).font(tiktok(13.5, "Medium")).foregroundStyle(.white.opacity(0.92))
+                    if optional {
+                        Text("Optional")
+                            .font(tiktok(10, "Medium"))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .padding(.horizontal, 6)
+                            .frame(height: 16)
+                            .background(Capsule().strokeBorder(.white.opacity(0.22)))
+                    }
+                }
                 Text(detail).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -184,7 +210,9 @@ private struct KeyRow: View {
                     .onSubmit { commit() }
                 Button("Save", action: commit).buttonStyle(PanelButton(prominent: true))
             } else {
-                Text(stored ? "Stored in the keychain" : "Not set")
+                Text(stored ? "In the keychain" : "Not set")
+                    .lineLimit(1)
+                    .fixedSize()
                     .font(tiktok(11.5)).foregroundStyle(.white.opacity(stored ? 0.45 : 0.3))
                 Spacer(minLength: 0)
                 Button(stored ? "Change" : "Set") { text = ""; editing = true }

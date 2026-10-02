@@ -119,9 +119,12 @@ usual install paths, so it works launched from Finder with no shell behind it. T
 first time it is needed, with progress in Settings.
 
 On its first launch the app opens a setup window: the microphone, Accessibility (which typing and hotkeys need), your
-Groq and OpenRouter keys, and whether it opens at login. Keys are kept in the login keychain, and can be imported
-from `~/.env` with one click if they are there. Everything is skippable, and the same rows live in Settings under
+Groq and OpenRouter keys, and whether it opens at login. Keys are kept in the login keychain. The keys can wait (Set up
+later): dictation works without them, and everything else is skippable too. The same rows live in Settings under
 **Setup**.
+
+A waveform in the menu bar (red while recording) opens the app's menu: start or stop recording, show or hide the
+floating control, notes, history, settings, unload the models, and quit.
 
 One optional extra. Without a code-signing certificate the app is signed ad-hoc, and an ad-hoc signature changes with
 every build, so macOS treats each build as a new app and asks for the microphone and Accessibility grants again.

@@ -53,23 +53,4 @@ struct ApiKey: Identifiable, Sendable {
     static let openRouter = ApiKey(id: "openrouter", name: "OpenRouter", variable: "OPENROUTER_API_KEY",
                                    site: "openrouter.ai/keys")
     static let all = [groq, openRouter]
-
-    /// The keys found in `~/.env`, so they can be offered for import instead of typed again. Read only when the user
-    /// asks for it; nothing is copied without a click.
-    static func inDotEnv() -> [String: String] {
-        let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".env")
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return [:] }
-        var found: [String: String] = [:]
-        for line in text.split(whereSeparator: \.isNewline) {
-            let statement = line.hasPrefix("export ") ? line.dropFirst(7) : line[...]
-            guard let split = statement.firstIndex(of: "=") else { continue }
-            let name = statement[..<split].trimmingCharacters(in: .whitespaces)
-            var value = statement[statement.index(after: split)...].trimmingCharacters(in: .whitespaces)
-            if value.count > 1, let quote = value.first, quote == "\"" || quote == "'", value.hasSuffix(String(quote)) {
-                value = String(value.dropFirst().dropLast())
-            }
-            if let key = all.first(where: { $0.variable == name }), !value.isEmpty { found[key.id] = value }
-        }
-        return found
-    }
 }

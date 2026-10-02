@@ -77,8 +77,17 @@ final class Setup {
     // MARK: - Accessibility
 
     /// Asks for Accessibility access: the system's own prompt, and the pane it leads to, since the prompt only
-    /// appears the first time. `watch()` picks the grant up as soon as it is given.
+    /// appears the first time. `watch()` picks the grant up as soon as it is given. Any entry already in the list is
+    /// cleared first: an entry made for an earlier build of the app (each build is signed on its own unless the
+    /// stable certificate is in use) shows as switched on yet never applies to this one.
     func askForAccessibility() {
+        if let bundleID = Bundle.main.bundleIdentifier, isBundled {
+            let reset = Process()
+            reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            reset.arguments = ["reset", "Accessibility", bundleID]
+            try? reset.run()
+            reset.waitUntilExit()
+        }
         let prompted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         accessibility = prompted
         if !prompted { openPane("Privacy_Accessibility") }
@@ -94,21 +103,6 @@ final class Setup {
     func store(_ value: String?, for key: ApiKey) {
         let status = Keychain.shared.set(value, for: key.id)
         trouble = status == errSecSuccess ? nil : "The keychain refused the \(key.name) key (\(status))."
-        refresh()
-    }
-
-    /// The keys `~/.env` holds that are not stored yet. Nothing is read from it unless the user asks.
-    func importable() -> [ApiKey] {
-        let found = ApiKey.inDotEnv()
-        return ApiKey.all.filter { found[$0.id] != nil && keys[$0.id] != true }
-    }
-
-    /// Copies the keys from `~/.env` into the keychain, on the user's say-so.
-    func importFromDotEnv() {
-        let found = ApiKey.inDotEnv()
-        for key in ApiKey.all where keys[key.id] != true {
-            if let value = found[key.id] { Keychain.shared.set(value, for: key.id) }
-        }
         refresh()
     }
 

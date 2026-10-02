@@ -19,12 +19,13 @@ struct Settings: Codable, Equatable {
     var captionSeconds = 4.0
     var captionOpacity = 1.0
     var glassTint = 0.0
-    var controlOpacity = 1.0
+    var controlOpacity = 0.95
     var hotkeys: [Hotkey] = []
     var saveAudio = false
     var audioSplitSeconds = 2.0
     var autoUnload = false
     var autoUnloadMinutes = 30
+    var controlHidden = false  // the floating control is out of sight; the menu bar icon brings it back
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     /// Where cleanup can run, each with its models, the default first (chosen by measured latency and accuracy on
@@ -100,5 +101,6 @@ extension Settings {
         audioSplitSeconds = value(.audioSplitSeconds, fallback.audioSplitSeconds)
         autoUnload = value(.autoUnload, fallback.autoUnload)
         autoUnloadMinutes = value(.autoUnloadMinutes, fallback.autoUnloadMinutes)
+        controlHidden = value(.controlHidden, fallback.controlHidden)
     }
 }
