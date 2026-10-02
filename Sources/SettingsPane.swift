@@ -98,7 +98,7 @@ struct SettingsPane: View {
                             .frame(width: 180)
                         }
                         Row("Instructions", detail: instructionsPreview) {
-                            Button(model.settings.cleanupInstructions.isEmpty ? "Add" : "Edit", action: model.onEditInstructions)
+                            Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
                                 .buttonStyle(GlassButton())
                         }
                         Row("Polish each recording", detail: "One more pass over the whole of it when you stop") {

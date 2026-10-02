@@ -413,6 +413,23 @@ private struct ScreenRectReader: NSViewRepresentable {
     }
 }
 
+/// The app has no menu bar of its own, yet its text fields want ⌘X ⌘C ⌘V ⌘A ⌘Z: an Edit menu nobody sees is what
+/// routes them to whichever field has the keyboard.
+@MainActor
+func installEditMenu(in app: NSApplication) {
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let menu = NSMenu()
+    menu.addItem(NSMenuItem())  // the app menu's place
+    menu.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
+    app.mainMenu = menu
+}
+
 /// The control's own right-click menu.
 @MainActor
 func barMenuItems(_ model: AppModel) -> [MenuItem] {

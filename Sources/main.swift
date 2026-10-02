@@ -17,6 +17,7 @@ MainActor.assumeIsolated {
 
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
+    installEditMenu(in: app)
     let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
     let model = AppModel()
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -142,7 +143,8 @@ MainActor.assumeIsolated {
     }
     idle.arm(after: model.idleUnloadMinutes)
     model.onEditInstructions = {
-        InstructionsPanel.show(text: model.settings.cleanupInstructions, on: control.window.screen ?? screen) {
+        InstructionsPanel.show(text: model.settings.cleanupInstructions, on: control.window.screen ?? screen,
+                               tint: model.settings.glassTint, opacity: model.settings.controlOpacity) {
             model.settings.cleanupInstructions = $0
         }
     }
