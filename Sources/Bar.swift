@@ -24,8 +24,7 @@ struct ControlBar: View {
                 .padding(.leading, 2)
             IconToggle(symbol: "clock.arrow.circlepath", isOn: model.pane == .history, tip: "History", action: model.toggleHistory)
                 .padding(.leading, 2)
-            IconToggle(symbol: "gearshape", isOn: model.pane == .settings, badge: model.memoryWarning,
-                       tip: model.memoryWarning ? "Settings: memory is low" : "Settings", action: model.toggleSettings)
+            IconToggle(symbol: "gearshape", isOn: model.pane == .settings, tip: "Settings", action: model.toggleSettings)
                 .padding(.leading, 2)
         }
         .frame(width: AppModel.barSize.width, height: AppModel.barSize.height, alignment: .leading)

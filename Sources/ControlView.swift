@@ -92,16 +92,14 @@ struct ControlView: View {
 }
 
 /// The lines beside the bar, whatever else is open: what the control is doing (where the words go while recording,
-/// "Finishing" while the engine works through what it heard after a stop) and, in red, that memory is tight; the
-/// memory line sits nearest the bar. Only labels: drags pass through them to the glass (the settings button carries
-/// a red dot too).
+/// "Finishing" while the engine works through what it heard after a stop). Only labels: drags pass through them to
+/// the glass.
 struct StatusLines: View {
     @Bindable var model: AppModel
 
     var body: some View {
         let down = model.opensDown
         VStack(spacing: AppModel.lineSpacing - 15) {
-            if down { memoryLine }
             if let activity = model.activity {
                 HStack(spacing: 6) {
                     if model.recording {
@@ -115,29 +113,10 @@ struct StatusLines: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .transition(.opacity)
             }
-            if !down { memoryLine }
         }
         .padding(down ? .bottom : .top, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: down ? .bottom : .top)
         .allowsHitTesting(false)
-    }
-
-    @ViewBuilder private var memoryLine: some View {
-        if model.memoryWarning {
-            HStack(spacing: 6) {
-                Image(systemName: "memorychip").font(.system(size: 11, weight: .semibold))
-                Text(memoryText).font(tiktok(12, "Medium"))
-            }
-            .frame(height: 15)
-            .foregroundStyle(accent)
-            .transition(.opacity)
-        }
-    }
-
-    private var memoryText: String {
-        guard let memory = model.memory else { return "Memory is low" }
-        let used = Double(memory.physical - min(memory.physical, memory.available)) / 1_073_741_824
-        return String(format: "Memory is low: %.1f of %.0f GB in use", used, Double(memory.physical) / 1_073_741_824)
     }
 }
 

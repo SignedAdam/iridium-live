@@ -11,7 +11,7 @@ struct SettingsPane: View {
                 Section("Memory") {
                     if let reading = model.memory {
                         Row("Iridium Live") { Figure(gigabytes(reading.total)) }
-                        Row("Your Mac", detail: reading.warning ? lowMemoryAdvice : nil, alert: true) {
+                        Row("Your Mac") {
                             Figure("\(gigabytes(reading.physical - min(reading.physical, reading.available), unit: false)) of \(String(format: "%.0f GB", Double(reading.physical) / 1_073_741_824))")
                         }
                     }
@@ -29,7 +29,8 @@ struct SettingsPane: View {
                     .dimmed(!model.settings.autoUnload)
                 }
                 Section("Speech") {
-                    Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
+                    Row("Model", detail: speechMemoryAdvice ?? status(model.speech),
+                        alert: model.speech.state == "error" || speechMemoryAdvice != nil) {
                         Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
                     }
                 }
@@ -68,7 +69,7 @@ struct SettingsPane: View {
                         Row("Runs on") {
                             Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                         }
-                        Row("Model") {
+                        Row("Model", detail: cleanupMemoryAdvice, alert: true) {
                             let provider = model.settings.cleanupProvider
                             let options = Settings.cleanupModels(on: provider)
                             GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
@@ -138,9 +139,15 @@ struct SettingsPane: View {
         .foregroundStyle(.white.opacity(0.88))
     }
 
-    private var lowMemoryAdvice: String {
-        model.settings.cleanupEnabled && model.settings.cleanupProvider == Settings.localCleanup
-            ? "Running low. Cleanup on Groq would free about 2.5 GB." : "Running low. Closing other apps helps."
+    /// Memory is tight while the speech model is loaded: said under the speech model, where it can be changed.
+    private var speechMemoryAdvice: String? {
+        model.memoryWarning && model.speech.state == "ready" ? "Memory is low. Unloading frees about 1 GB." : nil
+    }
+
+    /// Memory is tight while a local cleanup model is loaded: said under that model.
+    private var cleanupMemoryAdvice: String? {
+        model.memoryWarning && model.settings.cleanupEnabled && model.settings.cleanupProvider == Settings.localCleanup
+            && model.cleanup.state == "ready" ? "Memory is low. Groq frees about 2.5 GB." : nil
     }
 
     /// The start of the user's cleanup instructions, as a reminder under the row.

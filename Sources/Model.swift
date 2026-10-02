@@ -116,7 +116,7 @@ final class AppModel {
     var onDeleteHistory: (UUID) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
 
-    /// Memory is tight: the control says so in red, whatever is open.
+    /// Memory is tight. Settings says so beside a model that is loaded; the control itself stays quiet.
     var memoryWarning: Bool { memory?.warning == true }
 
     var paneHeight: CGFloat {
@@ -128,10 +128,9 @@ final class AppModel {
         }
     }
 
-    /// The status lines above the bar: what it is doing, and the memory warning.
+    /// The status line beside the bar: what it is doing.
     var linesHeight: CGFloat {
-        let lines = (activity == nil ? 0 : 1) + (memoryWarning ? 1 : 0)
-        return lines == 0 ? 0 : Self.lineHeight + CGFloat(lines - 1) * Self.lineSpacing
+        activity == nil ? 0 : Self.lineHeight
     }
 
     /// The glass: the bar alone, or opened upward into a pane, with any status lines just above the bar.
