@@ -63,20 +63,36 @@ func jsonString(_ text: String) -> String {
 
 /// The engine as a child process: commands go to its stdin, events come back from its stdout. Its stderr is ours in a
 /// terminal (`make run`), and otherwise goes to `log`, which is where a hang or a crash leaves its trace.
-/// When it exits, so does the app. It is given its own environment rather than inheriting a shell's: launched from
-/// Finder there is none, and the API keys come from the keychain.
+/// When it exits, so does the app, unless it asked to be started again first ("restart": its microphone stuck in
+/// CoreAudio, which only a new process gets back); then a fresh one takes its place and `onRestart` brings it up to
+/// date. It is given its own environment rather than inheriting a shell's: launched from Finder there is none, and
+/// the API keys come from the keychain.
 @MainActor
 final class Engine {
     /// The engine's log when the app was opened from Finder: this file and one older, 5 MB each at most.
     static let log = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/Iridium Live/engine.log")
 
-    private let process = Process()
-    private let commands = Pipe()
+    /// After a restart: the new engine knows none of the settings the old one was sent.
+    var onRestart: () -> Void = {}
+    private let command: [String]
+    private let environment: [String: String]
+    private let directory: URL
+    private let onEvent: @MainActor @Sendable (EngineEvent) -> Void
+    private var process = Process()
+    private var commands = Pipe()
 
     init(command: [String], environment: [String: String], directory: URL,
          onEvent: @escaping @MainActor @Sendable (EngineEvent) -> Void) throws {
-        let events = Pipe()
+        self.command = command
+        self.environment = environment
+        self.directory = directory
+        self.onEvent = onEvent
+        try launch()
+    }
+
+    private func launch() throws {
+        let process = Process(), commands = Pipe(), events = Pipe()
         process.executableURL = URL(fileURLWithPath: command[0])
         process.arguments = Array(command.dropFirst())
         process.environment = environment
@@ -85,14 +101,22 @@ final class Engine {
         process.standardOutput = events
         if isatty(STDERR_FILENO) == 0, let log = Self.openLog() { process.standardError = log }
         try process.run()
-        let output = events.fileHandleForReading
-        Task.detached {
+        self.process = process
+        self.commands = commands
+        let output = events.fileHandleForReading, onEvent = self.onEvent
+        Task.detached { [weak self] in
+            var restart = false
             do {
                 for try await line in output.bytes.lines {
-                    if let event = EngineEvent(line: line) { await onEvent(event) }
+                    guard let event = EngineEvent(line: line) else { continue }
+                    if event.kind == "restart" { restart = true }
+                    await onEvent(event)
                 }
             } catch {}  // a broken pipe means the engine is gone: same as a clean exit
-            await MainActor.run { NSApplication.shared.terminate(nil) }
+            await MainActor.run {
+                guard restart, let self, (try? self.launch()) != nil else { return NSApplication.shared.terminate(nil) }
+                self.onRestart()
+            }
         }
     }
 

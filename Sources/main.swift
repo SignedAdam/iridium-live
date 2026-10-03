@@ -129,12 +129,23 @@ MainActor.assumeIsolated {
     let archive = { (settings: Settings) in
         engine.send(settings.saveAudio ? "archive on \(settings.audioSplitSeconds) \(recordings.path)" : "archive off")
     }
-    engine.send("hold \(model.settings.typingHold)")
-    if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
-    if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
-    engine.send(model.settings.cleanupPolish ? "polish on" : "polish off")
-    if model.settings.cleanupBenchmark { engine.send("benchmark on") }
-    if model.settings.saveAudio { archive(model.settings) }
+    /// What the engine is told at launch, and again after a restart: a new engine knows none of it.
+    let configure = {
+        engine.send("hold \(model.settings.typingHold)")
+        if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
+        if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
+        engine.send(model.settings.cleanupPolish ? "polish on" : "polish off")
+        if model.settings.cleanupBenchmark { engine.send("benchmark on") }
+        if model.settings.saveAudio { archive(model.settings) }
+    }
+    configure()
+    engine.onRestart = {
+        model.ready = false  // nothing records until the new engine has its model in
+        model.engineStalled = false
+        model.speech = ModelStatus(state: "loading")
+        engine.send("asr \(model.settings.speechModel)")  // the launch command names the model the app started with
+        configure()
+    }
     // What the dictation is about to continue goes with it: the cleanup model reads the end of the note in front of
     // every phrase, and the pass over the whole recording knows what it was written into.
     model.onRecord = { recording in
@@ -224,7 +235,7 @@ MainActor.assumeIsolated {
         control.opacity = new.controlOpacity
         if new.controlHidden != old.controlHidden { control.setHidden(new.controlHidden) }
     }
-    let memory = MemoryMonitor(enginePID: engine.pid)
+    let memory = MemoryMonitor { engine.pid }
     memory.onReading = { model.memory = $0 }
 
     // Nothing may be lost on the way out: flush the notes and the history on a normal quit and on the signals that

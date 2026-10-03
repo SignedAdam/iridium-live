@@ -44,6 +44,9 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
                                                    cancel has been seen through, even one that left nothing behind
   {"kind": "stalled"}                              the transcriber has held one item for STALL_S: stuck, with
                                                    every thread's stack written to stderr
+  {"kind": "restart"}                              the microphone stuck closing (a CoreAudio deadlock): the
+                                                   recording it ended is out, and the engine exits to be started
+                                                   again, which gets a working one
   {"kind": "partial" | "final", "text": ...}       caption: the whole in-flight phrase, replacing the previous one
                                                    (final also carries "raw" and "cleanup_ms" when cleanup is on)
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
@@ -98,11 +101,12 @@ import segmenter as seg
 
 TYPE_HOLD_S = 0.7  # a word is typed once the phrase up to it has read the same for this much audio
 STALL_S = 90.0     # one item in the transcriber's hands this long is a hang: a model load or a cleanup pass ends well before
+STOP_WAIT_S = 3.0  # closing the microphone takes milliseconds; CoreAudio can also deadlock in it and never return
 BLOCK = int(0.05 * seg.SAMPLE_RATE)
 CACHE_DIR = Path.home() / ".cache" / "iridium-live"
 if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():  # the app's former name: keep its models
     (CACHE_DIR.parent / "phonon-live").rename(CACHE_DIR)
-STOP, QUIT, CONTROL, CANCEL = "stop", "quit", "control", "cancel"  # markers in the audio queue
+STOP, QUIT, CONTROL, CANCEL, RESTART = "stop", "quit", "control", "cancel", "restart"  # markers in the audio queue
 
 
 class Block(NamedTuple):
@@ -218,7 +222,10 @@ class Events:
 
     def send(self, event: dict) -> None:
         with self.lock:
-            print(json.dumps(event), flush=True)
+            try:
+                print(json.dumps(event), flush=True)
+            except BrokenPipeError:
+                os._exit(0)  # the app is gone, and with it everyone this engine works for
 
 
 class Work:
@@ -383,14 +390,17 @@ class Recorder:
         self.on_cancel = on_cancel or (lambda: None)
         self.lock = threading.Lock()
         self.close_source = None  # set while recording
+        self.stuck = False  # a close never returned: this process has lost the microphone for good
 
     def start(self) -> None:
         with self.lock:
             if self.close_source:
                 return
             try:
+                if self.stuck:  # this engine is on its way out: whatever it recorded now would go with it
+                    raise RuntimeError("the microphone is stuck; the engine is restarting")
                 self.close_source = self._open_file() if self.wav else self._open_microphone()
-            except Exception as exc:  # no microphone or no permission: say why and stay stopped
+            except Exception as exc:  # no microphone, no permission, or stuck: say why and stay stopped
                 print(f"could not start recording: {exc}", file=sys.stderr, flush=True)
                 self.events.send({"kind": "state", "recording": False})
                 self.events.send({"kind": "work", "pending": False})  # nothing was heard, so nothing is left to wait for
@@ -402,9 +412,10 @@ class Recorder:
         with self.lock:
             if not self.close_source:
                 return
-            self.close_source()
-            self.close_source = None
+            self._close()
             self.audio.put(STOP)  # the transcriber finishes the phrase when it gets here
+            if self.stuck:
+                self.audio.put(RESTART)  # ...and then makes way for an engine with a working microphone
         print("stopped", file=sys.stderr, flush=True)
         self.events.send({"kind": "state", "recording": False})
         self.on_stop()
@@ -417,8 +428,7 @@ class Recorder:
             if not self.close_source:
                 return
             self.on_cancel()
-            self.close_source()
-            self.close_source = None
+            self._close()
             markers = []
             while True:
                 try:
@@ -430,8 +440,23 @@ class Recorder:
             for item in markers:
                 self.audio.put(item)
             self.audio.put(CANCEL)
+            if self.stuck:
+                self.audio.put(RESTART)
         print("cancelled", file=sys.stderr, flush=True)
         self.events.send({"kind": "state", "recording": False})
+
+    def _close(self) -> None:
+        """Closes the source on a thread of its own, waiting STOP_WAIT_S at most. CoreAudio can deadlock in a stream
+        stop (PortAudio's start/stop listener against AudioOutputUnitStop) and never return. Commands must keep
+        flowing regardless, so the stop is left behind, the recording is finished from what it heard, and the engine
+        is restarted: a new process gets a working microphone."""
+        closing = threading.Thread(target=self.close_source, daemon=True)
+        closing.start()
+        closing.join(STOP_WAIT_S)
+        self.close_source = None
+        if closing.is_alive():
+            self.stuck = True
+            print("the microphone did not close: the engine restarts after this recording", file=sys.stderr, flush=True)
 
     def _capture(self, block: np.ndarray) -> None:
         self.audio.put(Block(time.time() - block.size / seg.SAMPLE_RATE, block))
@@ -582,10 +607,15 @@ def main() -> None:
                 seconds, _, directory = rest.partition(" ")
                 archive.configure(Path(directory).expanduser() if mode == "on" else None,
                                   float(seconds or 0))
-        recorder.stop()
-        audio.put(QUIT)
 
-    threading.Thread(target=read_commands, daemon=True).start()
+    def commands_then_quit() -> None:
+        try:
+            read_commands()
+        finally:  # however reading ends, the transcriber is told: an engine nobody can reach must not linger
+            recorder.stop()
+            audio.put(QUIT)
+
+    threading.Thread(target=commands_then_quit, daemon=True).start()
     events.send({"kind": "state", "recording": False})
 
     started = time.perf_counter()
@@ -731,6 +761,10 @@ def main() -> None:
                 else:
                     finish_dictation()  # the whole recording, polished, before the speaker is told it is done
                     work.done()
+            elif block is RESTART:  # the recording before it is out: a fresh engine gets a working microphone
+                archive.close()
+                events.send({"kind": "restart"})
+                os._exit(0)
             elif block is CANCEL:
                 session.discard()  # the phrase in flight is not decoded, typed or kept
                 archive.discard()
@@ -750,6 +784,7 @@ def main() -> None:
     except (KeyboardInterrupt, BrokenPipeError):
         pass
     archive.close()
+    os._exit(0)  # not the interpreter's own exit: it waits on threads, and a stuck audio stop is one that never ends
 
 
 if __name__ == "__main__":

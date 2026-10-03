@@ -23,12 +23,12 @@ struct MemoryReading: Equatable {
 @MainActor
 final class MemoryMonitor {
     var onReading: (MemoryReading) -> Void = { _ in }
-    private let enginePID: pid_t
+    private let enginePID: () -> pid_t  // a restarted engine is a new process
     private let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
     private var pressured = false
     private var timer: Timer?
 
-    init(enginePID: pid_t) {
+    init(enginePID: @escaping () -> pid_t) {
         self.enginePID = enginePID
         pressure.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
@@ -44,7 +44,7 @@ final class MemoryMonitor {
     }
 
     private func sample() {
-        let engine = Self.processTree(enginePID).reduce(0) { $0 + Self.footprint($1) }
+        let engine = Self.processTree(enginePID()).reduce(0) { $0 + Self.footprint($1) }
         onReading(MemoryReading(app: Self.footprint(getpid()), engine: engine, physical: ProcessInfo.processInfo.physicalMemory,
                                 available: Self.available(), pressured: pressured))
     }
