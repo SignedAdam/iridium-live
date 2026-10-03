@@ -135,8 +135,6 @@ final class AppModel {
     var onAddToNote: (HistoryEntry) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
 
-    var memoryWarning: Bool { memory?.warning == true }
-
     var paneHeight: CGFloat {
         switch pane {
         case .notes: (notesView == .library ? Self.libraryHeight : notesHeight + Self.notesHeader) + Self.seam

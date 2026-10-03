@@ -28,8 +28,7 @@ struct SettingsPane: View {
                 }
                 SetupSection()
                 Section("Speech") {
-                    Row("Model", detail: speechMemoryAdvice ?? status(model.speech),
-                        alert: model.speech.state == "error" || speechMemoryAdvice != nil) {
+                    Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
                         Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
                     }
                 }
@@ -231,10 +230,6 @@ struct SettingsPane: View {
         .scrollIndicators(.visible)
         .font(tiktok(13))
         .foregroundStyle(.white.opacity(0.88))
-    }
-
-    private var speechMemoryAdvice: String? {
-        model.memoryWarning && model.speech.state == "ready" ? "Memory is low. Unloading frees about 1 GB." : nil
     }
 
     private var keywordsTip: String {
