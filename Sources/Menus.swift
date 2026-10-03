@@ -2,8 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// One line of a menu: a symbol, a title, a dim shortcut on the right and a checkmark when it is the current choice.
-/// `detail` gives the item a small card beside the menu while the pointer is on it.
 struct MenuItem: Identifiable {
     let id: String
     var title: String
@@ -14,7 +12,6 @@ struct MenuItem: Identifiable {
     var checked = false
     var detail: (@MainActor () -> AnyView)? = nil
     var action: @MainActor () -> Void
-    /// A hairline between groups rather than a row; `separator()` is the only way to make one.
     var isSeparator = false
 
     static func separator() -> MenuItem {
@@ -22,19 +19,14 @@ struct MenuItem: Identifiable {
     }
 }
 
-/// Which row of the open menu the pointer is on: the menu lights that row and `MenuPanel` puts the item's card
-/// beside it.
 @MainActor
 @Observable
 final class MenuHover {
     var id: String?
 }
 
-/// Our own menus, drawn on glass instead of by AppKit: a borderless panel that never takes the keyboard, appears at
-/// once, keeps itself on screen and closes on a click anywhere, Esc, or the app or the Space changing.
 @MainActor
 enum MenuPanel {
-    /// The row the pointer is on in the open menu.
     static let hovered = MenuHover()
     private static let edge: CGFloat = 6
     private static var panel: NSPanel?
@@ -43,7 +35,6 @@ enum MenuPanel {
     private static var observers: [NSObjectProtocol] = []
     private static var spaceObserver: NSObjectProtocol?
 
-    /// A right-click menu: its top-left corner at the pointer, flipped left or up near an edge of the screen.
     static func show(_ items: [MenuItem], at screenPoint: NSPoint) {
         present(items, near: screenPoint) { size, area in
             var x = screenPoint.x
@@ -54,7 +45,6 @@ enum MenuPanel {
         }
     }
 
-    /// A dropdown: under the control, left edges flush, above it when there is no room below.
     static func show(_ items: [MenuItem], under screenRect: NSRect) {
         present(items, near: NSPoint(x: screenRect.midX, y: screenRect.midY)) { size, area in
             var x = screenRect.minX
@@ -65,8 +55,6 @@ enum MenuPanel {
         }
     }
 
-    /// True for a moment after a menu closed: the click that closed it was also on whatever opens it, which must then
-    /// not open it again.
     static var justClosed: Bool { closedAt.map { Date().timeIntervalSince($0) < 0.3 } ?? false }
     private static var closedAt: Date?
 
@@ -85,7 +73,6 @@ enum MenuPanel {
         panel = nil
     }
 
-    /// The pointer has moved onto a row, or off every row. `rowTop` is how far the row's top sits below the menu's.
     static func hover(_ item: MenuItem?, rowTop: CGFloat) {
         hovered.id = item?.id
         show(card: item, rowTop: rowTop)
@@ -109,8 +96,6 @@ enum MenuPanel {
         watch()
     }
 
-    /// The hovered item's card, beside the menu: to its right, or to its left when the right would run off screen,
-    /// with its top level with the hovered row.
     private static func show(card item: MenuItem?, rowTop: CGFloat) {
         guard let panel, let item, let detail = item.detail else {
             card?.orderOut(nil)
@@ -134,7 +119,6 @@ enum MenuPanel {
         card = panel2
     }
 
-    /// A row has been clicked: the menu goes first, then its action runs.
     static func choose(_ item: MenuItem) {
         let action = item.action
         dismiss()
@@ -147,7 +131,7 @@ enum MenuPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false  // like the control's glass: the system shadow draws a dark rim around it
+        panel.hasShadow = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.acceptsMouseMovedEvents = true
         panel.hidesOnDeactivate = false
@@ -158,8 +142,6 @@ enum MenuPanel {
         NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
-    /// Everything that closes the menu: a click outside it (in this app or any other), Esc, the app going to the back
-    /// and the Space changing.
     private static func watch() {
         let mouse: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         if let outside = NSEvent.addLocalMonitorForEvents(matching: mouse, handler: { event in
@@ -176,7 +158,7 @@ enum MenuPanel {
             monitors.append(elsewhere)
         }
         if let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { event in
-            guard event.keyCode == 53 else { return event }  // Esc
+            guard event.keyCode == 53 else { return event }
             MainActor.assumeIsolated { dismiss() }
             return nil
         }) {
@@ -197,7 +179,6 @@ private extension NSPoint {
     var rounded: NSPoint { NSPoint(x: x.rounded(), y: y.rounded()) }
 }
 
-/// The menu itself: rows on smoked glass, growing in over a tenth of a second.
 private struct MenuContent: View {
     let items: [MenuItem]
     @State private var tops: [String: CGFloat] = [:]
@@ -276,7 +257,6 @@ private struct MenuContent: View {
     }
 }
 
-/// The card beside the menu for the hovered item.
 private struct MenuCard: View {
     let content: AnyView
 
@@ -291,8 +271,6 @@ private struct MenuCard: View {
 }
 
 extension View {
-    /// A menu on right-click. The overlay that catches it takes right mouse downs and nothing else, so clicks, drags
-    /// and hovers reach the view below untouched.
     func onRightClick(_ items: @escaping @MainActor () -> [MenuItem]) -> some View {
         overlay(RightClickCatcher(items: items))
     }
@@ -312,7 +290,6 @@ private struct RightClickCatcher: NSViewRepresentable {
     }
 }
 
-/// Invisible, and invisible to the mouse unless a right mouse down is being dispatched.
 final class RightClickView: NSView {
     var items: (@MainActor () -> [MenuItem])?
 
@@ -328,7 +305,6 @@ final class RightClickView: NSView {
     }
 }
 
-/// A pill showing the current choice; clicking it drops our own menu under it, the current choice checked.
 struct GlassDropdown<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
@@ -368,7 +344,6 @@ struct GlassDropdown<Value: Hashable>: View {
     }
 }
 
-/// A dropdown's rows: every option, the current one checked, each with its card.
 @MainActor
 func dropdownItems<Value: Hashable>(_ options: [(Value, String)], selection: Binding<Value>,
                                     detail: (@MainActor (Value) -> AnyView)? = nil) -> [MenuItem] {
@@ -384,7 +359,6 @@ func dropdownItems<Value: Hashable>(_ options: [(Value, String)], selection: Bin
     return items
 }
 
-/// Remembers the control's view so the menu can be put under it in screen coordinates.
 @MainActor
 private final class ViewBox {
     weak var view: NSView?
@@ -413,8 +387,6 @@ private struct ScreenRectReader: NSViewRepresentable {
     }
 }
 
-/// The app has no menu bar of its own, yet its text fields want ⌘X ⌘C ⌘V ⌘A ⌘Z: an Edit menu nobody sees is what
-/// routes them to whichever field has the keyboard.
 @MainActor
 func installEditMenu(in app: NSApplication) {
     let edit = NSMenu(title: "Edit")
@@ -425,12 +397,11 @@ func installEditMenu(in app: NSApplication) {
     edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
     edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
     let menu = NSMenu()
-    menu.addItem(NSMenuItem())  // the app menu's place
+    menu.addItem(NSMenuItem())
     menu.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
     app.mainMenu = menu
 }
 
-/// The control's own right-click menu.
 @MainActor
 func barMenuItems(_ model: AppModel) -> [MenuItem] {
     [
@@ -447,8 +418,6 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
     ]
 }
 
-/// The menu bar icon's menu: recording, the control shown or hidden, the panes (which bring the control back), the
-/// models and quitting.
 @MainActor
 func statusMenuItems(_ model: AppModel) -> [MenuItem] {
     let hidden = model.settings.controlHidden
@@ -471,3 +440,4 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
         MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { NSApp.terminate(nil) }),
     ]
 }
+

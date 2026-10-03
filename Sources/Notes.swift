@@ -1,14 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The notes text, as an AppKit editor (SwiftUI's text editing has no control over undo, cursor or shortcuts at this
-/// level). Hosted in SwiftUI by `NotesEditorView`; reports its size, emptiness, editing state and scroll position to
-/// the model. Every change is kept by `NotesLibrary`, in whichever note is open.
 @MainActor
 final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate {
     static let inset = NSSize(width: 18, height: 14)
     private static let maxTextHeight: CGFloat = 240
-    private static let followSlack: CGFloat = 24  // this close to the end counts as "at the end"
+    private static let followSlack: CGFloat = 24
 
     let view = FadingScrollView(frame: NSRect(x: 0, y: 0, width: AppModel.paneWidth, height: 50))
     private let text = NotesTextView()
@@ -17,13 +14,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     private let attributes: [NSAttributedString.Key: Any]
     private let lineHeight: CGFloat
     private var startsParagraph = false
-    private var glides = 0  // follow-the-end scroll animations in flight
+    private var glides = 0
     private var hiding: Task<Void, Never>?
-    private var block: NSRange?     // what the recording in progress has appended, while it is still ours to replace
-    private var applying = false    // our own edit is going in: it is not the speaker touching the block
+    private var block: NSRange?
+    private var applying = false
 
-    /// Only the notes on screen take clicks and set the pointer; hidden notes give up the keyboard. Once faded out the
-    /// editor is hidden outright, so no text cursor shows over the pane that replaced it.
     var isActive = false {
         didSet {
             text.isActive = isActive
@@ -46,14 +41,14 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         self.library = library
         let font = NSFont(name: "TikTokSans-Regular", size: 15) ?? .systemFont(ofSize: 15)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3  // Return starts the next line, with no gap between paragraphs
+        paragraph.lineSpacing = 3
         attributes = [.font: font, .foregroundColor: NSColor.white.withAlphaComponent(0.92), .paragraphStyle: paragraph]
         lineHeight = ceil(font.ascender - font.descender + font.leading + paragraph.lineSpacing)
         super.init()
 
         view.drawsBackground = false
         view.borderType = .noBorder
-        view.hasVerticalScroller = false  // the SwiftUI indicator shows position, always, whenever there is more
+        view.hasVerticalScroller = false
         view.contentView.postsBoundsChangedNotifications = true
         text.frame = NSRect(origin: .zero, size: view.contentSize)
         text.minSize = .zero
@@ -81,14 +76,13 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         text.canCleanUp = { [model] in model.settings.cleanupEnabled && !model.cleaningNote }
         library.onOpen = { [unowned self] text in show(text) }
         view.documentView = text
-        view.isHidden = true  // until the notes pane opens
+        view.isHidden = true
         view.rim = Self.inset
 
         let center = NotificationCenter.default
         center.addObserver(forName: NSView.boundsDidChangeNotification, object: view.contentView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reportScroll() }
         }
-        // A new size wraps the text differently and shows a different share of it: measure again.
         view.contentView.postsFrameChangedNotifications = true
         center.addObserver(forName: NSView.frameDidChangeNotification, object: view.contentView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.report() }
@@ -101,21 +95,15 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         report()
     }
 
-    /// The end of the note the next phrase lands after, for the cleanup model to read: enough of it to carry a
-    /// sentence the dictation may correct, never enough to be worth sending whole.
     var dictationContext: String {
         String(text.string.suffix(2000))
     }
 
-    /// The next phrase begins a new line (a new recording), and a new block: what this recording appends is tracked
-    /// as one stretch, so the whole of it can be replaced once it has been polished.
     func startParagraph() {
         startsParagraph = true
         block = nil
     }
 
-    /// Add a finished phrase at the end, leaving the cursor, the selection and any edit in progress where they are.
-    /// The note being edited keeps a record of the phrase it came from, so it can be traced back and heard again.
     func append(_ entry: HistoryEntry) {
         let phrase = entry.text
         guard let storage = text.textStorage, !phrase.isEmpty else { return }
@@ -127,8 +115,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         }
         startsParagraph = false
         let start = storage.length + (piece as NSString).length - (phrase as NSString).length
-        // Dictated text is not an edit: ⌘Z steps back through what you typed, and a phrase landing mid-edit never
-        // joins your typing's undo step.
         applying = true
         text.breakUndoCoalescing()
         text.undoManager?.disableUndoRegistration()
@@ -142,10 +128,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         if following { followEnd(animated: true) }
     }
 
-    /// The recording is over and the whole of it came back polished, or a spoken correction changed it mid-recording:
-    /// it replaces exactly what it appended, where it stands, as long as the speaker has not edited inside that block
-    /// since. Like the phrases themselves, this is not an undo step. With `keepingBlock` the block stays tracked, so
-    /// the phrases still to come join it. Says whether the text was replaced.
     @discardableResult
     func replaceDictated(with polished: String, keepingBlock: Bool = false) -> Bool {
         guard let range = block, let storage = text.textStorage, !polished.isEmpty || keepingBlock,
@@ -163,7 +145,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         storage.replaceCharacters(in: range, with: NSAttributedString(string: polished, attributes: attributes))
         text.undoManager?.enableUndoRegistration()
         applying = false
-        if selection.location >= NSMaxRange(range) {  // the cursor was past the block: it keeps its place in the text
+        if selection.location >= NSMaxRange(range) {
             let moved = selection.location + (polished as NSString).length - range.length
             text.setSelectedRange(NSRange(location: min(moved, storage.length), length: 0))
         }
@@ -172,8 +154,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         return true
     }
 
-    /// "Clean up note": the model's version of the whole note, in one undoable edit, so ⌘Z brings the note back as
-    /// it was.
     func replaceAll(with cleaned: String) {
         guard let storage = text.textStorage, !cleaned.isEmpty, cleaned != text.string else { return }
         let whole = NSRange(location: 0, length: storage.length)
@@ -188,12 +168,10 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         block = nil
     }
 
-    /// The block the current recording appended moves with whatever the speaker does around it, and is given up as
-    /// soon as they edit inside it: from then on the text is theirs, and polishing leaves it alone.
     func textStorage(_ storage: NSTextStorage, didProcessEditing edited: NSTextStorageEditActions,
                      range: NSRange, changeInLength delta: Int) {
         guard edited.contains(.editedCharacters), !applying, let current = block else { return }
-        let before = NSRange(location: range.location, length: range.length - delta)  // the range as it was edited
+        let before = NSRange(location: range.location, length: range.length - delta)
         if NSMaxRange(before) <= current.location {
             block = NSRange(location: current.location + delta, length: current.length)
         } else if before.location < NSMaxRange(current) {
@@ -201,7 +179,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         }
     }
 
-    /// Show another note's text. It is not an edit: it starts its own undo history and is not written back.
     private func show(_ note: String) {
         text.undoManager?.removeAllActions()
         text.textStorage?.setAttributedString(NSAttributedString(string: note, attributes: attributes))
@@ -213,7 +190,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         followEnd(animated: false)
     }
 
-    /// The notes' own menu, beyond editing the text.
     func run(_ command: NotesCommand) {
         switch command {
         case let .saveSelection(selection):
@@ -229,13 +205,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         }
     }
 
-    /// A note just made: its name is put up for typing, with the keyboard on it.
     private func name(_ note: SavedNote) {
         view.window?.makeKey()
         library.naming = note.id
     }
 
-    /// Glide to the newest text.
     func followEnd(animated: Bool) {
         let clip = view.contentView
         let target = NSPoint(x: 0, y: max(0, text.frame.height - clip.bounds.height))
@@ -263,13 +237,10 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         report()
     }
 
-    private var isAtEnd: Bool {  // at the end, or on the way there: a glide in flight still counts
+    private var isAtEnd: Bool {
         glides > 0 || view.contentView.documentVisibleRect.maxY >= text.frame.height - Self.followSlack
     }
 
-    /// The height the notes want: the laid-out text plus insets, from one line up to `maxTextHeight`, past which the
-    /// text scrolls. Measured from the layout, never from the text view, which a scroll view keeps at least as tall as
-    /// what is visible (so a pane that was once tall would stay tall).
     private func report() {
         guard let layout = text.layoutManager, let container = text.textContainer else { return }
         layout.ensureLayout(for: container)
@@ -284,7 +255,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         let visible = view.contentView.documentVisibleRect
         let total = max(text.frame.height, 1)
         let hidden = max(total - visible.height, 0)
-        // Under 2 pt of difference is rounding, not more text.
         let metrics = hidden < 2 ? ScrollMetrics()
             : ScrollMetrics(visibleFraction: visible.height / total, position: min(1, max(0, visible.minY / hidden)))
         if model.notesScroll != metrics { model.notesScroll = metrics }
@@ -295,7 +265,6 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     }
 }
 
-/// Hosts the notes editor in SwiftUI. The editor outlives this view, so text, cursor and undo survive tab switches.
 struct NotesEditorView: NSViewRepresentable {
     let editor: NotesEditor
 
@@ -303,8 +272,6 @@ struct NotesEditorView: NSViewRepresentable {
     func updateNSView(_ view: FadingScrollView, context: Context) {}
 }
 
-/// Scrolls with its top and bottom edges fading into the glass, so lines never end on a hard cut. Its rim, outside the
-/// text, belongs to the glass: clicks there fall through, so the control drags from its edges even over the notes.
 final class FadingScrollView: NSScrollView {
     private static let fadeHeight: CGFloat = 14
     private let fade = CAGradientLayer()
@@ -340,7 +307,6 @@ final class FadingScrollView: NSScrollView {
     }
 }
 
-/// What the notes' right-click menu asks for, beyond editing the text.
 enum NotesCommand {
     case saveSelection(String)
     case save
@@ -349,14 +315,10 @@ enum NotesCommand {
     case myNotes
 }
 
-/// The notes text view: plain, editable from the first click, with the text cursor under the pointer even before it
-/// has the keyboard, the standard editing shortcuts handled here (the app has no menu bar to route them) and the
-/// notes' own menu on a right click. While empty it is part of the handle: dragging moves the control, a click still
-/// starts typing.
 final class NotesTextView: NSTextView {
     var onFocusChange: () -> Void = {}
     var onCommand: (NotesCommand) -> Void = { _ in }
-    var canCleanUp: () -> Bool = { false }  // the cleanup model is on, and no note is being cleaned already
+    var canCleanUp: () -> Bool = { false }
     var isActive = false
     private var pointerArea: NSTrackingArea?
 
@@ -374,18 +336,15 @@ final class NotesTextView: NSTextView {
                                                          .inVisibleRect], owner: self)
         addTrackingArea(area)
         pointerArea = area
-        window?.invalidateCursorRects(for: self)  // the text area moved with the view
+        window?.invalidateCursorRects(for: self)
     }
 
-    /// Where the text itself is: inside the editor's rim, which belongs to the glass (clicks there fall through to
-    /// drag the control), and within sight. Only there does the pointer become a text cursor.
     private var textArea: NSRect {
         guard let scroll = enclosingScrollView as? FadingScrollView else { return visibleRect }
         let inner = scroll.bounds.insetBy(dx: scroll.rim.width, dy: scroll.rim.height)
         return convert(inner, from: scroll).intersection(visibleRect)
     }
 
-    /// NSTextView claims the text cursor for the whole view, rim included: claim it for the text area instead.
     override func resetCursorRects() {
         guard isActive else { return }
         addCursorRect(textArea, cursor: .iBeam)
@@ -445,7 +404,6 @@ final class NotesTextView: NSTextView {
         return true
     }
 
-    /// The notes' own menu: editing the text, and what can be done with the note itself.
     override func rightMouseDown(with event: NSEvent) {
         guard isActive, let window else { return super.rightMouseDown(with: event) }
         MenuPanel.show(menuItems(), at: window.convertPoint(toScreen: event.locationInWindow))
@@ -492,3 +450,4 @@ final class NotesTextView: NSTextView {
         return items
     }
 }
+

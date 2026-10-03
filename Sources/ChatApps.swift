@@ -2,7 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// A colour kept as `#RRGGBB` or `#RRGGBBAA`, so a profile can be edited by hand.
 struct Colour: Codable, Equatable {
     var red = 1.0
     var green = 1.0
@@ -35,8 +34,6 @@ struct Colour: Codable, Equatable {
     var color: Color { Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha) }
 }
 
-/// The corner of the app's window a rectangle is measured from, so resizing the window keeps the rectangle where it
-/// belongs.
 enum Corner: String, Codable, CaseIterable {
     case bottomLeft, bottomRight, topLeft, topRight
 
@@ -53,25 +50,21 @@ enum Corner: String, Codable, CaseIterable {
     var isTop: Bool { self == .topLeft || self == .topRight }
 }
 
-/// A rectangle in points, held as the gap from one corner of the app's window to its nearest edges, plus its size.
-/// Everything is in AppKit screen points with the origin at the bottom left.
 struct AnchoredRect: Codable, Equatable {
     var corner = Corner.bottomRight
-    var x = 0.0       // from the corner's side to the rectangle's near vertical edge
-    var y = 0.0       // from the corner's side to the rectangle's near horizontal edge
+    var x = 0.0
+    var y = 0.0
     var width = 0.0
     var height = 0.0
 
     var isSet: Bool { width > 0 && height > 0 }
 
-    /// Where this rectangle lands for a window at `window`.
     func resolve(in window: NSRect) -> NSRect {
         NSRect(x: corner.isRight ? window.maxX - x - width : window.minX + x,
                y: corner.isTop ? window.maxY - y - height : window.minY + y,
                width: width, height: height)
     }
 
-    /// The same rectangle written down against `window`, as Detect does it.
     static func measure(_ rect: NSRect, in window: NSRect, corner: Corner) -> AnchoredRect {
         AnchoredRect(corner: corner,
                      x: corner.isRight ? window.maxX - rect.maxX : rect.minX - window.minX,
@@ -80,36 +73,30 @@ struct AnchoredRect: Codable, Equatable {
     }
 }
 
-/// How the Iridium button beside an app's Send button looks.
 struct DockButtonStyle: Codable, Equatable {
     var symbol = "mic.fill"
     var symbolSize = 15.0
-    var cornerRadius = 17.0  // half the size is a circle, 0 a square
+    var cornerRadius = 17.0
     var fill = Colour("#25D366")
     var activeFill = Colour("#FF4A4F")
     var symbolColour = Colour("#FFFFFF")
     var shadow = 0.35
 }
 
-/// How the panel above the message box looks while a dictation runs.
 struct DockOverlayStyle: Codable, Equatable {
-    var width = 360.0  // as a card
+    var width = 360.0
     var height = 86.0
-    var gap = 10.0  // above the message box, or across the chat: above the input row
+    var gap = 10.0
     var fontSize = 13.0
     var cornerRadius = 14.0
     var opacity = 1.0
     var background = Colour("#0B141AEE")
     var textColour = Colour("#E9EDEF")
     var accentColour = Colour("#25D366")
-    /// Across the chat: as wide as the app's chat pane, square at the bottom, fading from `background` down into
-    /// `joinColour` (the chat's own background) so it runs into the app. Apps that show no chat pane to
-    /// accessibility get the card.
     var attached = true
     var joinColour = Colour("#0A0A0A")
 }
 
-/// One chat app: where its message box and Send button are, how the dock looks on it, and what dictating there does.
 struct ChatAppProfile: Codable, Equatable, Identifiable {
     enum Mode: String, Codable { case stream, collect }
     enum Send: String, Codable { case press, returnKey }
@@ -125,22 +112,19 @@ struct ChatAppProfile: Codable, Equatable, Identifiable {
     var hideCaptions = true
     var button = AnchoredRect()
     var box = AnchoredRect(corner: .bottomLeft)
-    var sendButton = AnchoredRect()  // the app's own Send button, for auto-send
-    /// The button sits on the app's own voice button (the Send button's place while the box is empty), in its stead.
+    var sendButton = AnchoredRect()
     var overVoiceButton = false
     var buttonStyle = DockButtonStyle()
     var overlayStyle = DockOverlayStyle()
 
     var id: String { bundleID }
 
-    /// The dock can only show once Detect (or a hand edit) has filled in both rectangles.
     var isPlaced: Bool { button.isSet && box.isSet }
 
     static func seed(bundleID: String, name: String) -> ChatAppProfile {
         ChatAppProfile(bundleID: bundleID, name: name)
     }
 
-    /// WhatsApp's green, on a circle the size of its own composer buttons.
     static let whatsApp: ChatAppProfile = {
         var profile = ChatAppProfile(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp")
         profile.buttonStyle = DockButtonStyle(symbol: "mic.fill", symbolSize: 15, cornerRadius: 17,
@@ -152,9 +136,6 @@ struct ChatAppProfile: Codable, Equatable, Identifiable {
         return profile
     }()
 
-    /// Telegram's blue, on a slightly smaller circle, with its darker navy panel. Telegram draws its own interface
-    /// and shows accessibility nothing inside its window, so Detect finds nothing there: its rectangles are typed
-    /// in by hand, and its message goes in through the pasteboard and is sent with Return.
     static let telegram: ChatAppProfile = {
         var profile = ChatAppProfile(bundleID: "ru.keepcoder.Telegram", name: "Telegram")
         profile.insertion = .paste
@@ -169,9 +150,6 @@ struct ChatAppProfile: Codable, Equatable, Identifiable {
     }()
 }
 
-/// The chat apps as saved in `chat-apps.json`, next to the notes. The file is the whole truth: positions, styles and
-/// switches all come from it, and it is written back whenever anything changes, so it can equally well be edited by
-/// hand.
 @MainActor @Observable
 final class ChatApps {
     var enabled = true {
@@ -180,7 +158,6 @@ final class ChatApps {
     var apps: [ChatAppProfile] = [] {
         didSet { if apps != oldValue { changed() } }
     }
-    /// Called after every change, once the file is written: the dock puts itself where the profiles now say.
     @ObservationIgnored var onChange: () -> Void = {}
 
     @ObservationIgnored private let file: URL
@@ -204,7 +181,6 @@ final class ChatApps {
         apps.firstIndex { $0.bundleID == bundleID }
     }
 
-    /// Adds an app that is not in the file yet, with the default look.
     func add(bundleID: String, name: String) {
         guard index(of: bundleID) == nil else { return }
         apps.append(.seed(bundleID: bundleID, name: name))
@@ -244,7 +220,6 @@ final class ChatApps {
     }
 }
 
-/// A key that may be missing from a hand-edited file keeps the default.
 extension KeyedDecodingContainer {
     func value<T: Decodable>(_ key: Key, _ fallback: T) -> T {
         ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
@@ -315,3 +290,4 @@ extension DockOverlayStyle {
         joinColour = container.value(.joinColour, Colour("#0A0A0A"))
     }
 }
+

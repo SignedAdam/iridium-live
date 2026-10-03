@@ -1,16 +1,8 @@
 import AppKit
 import ApplicationServices
 
-/// Reading and driving another app through accessibility: window frames, finding its message box and Send button,
-/// putting text in and pressing Send.
-///
-/// Accessibility reports geometry in points with the origin at the top left of the main screen, y downward; AppKit
-/// uses the bottom left of the same screen, y upward. Everything here converts at the edge and works in AppKit points
-/// from then on, so a display running "More space" or "Larger text" needs no special case: points are points, and the
-/// windows we draw pick up each screen's backing scale themselves.
 @MainActor
 enum AX {
-    /// The flip line: the top of the screen the global origin is measured from.
     static var originTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 
     static func appKit(_ rect: CGRect) -> NSRect {
@@ -40,7 +32,6 @@ enum AX {
         string(element, kAXRoleAttribute as String) ?? ""
     }
 
-    /// An element's frame in AppKit screen points.
     static func frame(_ element: AXUIElement) -> NSRect? {
         guard let positionValue = attribute(element, kAXPositionAttribute as String),
               let sizeValue = attribute(element, kAXSizeAttribute as String) else { return nil }
@@ -55,7 +46,6 @@ enum AX {
         AXUIElementCreateApplication(pid)
     }
 
-    /// The window the app is working in: its focused window, or its main one.
     static func focusedWindow(of pid: pid_t) -> AXUIElement? {
         let app = application(pid)
         for name in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
@@ -67,7 +57,6 @@ enum AX {
         return nil
     }
 
-    /// The deepest element of `pid` under a point on screen.
     static func element(at point: NSPoint, of pid: pid_t) -> AXUIElement? {
         let spot = accessibility(point)
         var found: AXUIElement?
@@ -77,7 +66,6 @@ enum AX {
         return found
     }
 
-    /// Walks up from `element` to the first ancestor whose role is one of `roles`, `element` included.
     static func ancestor(of element: AXUIElement, roles: Set<String>, levels: Int = 6) -> AXUIElement? {
         var current = element
         for _ in 0...levels {
@@ -95,17 +83,15 @@ enum AX {
                                            kAXRadioButtonRole as String]
 }
 
-/// One element of an app's accessibility tree, as Detect sees it.
 struct AXNode {
     var role = ""
     var subrole = ""
     var identifier = ""
-    var label = ""   // title, description or help: what the control calls itself
+    var label = ""
     var frame = NSRect.zero
     var depth = 0
 }
 
-/// What Detect made of an app's window.
 struct Detection {
     var window = NSRect.zero
     var box: AXNode?
@@ -117,16 +103,11 @@ enum Detector {
     private static let maxNodes = 4000
     private static let maxDepth = 24
 
-    /// Reads the app's focused window once and picks out the message box (the largest text area low in the window)
-    /// and the Send button: one called "send", else the button sitting just past the end of the box, level with it.
-    /// Apps that only show Send once something is typed (WhatsApp keeps a voice-message button there meanwhile) give
-    /// the right place all the same, because the button is found again by position when a message is sent.
     static func detect(pid: pid_t) -> Detection? {
         guard let window = AX.focusedWindow(of: pid), let frame = AX.frame(window), frame.width > 1 else { return nil }
         var result = Detection(window: frame)
         let nodes = walk(window)
         let texts = nodes.filter { AX.textRoles.contains($0.role) && $0.frame.width > 40 && $0.frame.height > 10 }
-        // The composer is the widest text area in the bottom half of the window; a chat app only has one down there.
         let low = texts.filter { $0.frame.midY < frame.midY }
         result.box = (low.isEmpty ? texts : low).max { area($0) < area($1) }
         if let box = result.box {
@@ -143,7 +124,6 @@ enum Detector {
 
     private static func area(_ node: AXNode) -> CGFloat { node.frame.width * node.frame.height }
 
-    /// Every element of the window, breadth first, with a cap so a deep tree cannot stall the app.
     private static func walk(_ root: AXUIElement) -> [AXNode] {
         var nodes: [AXNode] = []
         var queue: [(AXUIElement, Int)] = [(root, 0)]
@@ -165,27 +145,19 @@ enum Detector {
     }
 }
 
-/// Putting the finished text into an app's message box and sending it.
 @MainActor
 enum Inserter {
-    /// Text goes in through accessibility where the box takes a written selection: the box is focused, then the text
-    /// replaces the (empty) selection at the cursor, keeping whatever was already typed. Every other box gets the
-    /// pasteboard, which every app understands. (A box's whole value written through accessibility can look accepted
-    /// yet never reach the app: WhatsApp's composer stays empty and keeps its voice button where Send would be.)
-    /// True once the box really holds the text; false when it never came to, after a second and a half at most.
     static func insert(_ text: String, at centre: NSPoint, of pid: pid_t, how: ChatAppProfile.Insertion) async -> Bool {
         guard !text.isEmpty, let box = box(at: centre, of: pid) else { return false }
         if how == .accessibility, write(text, into: box) { return true }
         return await paste(text, into: box)
     }
 
-    /// The message box under a point: the text area itself, or the nearest one around what is there.
     static func box(at centre: NSPoint, of pid: pid_t) -> AXUIElement? {
         guard let hit = AX.element(at: centre, of: pid) else { return nil }
         return AX.ancestor(of: hit, roles: AX.textRoles) ?? hit
     }
 
-    /// Focuses the box and writes the text at its cursor; true when the box really took it.
     static func write(_ text: String, into box: AXUIElement) -> Bool {
         var settable: DarwinBoolean = false
         guard AXUIElementIsAttributeSettable(box, kAXSelectedTextAttribute as CFString, &settable) == .success,
@@ -196,8 +168,6 @@ enum Inserter {
             && AX.string(box, kAXValueAttribute as String) != before
     }
 
-    /// The text on the pasteboard and ⌘V to the app; the clipboard is put back once the app has taken the text (or
-    /// given up on it), never before, so the paste cannot pick up the old clipboard instead.
     private static func paste(_ text: String, into box: AXUIElement) async -> Bool {
         AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         let before = AX.string(box, kAXValueAttribute as String) ?? ""
@@ -209,7 +179,7 @@ enum Inserter {
         pasteboard.setString(text, forType: .string)
         let source = CGEventSource(stateID: .combinedSessionState)
         for down in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: down)  // V
+            let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: down)
             event?.flags = .maskCommand
             event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
             event?.post(tap: .cghidEventTap)
@@ -224,8 +194,6 @@ enum Inserter {
         return landed
     }
 
-    /// True as soon as the box reads something other than `before`; false when `limit` passes first. A box that
-    /// cannot be read counts as unchanged.
     static func changes(_ box: AXUIElement, from before: String, within limit: Duration) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now + limit
@@ -236,7 +204,6 @@ enum Inserter {
         return true
     }
 
-    /// Sends what is in the box: the app's own Send button pressed through accessibility, or Return into it.
     static func send(how: ChatAppProfile.Send, button centre: NSPoint?, of pid: pid_t) -> Bool {
         if how == .press, let centre, let hit = AX.element(at: centre, of: pid),
            let button = AX.ancestor(of: hit, roles: AX.buttonRoles) ?? (AX.role(hit).isEmpty ? nil : hit) {
@@ -244,7 +211,7 @@ enum Inserter {
         }
         let source = CGEventSource(stateID: .combinedSessionState)
         for down in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: down)  // Return
+            let event = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: down)
             event?.flags = []
             event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
             event?.post(tap: .cghidEventTap)
@@ -253,9 +220,6 @@ enum Inserter {
     }
 }
 
-/// Watches one app's windows so the dock can follow them: moves, resizes, minimising, the focused window changing and
-/// the app hiding all come back as one call to `onChange`. A tick covers what the app does not report: every frame
-/// while a mouse button is down (apps such as WhatsApp say nothing during a live drag), four times a second otherwise.
 @MainActor
 final class WindowWatcher {
     var onChange: () -> Void = {}
@@ -272,7 +236,6 @@ final class WindowWatcher {
                                               kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification,
                                               kAXUIElementDestroyedNotification]
 
-    /// Starts over on `pid`, watching its app element and its focused window.
     func watch(pid: pid_t, window: AXUIElement?) {
         if observer == nil || self.pid != pid {
             stop()
@@ -301,7 +264,6 @@ final class WindowWatcher {
         }
     }
 
-    /// Whether a drag may be under way: a mouse button is held.
     var dragging: Bool { NSEvent.pressedMouseButtons != 0 }
 
     private func schedule(fast: Bool) {
@@ -311,7 +273,7 @@ final class WindowWatcher {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.onChange()
-                if self.ticker != nil { self.schedule(fast: self.dragging) }  // nil: onChange stopped the watching
+                if self.ticker != nil { self.schedule(fast: self.dragging) }
             }
         }
     }
@@ -342,3 +304,4 @@ final class WindowWatcher {
         AXObserverRemoveNotification(observer, element, name as CFString)
     }
 }
+

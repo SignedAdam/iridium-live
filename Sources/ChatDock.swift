@@ -2,16 +2,12 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// The chat app a dictation is going to, while it runs.
 struct ChatTarget: Equatable {
     var bundleID: String
     var name: String
-    /// Collect: the words gather in the overlay and go in as one message at the end. Otherwise they are typed as
-    /// they are spoken.
     var collects: Bool
 }
 
-/// What the floating button and the overlay show.
 @MainActor @Observable
 final class DockState {
     var profile = ChatAppProfile()
@@ -19,12 +15,11 @@ final class DockState {
     var finishing = false
     var level = 0.0
     var elapsed = 0.0
-    var live = ""       // the phrase being spoken
-    var collected = ""  // the finished phrases of this recording
-    var attached = false  // the overlay runs across the chat pane, joined to the input row, rather than as a card
-    var ready = false  // the engine reads commands: until then the button is dimmed and does nothing
+    var live = ""
+    var collected = ""
+    var attached = false
+    var ready = false
 
-    /// Everything heard so far, for the overlay.
     var transcript: String {
         [collected, live].filter { !$0.isEmpty }.joined(separator: " ")
     }
@@ -39,17 +34,12 @@ final class DockState {
     }
 }
 
-/// Where a chat app's chat pane sits in its window: its left and right sides as insets from the window's, and the top
-/// of its input row above the window's bottom.
 struct ChatPane {
     var left: CGFloat
     var right: CGFloat
     var rowTop: CGFloat
 }
 
-/// The chat dock: an Iridium button beside a chat app's Send button while that app is in front, and, while it is
-/// recording, a panel just above the app's message box. Where both go comes from the app's profile alone, measured
-/// from a corner of its window, so moving or resizing the window keeps them in place.
 @MainActor
 final class ChatDock {
     let apps: ChatApps
@@ -61,14 +51,12 @@ final class ChatDock {
     private var current: (profile: ChatAppProfile, pid: pid_t, window: NSRect)?
     private var pressStarted: Date?
     private var elapsedTimer: Timer?
-    private var delivered = true     // the recording in progress has had its text put in
-    private var detected: Set<String> = []  // apps Detect has already been run on by itself
-    private var boxEmpty = true  // the app's message box, last read: whether the voice button is showing
-    private var pane: (pid: pid_t, insets: ChatPane)?  // the chat pane, last read, for the overlay across it
-    private static let latch = 0.3   // a press shorter than this leaves the recording running
+    private var delivered = true
+    private var detected: Set<String> = []
+    private var boxEmpty = true
+    private var pane: (pid: pid_t, insets: ChatPane)?
+    private static let latch = 0.3
 
-    /// While a dictation into a chat app runs and its profile says so, the screen captions would only repeat what the
-    /// overlay already shows.
     var hidesCaptions: Bool {
         model.chatTarget != nil && state.profile.hideCaptions
     }
@@ -99,7 +87,6 @@ final class ChatDock {
         update()
     }
 
-    /// The engine's side of a dictation started from the dock.
     func handle(_ event: EngineEvent) {
         if event.kind == "ready" { state.ready = true }
         guard model.chatTarget != nil else { return }
@@ -107,7 +94,7 @@ final class ChatDock {
         case "level": state.level = event.value
         case "partial": state.live = event.text
         case "final":
-            if let edit = event.edit { state.collected = edit.text }  // a correction to what was said earlier
+            if let edit = event.edit { state.collected = edit.text }
             if !event.text.isEmpty {
                 state.collected = state.collected.isEmpty ? event.text : state.collected + " " + event.text
             }
@@ -119,20 +106,15 @@ final class ChatDock {
             }
         case "session": finish(with: event.text)
         case "work":
-            // Whatever happened (a cancelled recording, or an engine without the end-of-recording pass), the dock
-            // must not be left waiting: the phrases it heard are the message.
             if !event.pending { finish(with: state.collected) }
         default: break
         }
     }
 
-    /// Opens the chat apps editor.
     func editProfiles(on screen: NSScreen) {
         ChatAppsPanel.show(apps: apps, on: screen, detect: { [weak self] bundleID in self?.detect(bundleID) ?? nil })
     }
 
-    /// Reads a running app's window once and writes the rectangles it found into its profile. The numbers stay
-    /// editable afterwards; nothing else ever moves them.
     @discardableResult func detect(_ bundleID: String) -> Detection? {
         guard let index = apps.index(of: bundleID),
               let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
@@ -142,7 +124,6 @@ final class ChatDock {
         profile.box = AnchoredRect.measure(box.frame, in: window, corner: .bottomLeft)
         if let send = detection.send {
             profile.sendButton = AnchoredRect.measure(send.frame, in: window, corner: .bottomRight)
-            // Our button sits just outside the app's Send button, on the side with room for it.
             let size = profile.buttonStyle.cornerRadius * 2
             let gap = 8.0
             let left = send.frame.minX - gap - size
@@ -158,9 +139,6 @@ final class ChatDock {
         return detection
     }
 
-    // MARK: - The button
-
-    /// The button has gone down: a dictation into this app starts, unless one is already running, which this ends.
     func press() {
         if state.recording {
             pressStarted = nil
@@ -181,11 +159,9 @@ final class ChatDock {
         place()
     }
 
-    /// The button has come up: a hold ends the dictation here, a quick click leaves it running.
     func release() {
         guard let started = pressStarted else { return }
         pressStarted = nil
-        // A quick press latches: the recording runs on until the button is clicked again.
         if Date().timeIntervalSince(started) >= Self.latch { stop() }
     }
 
@@ -197,8 +173,6 @@ final class ChatDock {
         model.stopRecording()
     }
 
-    /// The recording is over: in Collect mode the whole message goes into the app's box, and Send is pressed when the
-    /// profile says so.
     private func finish(with text: String) {
         guard !delivered, let target = model.chatTarget else { return }
         delivered = true
@@ -216,8 +190,6 @@ final class ChatDock {
                 let inserted = collects
                     ? await Inserter.insert(message, at: NSPoint(x: box.midX, y: box.midY), of: pid, how: profile.insertion)
                     : !message.isEmpty
-                // Send is pressed only once the text is in, and a moment after: an app may show its Send button only
-                // while the box holds text (WhatsApp keeps its voice button there until then).
                 guard inserted, profile.autoSend else { return }
                 try? await Task.sleep(for: .milliseconds(150))
                 _ = Inserter.send(how: profile.send, button: send.map { NSPoint(x: $0.midX, y: $0.midY) }, of: pid)
@@ -228,9 +200,6 @@ final class ChatDock {
         update()
     }
 
-    // MARK: - Where the dock goes
-
-    /// The app in front decides everything: its profile, its window, and whether the dock shows at all.
     private func update() {
         guard apps.enabled, AX.trusted,
               let app = NSWorkspace.shared.frontmostApplication,
@@ -246,12 +215,10 @@ final class ChatDock {
         watcher.onChange = { [weak self] in self?.update() }
         watcher.watch(pid: app.processIdentifier, window: window)
         if !profile.isPlaced, !detected.contains(profile.bundleID) {
-            // Nothing has been measured yet: read the window once, then leave the numbers alone for good.
             detected.insert(profile.bundleID)
-            if detect(profile.bundleID) != nil { return }  // the saved profile change comes straight back here
+            if detect(profile.bundleID) != nil { return }
         }
         current = (profile, app.processIdentifier, frame)
-        // While a dictation runs the look stays the one it started with, whatever is being edited elsewhere.
         if !state.recording, !state.finishing { state.profile = profile }
         place()
     }
@@ -287,9 +254,6 @@ final class ChatDock {
         }
     }
 
-    /// The chat pane around the message box, from the window's edges: its two sides, and the top of the input row
-    /// (the box and the buttons beside it). The box's own container is the pane where the app shows one (WhatsApp);
-    /// nil where it shows none (Telegram). Read between drags only: a drag moves the window, not the pane within it.
     private static func readPane(_ current: (profile: ChatAppProfile, pid: pid_t, window: NSRect)) -> ChatPane? {
         let window = current.window
         let box = current.profile.box.resolve(in: window)
@@ -305,9 +269,6 @@ final class ChatDock {
         return ChatPane(left: frame.minX - window.minX, right: window.maxX - frame.maxX, rowTop: rowTop - window.minY)
     }
 
-    /// Where the button goes: its own place, or, with "Over the app's voice button", centred on that button while the
-    /// message box is empty. Once the box holds text the app shows Send there instead, and the button steps back to
-    /// its own place so Send stays in reach. The box is read between drags only: what it holds cannot change mid-drag.
     private func buttonFrame(_ current: (profile: ChatAppProfile, pid: pid_t, window: NSRect)) -> NSRect {
         let own = current.profile.button.resolve(in: current.window)
         guard current.profile.overVoiceButton, current.profile.sendButton.isSet else { return own }
@@ -327,7 +288,6 @@ final class ChatDock {
         if overlayPanel.isVisible { overlayPanel.orderOut(nil) }
     }
 
-    /// A frame snapped to whole pixels on the screen it lands on, so edges and symbols stay crisp at any scale.
     private func pixels(_ rect: NSRect) -> NSRect {
         let screen = NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main
         let scale = screen?.backingScaleFactor ?? 2
@@ -349,3 +309,4 @@ final class ChatDock {
         return panel
     }
 }
+

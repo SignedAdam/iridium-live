@@ -1,29 +1,23 @@
 import Darwin
 import Foundation
 
-/// How much memory the app and its engine (with the engine's own child processes) use, as Activity Monitor counts
-/// it (physical footprint, which includes GPU buffers), how much the whole Mac has left, and whether the system says
-/// memory is tight.
 struct MemoryReading: Equatable {
     let app: UInt64
     let engine: UInt64
     let physical: UInt64
-    let available: UInt64  // free, plus what the system can reclaim at once (inactive, speculative, purgeable)
+    let available: UInt64
     let pressured: Bool
 
     var total: UInt64 { app + engine }
-    /// Tight when the system says so, when the Mac has under 12% of its memory left, or when we alone hold more
-    /// than 40% of it.
     var warning: Bool {
         pressured || Double(available) < Double(physical) * 0.12 || Double(total) > Double(physical) * 0.4
     }
 }
 
-/// Samples memory every two seconds and on every system memory-pressure change.
 @MainActor
 final class MemoryMonitor {
     var onReading: (MemoryReading) -> Void = { _ in }
-    private let enginePID: () -> pid_t  // a restarted engine is a new process
+    private let enginePID: () -> pid_t
     private let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
     private var pressured = false
     private var timer: Timer?
@@ -76,14 +70,11 @@ final class MemoryMonitor {
     }
 }
 
-/// Unloads the models once nothing has been recorded for a while (Settings: Unload when idle). Armed when a
-/// recording ends and again when its last phrase is in; disarmed while recording.
 @MainActor
 final class IdleUnloader {
     private var timer: Timer?
     var unload: () -> Void = {}
 
-    /// Starts the countdown afresh, or stops it when `minutes` is nil.
     func arm(after minutes: Int?) {
         timer?.invalidate()
         timer = nil
@@ -93,3 +84,4 @@ final class IdleUnloader {
         }
     }
 }
+

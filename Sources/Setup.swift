@@ -5,9 +5,6 @@ import Observation
 import Security
 import ServiceManagement
 
-/// What the app needs from the system and from the user, with its current state: the microphone it records from, the
-/// Accessibility access that lets it type and watch hotkeys, the API keys for AI cleanup, and whether it starts with
-/// the Mac. Everything here is optional — what is missing only costs the part of the app that needs it.
 @MainActor @Observable
 final class Setup {
     enum Access: Equatable { case granted, denied, notAsked }
@@ -16,17 +13,13 @@ final class Setup {
 
     private(set) var microphone = Access.notAsked
     private(set) var accessibility = false
-    private(set) var keys: [String: Bool] = [:]  // key id to whether one is stored
+    private(set) var keys: [String: Bool] = [:]
     private(set) var openAtLogin = false
-    /// What went wrong the last time something was set, for the line under the row.
     private(set) var trouble: String?
 
     private var timer: Timer?
     private var watchers = 0
 
-    /// True while the user is in System Settings because a button here sent them: the app's floating windows step
-    /// down to the normal level meanwhile, so Settings comes up in front of them rather than underneath. It ends
-    /// with the grant they went for, or when they move on to any other app.
     private(set) var inSystemSettings = false
     private static let settingsApps: Set<String> = ["com.apple.systempreferences",
                                                     "com.apple.accessibility.universalAccessAuthWarn"]
@@ -43,10 +36,8 @@ final class Setup {
         }
     }
 
-    /// True until the first launch has been seen through, so the window comes back if it was dismissed early.
     private static let seenKey = "setupSeen"
 
-    /// The onboarding window opens on the first launch, and after that only while something essential is missing.
     var needsOnboarding: Bool {
         !UserDefaults.standard.bool(forKey: Self.seenKey) || microphone != .granted || !accessibility
     }
@@ -67,7 +58,6 @@ final class Setup {
         openAtLogin = isBundled && SMAppService.mainApp.status == .enabled
     }
 
-    /// Grants can only be seen by looking: while a window shows them, they are read twice a second.
     func watch() {
         watchers += 1
         guard timer == nil else { return }
@@ -84,10 +74,6 @@ final class Setup {
         timer = nil
     }
 
-    // MARK: - Microphone
-
-    /// Asks for the microphone. The engine runs as our child process, so its recording is attributed to us and this
-    /// is the only grant involved. Once the user has answered once, only System Settings can change it.
     func askForMicrophone() {
         guard microphone == .notAsked else { return openPane("Privacy_Microphone") }
         AVCaptureDevice.requestAccess(for: .audio) { _ in
@@ -95,13 +81,6 @@ final class Setup {
         }
     }
 
-    // MARK: - Accessibility
-
-    /// Asks for Accessibility access: the system's own prompt, and the pane it leads to, since the prompt only
-    /// appears the first time. `watch()` picks the grant up as soon as it is given. An entry made for an earlier build
-    /// of the app (each build is signed on its own unless the stable certificate is in use) shows as switched on yet
-    /// never applies to this one, so the first Allow of each build clears it. Only the first: a second click would
-    /// clear the entry the first one just made, and macOS does not make it again.
     func askForAccessibility() {
         if isBundled, let bundleID = Bundle.main.bundleIdentifier, let build = Self.build,
            UserDefaults.standard.string(forKey: Self.clearedKey) != build {
@@ -119,7 +98,6 @@ final class Setup {
 
     private static let clearedKey = "accessibilityClearedFor"
 
-    /// This build's code directory hash: what macOS tells one build of the app from another by.
     private static let build: String? = {
         var code: SecCode?
         var staticCode: SecStaticCode?
@@ -134,18 +112,14 @@ final class Setup {
     func openPane(_ anchor: String) {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
         inSystemSettings = true
-        DispatchQueue.main.async { NSWorkspace.shared.open(url) }  // once the windows have stepped down
+        DispatchQueue.main.async { NSWorkspace.shared.open(url) }
     }
-
-    // MARK: - Keys
 
     func store(_ value: String?, for key: ApiKey) {
         let status = Keychain.shared.set(value, for: key.id)
         trouble = status == errSecSuccess ? nil : "The keychain refused the \(key.name) key (\(status))."
         refresh()
     }
-
-    // MARK: - Open at login
 
     var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
@@ -160,3 +134,4 @@ final class Setup {
         refresh()
     }
 }
+

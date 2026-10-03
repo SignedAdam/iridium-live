@@ -1,15 +1,10 @@
-// Draws the app icon and writes Resources/AppIcon.icns. Run it with `make icon`; it is build-time only, so it is not
-// part of the app's sources. The icon is the control in miniature: a smoked glass tile with an iridescent sweep
-// across it and the level meter's five bars in white.
 import AppKit
 import SwiftUI
 
 struct AppIcon: View {
-    /// The bars of the level meter, tallest in the middle.
     private static let profile: [CGFloat] = [0.34, 0.62, 1.0, 0.62, 0.34]
 
     var body: some View {
-        // Apple's grid: the tile covers 824 of 1024 points, with a continuous corner of 185.
         GeometryReader { geometry in
             let side = geometry.size.width
             let tile = side * 824 / 1024
@@ -19,7 +14,6 @@ struct AppIcon: View {
                                               Color(red: 0.02, green: 0.02, blue: 0.035)],
                                      startPoint: .top, endPoint: .bottom))
                 .overlay {
-                    // The iridescence: three soft blooms of thin-film colour, the way light splits across glass.
                     ZStack {
                         bloom(Color(red: 0.35, green: 0.95, blue: 0.88), at: .init(x: 0.14, y: 0.08), side: tile, spread: 0.72)
                         bloom(Color(red: 0.95, green: 0.35, blue: 0.72), at: .init(x: 0.86, y: 0.14), side: tile, spread: 0.62)
@@ -30,12 +24,10 @@ struct AppIcon: View {
                     .clipShape(shape)
                 }
                 .overlay {
-                    // The sheen along the top, as on the control's glass.
                     shape.fill(LinearGradient(colors: [.white.opacity(0.26), .clear],
                                               startPoint: .top, endPoint: .init(x: 0.5, y: 0.34)))
                 }
                 .overlay {
-                    // The lit edge: bright at the top, gone by the bottom.
                     shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.06)],
                                                       startPoint: .top, endPoint: .bottom),
                                        lineWidth: tile * 5 / 824)
@@ -47,13 +39,11 @@ struct AppIcon: View {
         }
     }
 
-    /// One soft bloom of colour, fading to nothing well before the tile's edge.
     private func bloom(_ colour: Color, at point: UnitPoint, side: CGFloat, spread: CGFloat) -> some View {
         RadialGradient(colors: [colour.opacity(0.62), colour.opacity(0.12), .clear],
                        center: point, startRadius: 0, endRadius: side * spread)
     }
 
-    /// The five bars, white, with the air between them scaled to the tile.
     private func meter(side: CGFloat) -> some View {
         let width = side * 0.072
         return HStack(spacing: width * 0.95) {
@@ -98,3 +88,4 @@ MainActor.assumeIsolated {
     try? FileManager.default.removeItem(at: iconset)
     exit(convert.terminationStatus)
 }
+

@@ -1,13 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The one accent colour; everything else is white on glass.
 let accent = Color(red: 1.0, green: 0.29, blue: 0.31)
 
 func tiktok(_ size: CGFloat, _ weight: String = "Regular") -> Font { .custom("TikTokSans-\(weight)", size: size) }
 
-/// A live blur of whatever is behind the window. It never takes a click: SwiftUI's drag-to-move must get the plain
-/// glass, edges included.
 struct BehindWindowBlur: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = ClickThroughBlur()
@@ -25,8 +22,6 @@ final class ClickThroughBlur: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Smoked glass: live blur, an adjustable dark tint, a soft sheen over the top 30 pt and a hairline edge that catches
-/// the light at the top and fades toward the bottom.
 struct Glass: View {
     let cornerRadius: CGFloat
     let tint: Double
@@ -51,7 +46,6 @@ struct Glass: View {
     }
 }
 
-/// A button that shrinks a touch while pressed.
 struct Pressable: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -60,7 +54,6 @@ struct Pressable: ButtonStyle {
     }
 }
 
-/// An on/off switch drawn as a symbol: dim while off, lit on a soft glass disc while on; an optional red dot.
 struct IconToggle: View {
     let symbol: String
     let isOn: Bool
@@ -93,8 +86,6 @@ struct IconToggle: View {
     }
 }
 
-/// Hover help that shows at once (the system's waits about a second). The hovered control reports its words and
-/// where it is; `TipLayer` draws them outside the glass's clip.
 struct Tip {
     let text: String
     let anchor: Anchor<CGRect>
@@ -120,9 +111,6 @@ private struct TipSource: ViewModifier {
     }
 }
 
-/// The hovered control's tip in a small dark pill: just under the control, or, for controls in the bar region (the bar
-/// and its status lines), outside the glass on the bar's side (below, or above when the glass opens downward), so it
-/// never covers the row of buttons you are aiming at. Kept inside the window's margin at the sides.
 struct TipLayer: View {
     let tips: [Tip]
     let bar: ClosedRange<CGFloat>
@@ -152,3 +140,4 @@ struct TipLayer: View {
         }
     }
 }
+

@@ -1,15 +1,12 @@
 import SwiftUI
 
-/// What is known about one cleanup model: how it did on the benchmark of 40 dictated phrases (fillers, spoken
-/// corrections, numbers, money, times, emails; measured 1 October 2026), and how it has done for you, from
-/// the timings in your history.
 struct ModelStats {
     struct Benchmark {
         var medianMs: Double?
         var p90Ms: Double?
-        var usable: String?         // phrases whose cleanup was right in substance, e.g. "37 of 40"
-        var exact: String?          // word for word as expected
-        var perThousand: String?    // cost of 1,000 phrases
+        var usable: String?
+        var exact: String?
+        var perThousand: String?
         var note: String?
     }
 
@@ -27,8 +24,6 @@ struct ModelStats {
 
     var benchmark: Benchmark? { Self.benchmarks["\(provider):\(model)"] }
 
-    /// How this model has done for you: its own phrase cleanups, the passes it made over whole recordings, and every
-    /// phrase it answered while benchmarking, which are all calls to the same model.
     func yours(in history: [HistoryEntry]) -> Yours {
         let runs = history.flatMap(\.calls).filter { $0.provider == provider && $0.model == model }
         var yours = Yours()
@@ -64,7 +59,6 @@ struct ModelStats {
     ]
 }
 
-/// The card beside a model in the model list: the benchmark, then your own numbers.
 struct ModelStatsCard: View {
     let name: String
     let providerName: String
@@ -128,3 +122,4 @@ struct ModelStatsCard: View {
         Text(text).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
     }
 }
+

@@ -1,14 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Room around the glass inside its window, for the glass's own shadow.
 let floatingMargin: CGFloat = 28
 
-/// The whole control: one glass body around the bar. Opening the notes or the settings grows it, away from the bar and
-/// wider, in one spring: upward, or downward when the control sits too high on the screen for the tallest pane to fit
-/// above. Switching panes slides them past each other (notes sit left of settings, like their buttons) while the glass
-/// settles to the new pane's height. Panes keep their full width and are uncovered by the growing glass rather than
-/// squeezed. Drag anywhere that is not a control to move it.
 struct ControlView: View {
     @Bindable var model: AppModel
     let notes: NotesEditor
@@ -47,12 +41,10 @@ struct ControlView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
     }
 
-    /// The bar; right-click it for the control's own menu (unload, notes, my notes, history, settings).
     private var bar: some View {
         ControlBar(model: model).onRightClick { barMenuItems(model) }
     }
 
-    /// The panes, stacked; only the open one shows, flush against the bar.
     private var panes: some View {
         let edge: Alignment = model.opensDown ? .top : .bottom
         return ZStack(alignment: edge) {
@@ -75,12 +67,10 @@ struct ControlView: View {
             .padding(.horizontal, 18)
     }
 
-    /// Narrow strips whose line nearest the bar hangs into the bar's empty margin: not clipped, so lines fade.
     private var lines: some View {
         StatusLines(model: model).frame(height: model.linesHeight, alignment: model.opensDown ? .bottom : .top)
     }
 
-    /// A pane shows only while selected; the others wait just off to its side, faded out.
     private func pane(_ which: AppModel.Pane, @ViewBuilder content: () -> some View) -> some View {
         let shown = model.pane == which
         let side: CGFloat = which.rawValue < (model.pane?.rawValue ?? which.rawValue) ? -1 : 1
@@ -91,9 +81,6 @@ struct ControlView: View {
     }
 }
 
-/// The lines beside the bar, whatever else is open: what the control is doing (where the words go while recording,
-/// "Finishing" while the engine works through what it heard after a stop). Only labels: drags pass through them to
-/// the glass.
 struct StatusLines: View {
     @Bindable var model: AppModel
 
@@ -120,7 +107,6 @@ struct StatusLines: View {
     }
 }
 
-/// A small arc going round: work in progress.
 struct Spinner: View {
     var body: some View {
         TimelineView(.animation) { context in
@@ -131,7 +117,6 @@ struct Spinner: View {
     }
 }
 
-/// Moves the control's window with the pointer, for drags on the glass that no control claims; says when a drag ends.
 @MainActor
 final class WindowMover {
     private weak var window: NSWindow?
@@ -144,7 +129,7 @@ final class WindowMover {
 
     func drag() {
         guard let window else { return }
-        let mouse = NSEvent.mouseLocation  // screen coordinates: steady while the window moves under the pointer
+        let mouse = NSEvent.mouseLocation
         let start = self.start ?? (mouse, window.frame.origin)
         self.start = start
         window.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x, y: start.origin.y + mouse.y - start.mouse.y))
@@ -156,3 +141,4 @@ final class WindowMover {
         onEnd()
     }
 }
+

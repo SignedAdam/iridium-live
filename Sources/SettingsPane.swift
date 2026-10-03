@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Settings, inside the control's glass: sections of rows on soft cards, a title on the left and its control flush
-/// with the right edge. Every change applies at once and is saved.
 struct SettingsPane: View {
     @Bindable var model: AppModel
 
@@ -139,8 +137,9 @@ struct SettingsPane: View {
                             }
                         }
                         Row("When cleanup fails") {
-                            Segments(selection: $model.settings.cleanupFailure,
-                                     options: [(.retry, "Retry"), (.notify, "Fail and notify"), (.raw, "Insert raw")])
+                            GlassMenu(selection: $model.settings.cleanupFailure,
+                                      options: [(.retry, "Retry"), (.notify, "Fail and notify"), (.raw, "Insert raw")])
+                                .frame(width: 160)
                         }
                         if model.settings.cleanupFailure == .retry {
                             Row("Retries") {
@@ -207,12 +206,10 @@ struct SettingsPane: View {
         .foregroundStyle(.white.opacity(0.88))
     }
 
-    /// Memory is tight while the speech model is loaded: said under the speech model, where it can be changed.
     private var speechMemoryAdvice: String? {
         model.memoryWarning && model.speech.state == "ready" ? "Memory is low. Unloading frees about 1 GB." : nil
     }
 
-    /// The correction keywords, a few to a line.
     private var keywordsTip: String {
         let words = model.correctionKeywords
         guard !words.isEmpty else { return "Keywords appear once the speech model is loaded" }
@@ -220,20 +217,18 @@ struct SettingsPane: View {
         return (["Correction keywords:"] + lines).joined(separator: "\n")
     }
 
-    /// The start of the user's cleanup instructions, as a reminder under the row.
     private var instructionsPreview: String? {
         let text = model.settings.cleanupInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = text.split(separator: "\n").first else { return nil }
         return first.count > 48 ? String(first.prefix(47)) + "…" : String(first)
     }
 
-    /// What a model is doing, in a few words; nothing while it is simply ready.
     private func status(_ status: ModelStatus, lastMs: Double? = nil) -> String? {
         switch status.state {
         case "downloading": "Downloading \(Int(status.progress * 100))%"
         case "loading": "Loading…"
         case "unloaded": "Unloaded"
-        case "error": status.model?.contains(":") == true ? status.message : "Couldn’t load: \(status.message)"  // provider:model is remote
+        case "error": status.model?.contains(":") == true ? status.message : "Couldn’t load: \(status.message)"
         case "ready": lastMs.map { "Last: \(Int($0)) ms" }
         default: nil
         }
@@ -244,8 +239,6 @@ struct SettingsPane: View {
     }
 }
 
-/// What the app needs from the system and from the user: the two grants, with a button that leads straight to
-/// whichever pane fixes them, the API keys (held in the keychain, never shown back), and starting with the Mac.
 @MainActor
 private struct SetupSection: View {
     private let setup = Setup.shared
@@ -321,7 +314,6 @@ private struct SetupSection: View {
     }
 }
 
-/// A titled group of rows on a soft card, with hairlines between the rows.
 private struct Section<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -354,7 +346,6 @@ private struct Section<Content: View>: View {
     }
 }
 
-/// A title, an optional line under it, and the control on the right.
 private struct Row<Control: View>: View {
     static var height: CGFloat { 38 }
 
@@ -392,13 +383,11 @@ private struct Row<Control: View>: View {
 }
 
 private extension View {
-    /// Shown but out of play while the switch above it is off.
     func dimmed(_ dimmed: Bool) -> some View {
         disabled(dimmed).opacity(dimmed ? 0.4 : 1).animation(.easeOut(duration: 0.15), value: dimmed)
     }
 }
 
-/// A value shown on the right of a row.
 private struct Figure: View {
     let text: String
 
@@ -409,7 +398,6 @@ private struct Figure: View {
     }
 }
 
-/// A frosted pill around a light edge: the surface of every control here.
 private struct Pill: View {
     var fill = 0.1
     var body: some View {
@@ -442,7 +430,6 @@ private struct GlassButton: ButtonStyle {
     }
 }
 
-/// Two or three choices side by side; the chosen one sits on a lit pill that slides between them.
 private struct Segments<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
@@ -494,7 +481,6 @@ private struct GlassSwitch: View {
     }
 }
 
-/// A slim track with a white knob, and its value on the right.
 private struct GlassSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -534,7 +520,6 @@ private struct GlassSlider: View {
     }
 }
 
-/// A pill showing the current choice; clicking it opens the list.
 private struct GlassMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
@@ -565,9 +550,6 @@ private struct GlassMenu<Value: Hashable>: View {
     }
 }
 
-/// One hotkey, read like a sentence: the switch that puts it in play, the key as a keycap (click it, then press the
-/// key you want), the gesture and what the words are for as inline menus, and a line under it when it clashes with
-/// another binding or has to wait one out.
 private struct HotkeyRow: View {
     @Binding var hotkey: Hotkey
     let capturing: Bool
@@ -626,8 +608,6 @@ private struct HotkeyRow: View {
     }
 }
 
-/// A key drawn as a keycap: lit from above, sitting a little proud of the glass, pressed down when clicked; red while
-/// it waits for the key you want.
 private struct Keycap: ButtonStyle {
     let capturing: Bool
 
@@ -649,7 +629,6 @@ private struct Keycap: ButtonStyle {
     }
 }
 
-/// A choice set inline in a sentence: just its words and a small chevron, lit on hover; clicking opens the list.
 private struct InlineMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
@@ -682,7 +661,6 @@ private struct InlineMenu<Value: Hashable>: View {
     }
 }
 
-/// The last line of the hotkeys: a dashed outline inviting another one.
 private struct AddRow: View {
     let action: () -> Void
     @State private var hovering = false
@@ -708,3 +686,4 @@ private struct AddRow: View {
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
+

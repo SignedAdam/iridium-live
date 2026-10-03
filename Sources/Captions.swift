@@ -2,8 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Live captions: white text with a black outline at the top or bottom of the screen, click-through, on every Space.
-/// Font, size, position, opacity and how long they stay come from the settings. Long phrases show their newest words.
 @MainActor
 final class Captions {
     private static let maxLines: CGFloat = 2
@@ -63,7 +61,6 @@ final class Captions {
         }
     }
 
-    /// The newest words that fit in two lines: live captions follow the speaker, so old words scroll off the front.
     private func tail(of text: String) -> String {
         let words = text.split(separator: " ")
         let limit = ceil(font.ascender - font.descender + font.leading) * Self.maxLines + 1
@@ -114,8 +111,6 @@ struct CaptionView: View {
     }
 }
 
-/// White text with a black outline all round (eight offset copies behind it) and a soft shadow, so it reads on any
-/// background.
 struct OutlinedText: View {
     let text: String
     let font: Font
@@ -134,3 +129,4 @@ struct OutlinedText: View {
         .shadow(color: .black.opacity(0.5), radius: 10, y: 2)
     }
 }
+

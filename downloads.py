@@ -1,9 +1,3 @@
-"""Progress for the model downloads, without reaching into anyone's private progress bars.
-
-The three fetchers (fermion's container unpacker, huggingface_hub's snapshot downloader, a plain urlopen) all write
-into a directory and none of them offers a callback. So: ask the Hub how large the thing is, then watch the bytes
-land. Good enough for a bar, and it cannot break when a library changes its tqdm.
-"""
 from __future__ import annotations
 
 import threading
@@ -18,7 +12,6 @@ def hub_dir(repo: str) -> Path:
 
 
 def hub_bytes(repo: str) -> int:
-    """Total size of a Hub repo, or 0 when it cannot be asked (then progress just never moves)."""
     try:
         from huggingface_hub import HfApi
 
@@ -32,7 +25,6 @@ def _size(path: Path) -> int:
 
 
 class Progress:
-    """Reports `fraction done` at most four times a second while a download runs in the calling thread."""
 
     def __init__(self, paths, total: int, report):
         self.paths, self.total, self.report = [Path(p) for p in paths], total, report
@@ -57,3 +49,4 @@ class Progress:
             if fraction > last:
                 last = fraction
                 self.report(fraction)
+

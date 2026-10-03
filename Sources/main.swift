@@ -1,11 +1,6 @@
-// Iridium Live: runs the speech engine (live.py) as a child process and puts it on screen: a floating glass control
-// (record; notes; typing into the focused app; settings) and live captions. Nothing takes focus unless you click into
-// the notes, so typing goes to the app you were in.
-// Everything it runs on — the engine scripts, the font, uv — is found from the bundle and the usual install paths,
-// since a launch from Finder brings no shell with it. Usage: Iridium Live [--wav FILE] [--check]
 import AppKit
 
-signal(SIGPIPE, SIG_IGN)  // a dead engine must not take the app down mid-write; its exit ends the app instead
+signal(SIGPIPE, SIG_IGN)
 MainActor.assumeIsolated {
     let arguments = Array(CommandLine.arguments.dropFirst())
     if arguments.contains("--check") {
@@ -38,8 +33,6 @@ MainActor.assumeIsolated {
     let statusItem = StatusItem(model: model)
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
-    // Microphone, Accessibility, the cleanup keys and opening at login, in a window of their own. It never holds the
-    // app up: whatever is missing only costs the part of the app that needs it.
     if Setup.shared.needsOnboarding {
         OnboardingPanel.show(on: screen, tint: model.settings.glassTint, opacity: model.settings.controlOpacity)
     }
@@ -53,7 +46,7 @@ MainActor.assumeIsolated {
         engine = try Engine(command: command, environment: AppResources.engineEnvironment(),
                             directory: AppResources.directory) { event in
             dock.handle(event)
-            if ["partial", "final", "work"].contains(event.kind) { model.engineStalled = false }  // it is moving again
+            if ["partial", "final", "work"].contains(event.kind) { model.engineStalled = false }
             switch event.kind {
             case "stalled": model.engineStalled = true
             case "state":
@@ -75,8 +68,6 @@ MainActor.assumeIsolated {
             case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":
                 if let edit = event.edit {
-                    // The phrase corrected earlier text: everything that holds this recording is brought up to the
-                    // corrected version first, under the same rules as the pass at the end, then the phrase lands.
                     if !control.window.isKeyWindow { typist.revise(to: edit.text) }
                     if model.notingNow { notes.replaceDictated(with: edit.text, keepingBlock: true) }
                     for (id, text) in edit.phrases {
@@ -98,8 +89,6 @@ MainActor.assumeIsolated {
                 if model.notingNow { notes.append(entry) }
                 if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
             case "session":
-                // The recording as one text: the notes take it in place of exactly what they appended, the typed
-                // text is corrected where that is still ours to do, and the phrase it ended keeps what it cost.
                 let polish = PolishRun(text: event.text, heard: event.heard ?? event.text, cleanup: event.cleanup)
                 if let last = event.phrases.last, let at = model.history.lastIndex(where: { $0.phrase == last }) {
                     model.history[at].polish = polish
@@ -134,7 +123,6 @@ MainActor.assumeIsolated {
                 usage.record(benchmarks: event.results, of: model.history[at])
             case "type":
                 if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
-                // While our window has the keyboard (editing the notes, using a control), keys would land in it.
                 if !control.window.isKeyWindow { typist.sync(event.text, final: event.final) }
             case "archive":
                 if let file = event.file { model.lastRecording = (URL(fileURLWithPath: file).lastPathComponent, event.seconds ?? 0) }
@@ -154,7 +142,6 @@ MainActor.assumeIsolated {
     let archive = { (settings: Settings) in
         engine.send(settings.saveAudio ? "archive on \(settings.audioSplitSeconds) \(recordings.path)" : "archive off")
     }
-    /// What the engine is told at launch, and again after a restart: a new engine knows none of it.
     let configure = {
         engine.send("hold \(model.settings.typingHold)")
         if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
@@ -168,14 +155,12 @@ MainActor.assumeIsolated {
     }
     configure()
     engine.onRestart = {
-        model.ready = false  // nothing records until the new engine has its model in
+        model.ready = false
         model.engineStalled = false
         model.speech = ModelStatus(state: "loading")
-        engine.send("asr \(model.settings.speechModel)")  // the launch command names the model the app started with
+        engine.send("asr \(model.settings.speechModel)")
         configure()
     }
-    // What the dictation is about to continue goes with it: the cleanup model reads the end of the note in front of
-    // every phrase, and the pass over the whole recording knows what it was written into.
     model.onRecord = { recording in
         if recording, model.notingNow { engine.send("context " + jsonString(notes.dictationContext)) }
         engine.send(recording ? "start" : "stop")
@@ -208,8 +193,6 @@ MainActor.assumeIsolated {
     }
     model.onCleanUpNote = { text in engine.send("rewrite note " + jsonString(text)) }
     model.onShowBenchmarks = { BenchmarkPanel.show(history: model.history, on: control.window.screen ?? screen) }
-    // The app typed words land in, for the line above the bar and the history (never ourselves: our panels do not
-    // take the keyboard from it).
     let ourselves = ProcessInfo.processInfo.processIdentifier
     let front = { @MainActor @Sendable (app: NSRunningApplication?) in
         if let app, app.processIdentifier != ourselves { model.frontApp = app.localizedName }
@@ -284,8 +267,6 @@ MainActor.assumeIsolated {
     let memory = MemoryMonitor { engine.pid }
     memory.onReading = { model.memory = $0 }
 
-    // Nothing may be lost on the way out: flush the notes and the history on a normal quit and on the signals that
-    // end us from outside. (Set up after the engine starts, so the engine keeps the default signal handling.)
     NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
         MainActor.assumeIsolated {
             library.flush()
@@ -309,3 +290,4 @@ MainActor.assumeIsolated {
     }
     withExtendedLifetime((memory, exits, statusItem)) { app.run() }
 }
+

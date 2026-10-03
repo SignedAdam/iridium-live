@@ -1,17 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// The first-launch window: one step per thing the app needs, each with what it is for, where it stands now, and the
-/// one button that settles it. Nothing here is required — the window can be closed at any point and dictation runs
-/// with whatever has been granted. It comes back on a later launch only while the microphone or Accessibility access
-/// is missing. One at a time.
 @MainActor
 final class OnboardingPanel {
     private static var open: OnboardingPanel?
     private let panel: KeyPanel
     private let setup = Setup.shared
 
-    /// Shows the setup window on `screen`, drawn with the same glass tint and opacity as the control.
     static func show(on screen: NSScreen, tint: Double, opacity: Double) {
         if let open { open.panel.makeKeyAndOrderFront(nil); return }
         open = OnboardingPanel(screen: screen, tint: tint, opacity: opacity)
@@ -35,7 +30,6 @@ final class OnboardingPanel {
             panel.orderOut(nil)
             OnboardingPanel.open = nil
         }
-        // The window follows the content's height (a key being typed adds a row), so nothing is ever cut off.
         let controller = NSHostingController(rootView: OnboardingView(setup: setup, tint: tint, done: close)
             .frame(width: width)
             .fixedSize(horizontal: false, vertical: true))
@@ -50,8 +44,6 @@ final class OnboardingPanel {
         followSystemSettings()
     }
 
-    /// Under System Settings while the user is there to grant something, and back in front, showing the new mark,
-    /// once they are done.
     private func followSystemSettings() {
         let away = withObservationTracking { setup.inSystemSettings } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.followSystemSettings() } }
@@ -62,7 +54,6 @@ final class OnboardingPanel {
     }
 }
 
-/// A borderless panel that takes the keyboard without making the app active, so a key can be pasted into it.
 private final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
@@ -158,8 +149,6 @@ private struct OnboardingView: View {
     }
 }
 
-/// One step: a mark that lights up soft green when it is settled, what it is for (tagged when it is optional), and
-/// its control on the right.
 private struct Step<Control: View>: View {
     static var settled: Color { Color(red: 0.45, green: 0.88, blue: 0.6) }
 
@@ -198,7 +187,6 @@ private struct Step<Control: View>: View {
     }
 }
 
-/// A key: its name, whether one is held, and the field that takes a new one. The key itself is never shown back.
 private struct KeyRow: View {
     let key: ApiKey
     let stored: Bool
@@ -245,7 +233,6 @@ private struct KeyRow: View {
     }
 }
 
-/// The settings switch, in the panel's own idiom.
 private struct GlassToggle: View {
     let isOn: Bool
     let set: (Bool) -> Void
@@ -268,7 +255,6 @@ private struct GlassToggle: View {
     }
 }
 
-/// The panel's buttons: the one that moves things on stands out, the rest stay quiet.
 private struct PanelButton: ButtonStyle {
     let prominent: Bool
 
@@ -283,3 +269,4 @@ private struct PanelButton: ButtonStyle {
             .contentShape(Capsule())
     }
 }
+

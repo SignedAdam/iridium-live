@@ -1,13 +1,9 @@
 import AppKit
 
-/// One way of starting dictation from anywhere: a key (a lone modifier such as right ⌘, or a key with modifiers such
-/// as ⌥ Space), the gesture that works it, and what the words are for. Several hotkeys may share one key as long as
-/// their gestures differ, so the same key can type while held and keep notes when double-tapped.
 struct Hotkey: Codable, Equatable, Identifiable {
     enum Action: String, Codable, CaseIterable { case insert, note }
     enum Gesture: String, Codable, CaseIterable { case hold, doubleTap, press }
 
-    /// A key as the recogniser sees it: the same key code and modifiers are the same key, whatever the gestures on it.
     struct Key: Hashable {
         var keyCode: UInt16
         var modifiers: UInt
@@ -15,13 +11,12 @@ struct Hotkey: Codable, Equatable, Identifiable {
 
     var id = UUID()
     var keyCode: UInt16
-    var modifiers: UInt = 0  // device-independent modifier flags, for a key with modifiers
-    var keyName = ""         // what the key itself is called, for a key with modifiers
+    var modifiers: UInt = 0
+    var keyName = ""
     var gesture = Gesture.hold
     var action = Action.insert
     var enabled = true
 
-    /// The lone-modifier keys, by key code: right and left are different keys.
     static let modifierKeys: [UInt16: (name: String, flag: NSEvent.ModifierFlags)] = [
         54: ("Right ⌘", .command), 55: ("Left ⌘", .command), 61: ("Right ⌥", .option), 58: ("Left ⌥", .option),
         60: ("Right ⇧", .shift), 56: ("Left ⇧", .shift), 62: ("Right ⌃", .control), 59: ("Left ⌃", .control),
@@ -43,8 +38,6 @@ struct Hotkey: Codable, Equatable, Identifiable {
     static let actionNames: [(Action, String)] = [(.insert, "Type it"), (.note, "Add to notes")]
     static let gestureNames: [(Gesture, String)] = [(.hold, "Hold"), (.doubleTap, "Double-tap"), (.press, "Toggle")]
 
-    /// The hotkeys that cannot be told apart: an enabled binding whose key and gesture another enabled binding
-    /// already claimed. The first one wins, the later ones are these and do nothing.
     static func conflicting(in hotkeys: [Hotkey]) -> Set<UUID> {
         var taken: [Key: Set<Gesture>] = [:]
         var losers = Set<UUID>()
@@ -54,16 +47,12 @@ struct Hotkey: Codable, Equatable, Identifiable {
         return losers
     }
 
-    /// The press bindings that have to wait out the double-tap window before they act, because an enabled double-tap
-    /// binding shares their key and a first tap may still turn into a second one.
     static func waitingForDoubleTap(in hotkeys: [Hotkey]) -> Set<UUID> {
         let doubled = Set(hotkeys.filter { $0.enabled && $0.gesture == .doubleTap }.map(\.key))
         return Set(hotkeys.filter { $0.enabled && $0.gesture == .press && doubled.contains($0.key) }.map(\.id))
     }
 }
 
-/// The hotkeys as they come out of a save, the older shape included: a binding used to carry a `mode` instead of a
-/// gesture, and `both` meant two gestures on one key, so it becomes two bindings.
 struct SavedHotkeys: Decodable {
     let hotkeys: [Hotkey]
 
@@ -78,7 +67,6 @@ struct SavedHotkeys: Decodable {
         hotkeys = migrated
     }
 
-    /// Every field a hotkey ever had, all optional: a save from any version decodes.
     private struct Saved: Decodable {
         var id: UUID?
         var keyCode: UInt16
@@ -89,7 +77,6 @@ struct SavedHotkeys: Decodable {
         var action: Hotkey.Action?
         var enabled: Bool?
 
-        /// What this entry means today: a gesture of its own, or the one or two that its old mode stood for.
         var hotkeys: [Hotkey] {
             func binding(_ gesture: Hotkey.Gesture, id: UUID) -> Hotkey {
                 Hotkey(id: id, keyCode: keyCode, modifiers: modifiers ?? 0, keyName: keyName ?? "",
@@ -106,33 +93,20 @@ struct SavedHotkeys: Decodable {
     }
 }
 
-/// Watches the keyboard everywhere for the hotkeys (an event tap, so key combinations are kept from the app you
-/// are in; this needs Accessibility access) and turns presses into start, stop and cancel:
-/// - hold: recording lasts while the key is down. When the key also carries a tap gesture the recording starts
-///   provisionally on the way down, so the first words are kept, and is cancelled again if the key comes up before
-///   the hold threshold: that press was a tap after all.
-/// - double-tap: two taps inside the window latch recording on; the next press of that key stops it.
-/// - press: one tap starts, the next stops. On a key that also has a double-tap binding the tap waits out the
-///   double-tap window first.
-/// A lone modifier only counts when pressed on its own: pressing another key while it is down (⌘C) cancels it.
 @MainActor
 final class HotkeyMonitor {
-    static let ownEvents: Int64 = 0x50484F4E  // marks the keys we type ourselves, so they never count as presses
-    private static let holdThreshold = 0.3   // a press shorter than this is a tap
+    static let ownEvents: Int64 = 0x50484F4E
+    private static let holdThreshold = 0.3
     private static let doubleTapWindow = 0.4
 
     var hotkeys: [Hotkey] = []
     var onStart: (Hotkey.Action) -> Void = { _ in }
     var onStop: () -> Void = {}
-    /// Drops the recording in progress and everything it heard: a provisional hold that turned out to be a tap.
     var onCancel: () -> Void = {}
     var isRecording: () -> Bool = { false }
-    /// While set, the next key pressed becomes a hotkey instead of acting as one (Esc cancels with nil).
     var onCapture: ((Hotkey?) -> Void)?
     private(set) var isListening = false
 
-    /// The recording this monitor started: which key is behind it, by which gesture, whether it is only provisional
-    /// (a hold that may yet turn out to be a tap) and whether it stays on until the key is pressed again.
     private struct Session {
         var key: Hotkey.Key
         var gesture: Hotkey.Gesture
@@ -142,14 +116,12 @@ final class HotkeyMonitor {
 
     private var tap: CFMachPort?
     private var session: Session?
-    private var down: (key: Hotkey.Key, at: Date, acted: Bool)?  // the hotkey key held right now
-    private var interrupted = false   // another key went down while a lone modifier was held
-    private var pendingTap: (key: Hotkey.Key, at: Date)?  // a tap that may still become a double tap
+    private var down: (key: Hotkey.Key, at: Date, acted: Bool)?
+    private var interrupted = false
+    private var pendingTap: (key: Hotkey.Key, at: Date)?
     private var captureModifier: UInt16?
     private var waiting: Timer?
 
-    /// Starts watching; false while macOS has not granted Accessibility access. With `prompt`, macOS also shows its
-    /// own dialog asking for it, which only a click of ours should bring up.
     @discardableResult
     func listen(prompt: Bool = true) -> Bool {
         guard tap == nil else { return true }
@@ -174,8 +146,6 @@ final class HotkeyMonitor {
         return true
     }
 
-    /// Starts watching as soon as Accessibility access is there, without asking for it (the setup window does):
-    /// at launch, and then once a second until it is granted.
     func listenWhenAllowed(_ started: @escaping @MainActor () -> Void) {
         if listen(prompt: false) { return started() }
         guard waiting == nil else { return }
@@ -187,7 +157,6 @@ final class HotkeyMonitor {
         }
     }
 
-    /// True when the event is one of ours to keep from the app in front.
     func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -202,10 +171,10 @@ final class HotkeyMonitor {
             let key = Hotkey.Key(keyCode: code, modifiers: 0)
             guard !bindings(for: key).isEmpty else { return false }
             flags.contains(lone.flag) ? keyDown(key) : keyUp(key)
-            return false  // modifiers always reach the app: they are part of its shortcuts too
+            return false
         }
         if type == .keyDown, let pressed = down, Hotkey.modifierKeys[pressed.key.keyCode] != nil {
-            interrupt(pressed)  // ⌘C and friends: the lone modifier was a shortcut, not a hotkey
+            interrupt(pressed)
             return false
         }
         let key = Hotkey.Key(keyCode: code, modifiers: flags.subtracting(.function).rawValue)
@@ -218,7 +187,6 @@ final class HotkeyMonitor {
         return true
     }
 
-    /// The bindings that act on a key: enabled, and the first of any that claim the same gesture.
     private func bindings(for key: Hotkey.Key) -> [Hotkey] {
         let losers = Hotkey.conflicting(in: hotkeys)
         return hotkeys.filter { $0.enabled && $0.key == key && !losers.contains($0.id) }
@@ -230,7 +198,7 @@ final class HotkeyMonitor {
         down = (key, Date(), acted: false)
         interrupted = false
         if let session, session.latched, session.key == key {
-            stop()  // a latched recording ends on the next press of its key
+            stop()
             down?.acted = true
             return
         }
@@ -244,14 +212,13 @@ final class HotkeyMonitor {
         if let hold = bindings.first(where: { $0.gesture == .hold }) {
             start(hold, provisional: bindings.contains { $0.gesture != .hold }, latched: false)
         }
-        // A press or a double tap is only known once the key comes up again.
     }
 
     private func keyUp(_ key: Hotkey.Key) {
         guard let pressed = down, pressed.key == key else { return }
         down = nil
         if interrupted {
-            interrupted = false  // the key was part of a shortcut: its gesture is off
+            interrupted = false
             return
         }
         guard !pressed.acted else { return }
@@ -262,12 +229,11 @@ final class HotkeyMonitor {
                 stop()
                 return
             }
-            cancel()  // too short for a hold, and the key has a tap gesture: that was a tap
+            cancel()
         }
         tapped(key, bindings)
     }
 
-    /// A tap: on a key with a double-tap binding it is kept for a moment, in case a second one follows.
     private func tapped(_ key: Hotkey.Key, _ bindings: [Hotkey]) {
         let press = bindings.first { $0.gesture == .press }
         guard bindings.contains(where: { $0.gesture == .doubleTap }) else {
@@ -285,8 +251,6 @@ final class HotkeyMonitor {
         }
     }
 
-    /// Another key went down while a lone-modifier hotkey was held: the hold is dropped, a provisional one without
-    /// a trace, and the release that follows does nothing.
     private func interrupt(_ pressed: (key: Hotkey.Key, at: Date, acted: Bool)) {
         interrupted = true
         guard let session, session.gesture == .hold, session.key == pressed.key else { return }
@@ -318,7 +282,6 @@ final class HotkeyMonitor {
         onCancel()
     }
 
-    /// The next key becomes a hotkey: a key with modifiers on key down, a lone modifier once released untouched.
     private func capture(_ type: CGEventType, _ code: UInt16, _ flags: NSEvent.ModifierFlags, _ event: CGEvent) -> Bool {
         switch type {
         case .flagsChanged where Hotkey.modifierKeys[code] != nil:
@@ -330,7 +293,7 @@ final class HotkeyMonitor {
             return false
         case .keyDown:
             captureModifier = nil
-            if code == 53, flags.isEmpty { finishCapture(nil); return true }  // Esc
+            if code == 53, flags.isEmpty { finishCapture(nil); return true }
             let name = Self.keyName(code: code, characters: NSEvent(cgEvent: event)?.charactersIgnoringModifiers ?? "?")
             finishCapture(Hotkey(keyCode: code, modifiers: flags.subtracting(.function).rawValue, keyName: name))
             return true
@@ -353,3 +316,4 @@ final class HotkeyMonitor {
         return named[code] ?? characters.uppercased()
     }
 }
+

@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// How long each step of one finished phrase took, as the engine measured it (see `live.py`): from the last word
-/// spoken to the text arriving, and what AI cleanup did and cost.
 struct PhraseTiming: Codable, Equatable, Sendable {
-    /// What one call to the cleanup model cost: a phrase's rewrite, the pass over a whole recording, or one of the
-    /// models a benchmark compared it against.
     struct Cleanup: Codable, Equatable, Sendable {
         var provider: String
         var model: String
@@ -51,15 +47,12 @@ struct PhraseTiming: Codable, Equatable, Sendable {
     var totalMs: Double
 }
 
-/// The pass over a whole recording once it stopped: the text it wrote, what the phrases read before it, and what the
-/// pass cost. Kept on the last phrase of that recording, which is where the timeline shows it.
 struct PolishRun: Codable, Equatable, Sendable {
     var text: String
     var heard: String
     var cleanup: PhraseTiming.Cleanup?
 }
 
-/// Reads one object out of an engine event (snake_case keys); nil when there is none or it does not fit.
 func engineValue<T: Decodable>(_ object: Any?) -> T? {
     guard let object, JSONSerialization.isValidJSONObject([object]),
           let data = try? JSONSerialization.data(withJSONObject: [object]) else { return nil }
@@ -69,7 +62,6 @@ func engineValue<T: Decodable>(_ object: Any?) -> T? {
 }
 
 extension PhraseTiming {
-    /// Reads the `timing` object of a `final` event; nil when there is none.
     init?(engine object: Any?) {
         guard let timing: PhraseTiming = engineValue(object) else { return nil }
         self = timing
@@ -84,7 +76,6 @@ func dollars(_ usd: Double) -> String {
     usd >= 0.01 ? String(format: "$%.2f", usd) : String(format: "$%.5f", usd)
 }
 
-/// One line under a phrase in the history: how long it took from the last word to the text, and cleanup at a glance.
 struct TimingSummary: View {
     let timing: PhraseTiming
 
@@ -108,14 +99,10 @@ struct TimingSummary: View {
     }
 }
 
-/// One phrase's timing in full: a bar of its steps in order, a line per step (cleanup broken into its network and
-/// provider parts), the total from the last word to the text, then the model, tokens and cost, and what was heard
-/// when cleanup changed it. The last phrase of a recording also carries the pass over the whole of it, and any
-/// phrase benchmarked carries what the other models made of it.
 struct PhraseTimeline: View {
     let timing: PhraseTiming
     let heard: String?
-    var text = ""                       // the phrase as it was typed, which the benchmarked models are read against
+    var text = ""
     var polish: PolishRun?
     var benchmarks: [BenchmarkRun] = []
 
@@ -123,7 +110,7 @@ struct PhraseTimeline: View {
         let id: String
         let label: String
         let ms: Double
-        var shade = 0.0  // 0 for the parts of a step, which are not drawn in the bar
+        var shade = 0.0
         var alert = false
     }
 
@@ -162,8 +149,6 @@ struct PhraseTimeline: View {
         .padding(.top, 4)
     }
 
-    /// The pass over the whole recording, which ran after this phrase: what it cost, and the text it left behind
-    /// where that is not simply the phrases run together.
     private func polished(_ polish: PolishRun) -> some View {
         block("Full recording") {
             if let cleanup = polish.cleanup {
@@ -243,3 +228,4 @@ struct PhraseTimeline: View {
         .padding(.leading, step.shade > 0 || bold ? 0 : 14)
     }
 }
+

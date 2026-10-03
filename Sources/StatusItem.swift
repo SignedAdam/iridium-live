@@ -2,8 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Iridium Live in the menu bar: a waveform, red while recording. A click opens the app's own glass menu under it
-/// (recording, show or hide the control, the panes, unloading, quitting); a second click closes it.
 @MainActor
 final class StatusItem: NSObject {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -35,7 +33,8 @@ final class StatusItem: NSObject {
         if recording { symbol = symbol.applying(NSImage.SymbolConfiguration(paletteColors: [NSColor(accent)])) }
         let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Iridium Live")?
             .withSymbolConfiguration(symbol)
-        image?.isTemplate = !recording  // the menu bar's own colour, until it is recording
+        image?.isTemplate = !recording
         item.button?.image = image
     }
 }
+

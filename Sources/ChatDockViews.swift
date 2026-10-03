@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The Iridium button that sits beside a chat app's Send button, in that app's own colours. Hold it to talk and let
-/// go to stop, or click it (anything under a third of a second) to leave the recording running until the next click.
 struct DockButton: View {
     let state: DockState
     let press: () -> Void
@@ -61,9 +59,6 @@ struct DockButton: View {
     }
 }
 
-/// The panel just above the app's message box while a dictation runs: that it is recording, how long for, the input
-/// level, and the words so far. It never covers the box, so typing there still works, and it takes no clicks. Across
-/// the chat it is square at the bottom and fades into the chat's own colour there, so it reads as part of the app.
 struct DockOverlay: View {
     let state: DockState
 
@@ -127,7 +122,6 @@ struct DockOverlay: View {
     }
 }
 
-/// Five bars that answer the microphone.
 private struct Levels: View {
     let level: Double
     let colour: Color
@@ -147,3 +141,4 @@ private struct Levels: View {
         .animation(.easeOut(duration: 0.1), value: level)
     }
 }
+

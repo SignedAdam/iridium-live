@@ -1,6 +1,5 @@
 import Foundation
 
-/// Everything the user can set. Saved in the user defaults; values missing from an older save keep their defaults.
 struct Settings: Codable, Equatable {
     enum CaptionPosition: String, Codable { case top, bottom }
     enum CleanupFailure: String, Codable { case retry, notify, raw }
@@ -9,15 +8,15 @@ struct Settings: Codable, Equatable {
     var typingHold = 0.7
     var cleanupEnabled = false
     var cleanupProvider = "groq"
-    var cleanupModels: [String: String] = [:]  // the model picked on each provider; none yet means its first
-    var cleanupInstructions = ""                // the user's own rules for the cleanup model, added to its prompt
-    var cleanupPolish = true                    // one more pass over the whole of a recording when it stops
-    var cleanupBenchmark = false                // every other model of the provider answers each phrase as well
-    var cleanupCorrections = true               // "I mean ..." fixes an earlier sentence of the same recording
-    var cleanupContextSentences = 5             // earlier sentences the model reads in front of each phrase
-    var cleanupEditReach = 2                    // ...of which the last this many a correction may change
-    var cleanupQuotes = false                   // "quote ... end quote" becomes quotation marks
-    var cleanupFailure = CleanupFailure.raw     // a failed or rate-limited cleanup: retry, report it, or type raw
+    var cleanupModels: [String: String] = [:]
+    var cleanupInstructions = ""
+    var cleanupPolish = true
+    var cleanupBenchmark = false
+    var cleanupCorrections = true
+    var cleanupContextSentences = 5
+    var cleanupEditReach = 2
+    var cleanupQuotes = false
+    var cleanupFailure = CleanupFailure.raw
     var cleanupRetries = 3
     var captionsShown = true
     var captionPosition = CaptionPosition.top
@@ -32,12 +31,9 @@ struct Settings: Codable, Equatable {
     var audioSplitSeconds = 2.0
     var autoUnload = false
     var autoUnloadMinutes = 30
-    var controlHidden = false  // the floating control is out of sight; the menu bar icon brings it back
+    var controlHidden = false
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
-    /// Where cleanup can run, each with its models, the default first (chosen by measured latency and accuracy on
-    /// dictated phrases). Both are called over the network with `GROQ_API_KEY` / `OPENROUTER_API_KEY`, so cleanup
-    /// costs this Mac no memory at all.
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
@@ -61,8 +57,6 @@ struct Settings: Codable, Equatable {
         cleanupProviders.first { $0.id == provider }?.models ?? []
     }
 
-    /// The model cleanup uses on its current provider: the one picked there, while it is still offered, else the
-    /// provider's default.
     var cleanupModel: String {
         get {
             let offered = Self.cleanupModels(on: cleanupProvider)
@@ -72,24 +66,20 @@ struct Settings: Codable, Equatable {
         set { cleanupModels[cleanupProvider] = newValue }
     }
 
-    /// The engine command for the cleanup as set: off, or `provider:model` at a provider.
     var cleanupCommand: String {
         guard cleanupEnabled else { return "cleanup off" }
         return "cleanup \(cleanupProvider):\(cleanupModel)"
     }
 
-    /// The engine command for spoken corrections as set.
     var correctionsCommand: String {
         cleanupCorrections ? "corrections \(cleanupContextSentences) \(min(cleanupEditReach, cleanupContextSentences))"
                            : "corrections off"
     }
 
-    /// The engine command for the optional cleanup rules that are on.
     var rulesCommand: String {
         "rules " + (cleanupQuotes ? ["quotes"] : []).joined(separator: ",")
     }
 
-    /// The engine command for a failed cleanup; `folder` keeps the audio of phrases that failed.
     func failureCommand(folder: String) -> String {
         "failure \(cleanupFailure.rawValue) \(cleanupRetries) \(folder)"
     }
@@ -103,8 +93,6 @@ extension Settings {
         speechModel = value(.speechModel, fallback.speechModel)
         typingHold = value(.typingHold, fallback.typingHold)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
-        // Cleanup used to be able to run on this Mac; it no longer can, so a save that names a provider nobody
-        // offers any more (and only that) comes back as the default. The models picked at the other providers stay.
         let provider = value(.cleanupProvider, fallback.cleanupProvider)
         cleanupProvider = Settings.cleanupProviders.contains { $0.id == provider } ? provider : fallback.cleanupProvider
         cleanupModels = value(.cleanupModels, fallback.cleanupModels)
@@ -125,7 +113,7 @@ extension Settings {
         captionOpacity = value(.captionOpacity, fallback.captionOpacity)
         glassTint = value(.glassTint, fallback.glassTint)
         controlOpacity = value(.controlOpacity, fallback.controlOpacity)
-        hotkeys = value(.hotkeys, SavedHotkeys(hotkeys: fallback.hotkeys)).hotkeys  // older saves carried a mode
+        hotkeys = value(.hotkeys, SavedHotkeys(hotkeys: fallback.hotkeys)).hotkeys
         saveAudio = value(.saveAudio, fallback.saveAudio)
         audioSplitSeconds = value(.audioSplitSeconds, fallback.audioSplitSeconds)
         autoUnload = value(.autoUnload, fallback.autoUnload)
@@ -133,3 +121,4 @@ extension Settings {
         controlHidden = value(.controlHidden, fallback.controlHidden)
     }
 }
+

@@ -2,9 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Every saved note, favourites first and then newest. A click opens one in the editor, a double-click on its name
-/// renames it there and then, the star and the bin come out under the pointer, and the right-click menu holds the
-/// rest. The header makes notes, opens the folder in Finder and exports the lot.
 struct MyNotes: View {
     @Bindable var model: AppModel
     let editor: NotesEditor
@@ -74,7 +71,6 @@ struct MyNotes: View {
         ]
     }
 
-    /// One note, where the user chooses.
     private func export(_ note: SavedNote, _ library: NotesLibrary) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = note.file
@@ -84,7 +80,6 @@ struct MyNotes: View {
         try? library.export(note, to: url)
     }
 
-    /// Every note into a folder of its own, metadata and all.
     private func exportAll(_ library: NotesLibrary) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -97,7 +92,6 @@ struct MyNotes: View {
         try? library.exportAll(to: url.appendingPathComponent("Iridium Live Notes"))
     }
 
-    /// One note in the list: its name, when it was last written to, and how it begins.
     private struct Row: View {
         let note: SavedNote
         let library: NotesLibrary
@@ -152,7 +146,6 @@ struct MyNotes: View {
             .animation(.easeOut(duration: 0.12), value: hovering)
         }
 
-        /// Today's notes by the clock, older ones by the day.
         private func when(_ date: Date) -> String {
             Calendar.current.isDateInToday(date)
                 ? date.formatted(date: .omitted, time: .shortened)
@@ -160,7 +153,6 @@ struct MyNotes: View {
         }
     }
 
-    /// A small icon button, in the header and on a row.
     private struct Action: View {
         let symbol: String
         let tip: String
@@ -181,3 +173,4 @@ struct MyNotes: View {
         }
     }
 }
+

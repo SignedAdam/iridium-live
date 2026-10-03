@@ -1,35 +1,28 @@
 import AppKit
 import SwiftUI
 
-/// One finished phrase, as it was typed (cleaned, when AI cleanup ran) and as it was heard, where it went, and how
-/// long each step took. The last phrase of a recording also carries the pass over the whole of it, and a phrase said
-/// while benchmarking carries what the provider's other models made of it.
 struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     let time: Date
-    var text: String          // as it stands, after any spoken correction made to it later
+    var text: String
     var raw: String?
-    var destination: String?  // "Notes", the app it was typed into, or both
+    var destination: String?
     var timing: PhraseTiming?
-    var audio: [AudioRef]?    // where the phrase is in the saved recordings, while audio is being saved
-    var phrase: String?       // the engine's id for it, which its benchmark results and its recording name
-    var session: Int?         // the recording it belongs to
-    var polish: PolishRun?    // on the last phrase of a recording, once the whole of it has been through the model
+    var audio: [AudioRef]?
+    var phrase: String?
+    var session: Int?
+    var polish: PolishRun?
     var benchmarks: [BenchmarkRun]?
 }
 
 extension HistoryEntry {
-    /// Every model call this phrase paid for: its own cleanup, the pass over the recording it ended, and each model
-    /// a benchmark compared it against.
     var calls: [PhraseTiming.Cleanup] {
         [timing?.cleanup, polish?.cleanup].compactMap { $0 } + (benchmarks ?? []).map(\.cleanup)
     }
 
-    /// What all of that cost.
     var spend: Double { calls.reduce(0) { $0 + ($1.costUsd ?? 0) } }
 }
 
-/// A stretch of a saved recording: the WAV file and the seconds within it.
 struct AudioRef: Codable, Equatable, Sendable {
     let file: String
     let start: Double
@@ -44,11 +37,9 @@ struct AudioRef: Codable, Equatable, Sendable {
     }
 }
 
-/// Every phrase ever said, whether or not notes or typing were on: one JSON object per line in `history.jsonl`,
-/// appended to in order, off the main thread; deleting an entry rewrites the file without it, in the same order.
 @MainActor
 final class HistoryStore {
-    private static let shown = 2000  // the newest entries kept in memory for the pane
+    private static let shown = 2000
     private let file: URL
     private let disk = DispatchQueue(label: "history.disk")
 
@@ -82,7 +73,6 @@ final class HistoryStore {
         }
     }
 
-    /// Remove one entry for good: the file is rewritten without its line, atomically, after any pending appends.
     func delete(_ id: UUID) {
         let file = self.file
         disk.async { @Sendable in
@@ -96,8 +86,6 @@ final class HistoryStore {
         }
     }
 
-    /// Write one entry again where it already stands: a phrase learns what the pass over its whole recording did,
-    /// and what the benchmarked models made of it, seconds after it was first appended.
     func update(_ entry: HistoryEntry) {
         let file = self.file
         disk.async { @Sendable in
@@ -115,14 +103,11 @@ final class HistoryStore {
         }
     }
 
-    /// Wait until every appended entry is on disk.
     func flush() {
         disk.sync {}
     }
 }
 
-/// Everything said so far, newest first, by day, with each day's cleanup cost. Search narrows it; clicking an entry
-/// opens its timeline.
 struct HistoryPane: View {
     @Bindable var model: AppModel
     @State private var query = ""
@@ -214,8 +199,6 @@ struct HistoryPane: View {
         withAnimation(.easeOut(duration: 0.2)) { model.deleteHistory(entry.id) }
     }
 
-    /// One phrase: its time, text and timing at a glance; click for the full timeline; on hover copy and delete;
-    /// right-click for both.
     private struct Row: View {
         let entry: HistoryEntry
         let copied: Bool
@@ -237,7 +220,7 @@ struct HistoryPane: View {
                         .foregroundStyle(.white.opacity(0.4))
                         .frame(width: 52, alignment: .leading)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.text.isEmpty ? (entry.raw ?? "") : entry.text)  // a phrase that only corrected
+                        Text(entry.text.isEmpty ? (entry.raw ?? "") : entry.text)
                             .opacity(entry.text.isEmpty ? 0.5 : 1)
                             .font(tiktok(13))
                             .multilineTextAlignment(.leading)
@@ -280,7 +263,6 @@ struct HistoryPane: View {
         }
     }
 
-    /// A small icon button on a row.
     private struct RowAction: View {
         let symbol: String
         let tip: String
@@ -301,3 +283,4 @@ struct HistoryPane: View {
         }
     }
 }
+

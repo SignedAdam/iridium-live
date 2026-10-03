@@ -1,15 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// A small glass window for the cleanup model's extra instructions: whatever you write is added to its rules for
-/// every phrase. Save (⌘Return) keeps them; Cancel (Esc) leaves them as they were. One at a time.
 @MainActor
 final class InstructionsPanel {
     private static var open: InstructionsPanel?
     private let panel: KeyPanel
 
-    /// Shows the editor centred on `screen`, holding `text`, drawn with the same glass tint and opacity as the
-    /// control; `save` receives the new instructions.
     static func show(text: String, on screen: NSScreen, tint: Double, opacity: Double,
                      save: @escaping @MainActor (String) -> Void) {
         if let open { open.panel.makeKeyAndOrderFront(nil); return }
@@ -34,7 +30,7 @@ final class InstructionsPanel {
         }
         let host = NSHostingView(rootView: InstructionsEditor(text: text, tint: tint, save: { save($0); close() }, cancel: close)
             .frame(width: size.width, height: size.height))
-        host.sizingOptions = []  // the panel keeps its size; the editor scrolls instead of growing it
+        host.sizingOptions = []
         panel.contentView = host
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
@@ -42,7 +38,6 @@ final class InstructionsPanel {
     }
 }
 
-/// A borderless panel that takes the keyboard without making the app active, like the notes.
 private final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
@@ -98,7 +93,6 @@ private struct InstructionsEditor: View {
     }
 }
 
-/// The modal's two buttons: Save stands out, Cancel stays quiet.
 private struct PanelButton: ButtonStyle {
     let prominent: Bool
 
@@ -112,3 +106,4 @@ private struct PanelButton: ButtonStyle {
             .contentShape(Capsule())
     }
 }
+

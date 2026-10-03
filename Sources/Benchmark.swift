@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// What one model made of one phrase while benchmarking: the same phrase, the same context and the same prompt as the
-/// model in use was given, run behind the speaker so nothing waits for it (see `Bench` in cleanup.py).
 struct BenchmarkRun: Codable, Equatable, Sendable, Identifiable {
     var provider: String
     var model: String
@@ -16,22 +14,19 @@ struct BenchmarkRun: Codable, Equatable, Sendable, Identifiable {
     var id: String { "\(provider):\(model)" }
     var modelName: String { Settings.cleanupModels(on: provider).first { $0.0 == model }?.1 ?? model }
 
-    /// The same call in the shape every other cleanup call is kept in, so the model cards and the token ledger
-    /// count it like any other.
     var cleanup: PhraseTiming.Cleanup {
         PhraseTiming.Cleanup(provider: provider, model: model, skipped: false, ms: ms, promptTokens: promptTokens,
                              completionTokens: completionTokens, costUsd: costUsd, error: error)
     }
 }
 
-/// How one model did over everything benchmarked so far.
 struct BenchmarkSummary: Identifiable {
     let provider: String
     let model: String
-    var inUse = false       // this is the model whose text was actually typed, which the others are judged against
+    var inUse = false
     var runs = 0
     var failures = 0
-    var agreed = 0          // answers word for word what the model in use wrote
+    var agreed = 0
     var times: [Double] = []
     var spent = 0.0
 
@@ -44,11 +39,9 @@ struct BenchmarkSummary: Identifiable {
         guard !sorted.isEmpty else { return nil }
         return sorted[min(sorted.count - 1, Int((Double(sorted.count) * 0.9).rounded(.down)))]
     }
-    /// The share of its answers that read exactly like the one that was typed.
     var agreement: Double? { answered > 0 ? Double(agreed) / Double(answered) : nil }
 }
 
-/// Every benchmarked phrase, gathered per model: the model in use first, then the ones it was compared against.
 func benchmarkSummaries(in history: [HistoryEntry]) -> [BenchmarkSummary] {
     var summaries: [String: BenchmarkSummary] = [:]
     var order: [String] = []
@@ -83,13 +76,10 @@ func benchmarkSummaries(in history: [HistoryEntry]) -> [BenchmarkSummary] {
     return order.compactMap { summaries[$0] }.sorted { $0.inUse && !$1.inUse }
 }
 
-/// Two rewrites that read the same, whatever spacing they came back with.
 private func same(_ a: String, _ b: String) -> Bool {
     a.split(whereSeparator: \.isWhitespace) == b.split(whereSeparator: \.isWhitespace)
 }
 
-/// `text` word by word, each saying whether `reference` has it in the same place: the longest run of words the two
-/// share is what counts as unchanged, so one inserted word does not mark everything after it.
 func wordDiff(_ text: String, from reference: String) -> [(word: Substring, changed: Bool)] {
     let words = text.split(whereSeparator: \.isWhitespace)
     let theirs = reference.split(whereSeparator: \.isWhitespace)
@@ -120,8 +110,6 @@ func wordDiff(_ text: String, from reference: String) -> [(word: Substring, chan
     return marked
 }
 
-/// One benchmarked model's answer under a phrase in the history: how long it took, what it wrote with the words it
-/// changed marked, and what it cost — or why it said nothing.
 struct BenchmarkLine: View {
     let run: BenchmarkRun
     let chosen: String
@@ -149,7 +137,6 @@ struct BenchmarkLine: View {
         }
     }
 
-    /// The answer, with every word that is not the typed one's lit up.
     private var marked: Text {
         var line = AttributedString()
         for (word, changed) in wordDiff(run.text, from: chosen) {
@@ -162,8 +149,6 @@ struct BenchmarkLine: View {
     }
 }
 
-/// The benchmark in full, in a window of its own: every model that answered, how fast, how often it agreed with the
-/// one in use, and what it all cost.
 @MainActor
 final class BenchmarkPanel {
     private static var open: BenchmarkPanel?
@@ -306,3 +291,4 @@ private struct BenchmarkTable: View {
         }
     }
 }
+

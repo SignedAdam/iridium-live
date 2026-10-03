@@ -1,58 +1,52 @@
 import Foundation
 import Observation
 
-/// What the engine reports about a model it manages (speech or cleanup).
 struct ModelStatus: Equatable {
-    var state = "off"  // off, downloading, loading, ready, error
+    var state = "off"
     var model: String?
     var progress = 0.0
     var message = ""
 }
 
-/// Where the notes text is scrolled, for the scroll indicator.
 struct ScrollMetrics: Equatable {
-    var visibleFraction: CGFloat = 1  // of the whole text
-    var position: CGFloat = 0         // 0 at the top, 1 at the end
+    var visibleFraction: CGFloat = 1
+    var position: CGFloat = 0
     var overflows: Bool { visibleFraction < 0.999 }
 }
 
-/// Everything the control shows, and every action it can take. The engine, typing and windows are wired in main.
 @MainActor @Observable
 final class AppModel {
-    enum Pane: Int { case notes, history, settings }  // left to right, like their buttons
+    enum Pane: Int { case notes, history, settings }
 
     static let barSize = CGSize(width: 336, height: 56)
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
-    static let libraryHeight: CGFloat = 340  // the notes pane while it lists the saved notes
-    static let notesFooter: CGFloat = 20     // under the note's text: its name and the way into My notes
-    static let lineHeight: CGFloat = 14     // the status line just above the bar: it hangs into the bar's empty top
-    static let lineSpacing: CGFloat = 17    // each line above that one
+    static let libraryHeight: CGFloat = 340
+    static let notesFooter: CGFloat = 20
+    static let lineHeight: CGFloat = 14
+    static let lineSpacing: CGFloat = 17
     static let seam: CGFloat = 1
-    /// The largest the glass ever gets: settings open with both status lines showing.
     static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + lineHeight + lineSpacing)
 
     var recording = false
     var recordingSince = Date()
-    var ready = false  // the engine has its speech model in and reads commands; nothing records before that
-    var engineStalled = false  // the engine has held one piece of work far too long: nothing more will come back
-    var notice: String?        // a short message in the status line, such as a cleanup that failed
-    var correctionKeywords: [String] = []  // the words that start a spoken correction, as the engine reports them
-    var retrying: Set<UUID> = []  // history entries being cleaned up again
+    var ready = false
+    var engineStalled = false
+    var notice: String?
+    var correctionKeywords: [String] = []
+    var retrying: Set<UUID> = []
     private(set) var level = 0.0
     var speech = ModelStatus(state: "loading")
     var cleanup = ModelStatus()
     var lastCleanupMs: Double?
     var memory: MemoryReading?
     var lastRecording: (file: String, seconds: Double)?
-    var finishing = false  // recording has stopped, the engine is still working through what it heard
-    var frontApp: String?  // the app in front, where typed words land
-    /// The chat app a dock dictation is going to, while it runs: it takes over where the words go.
+    var finishing = false
+    var frontApp: String?
     var chatTarget: ChatTarget?
     var hotkeysListening = false
-    var capturingHotkey: UUID?  // the hotkey row waiting for a key press
-    /// What the recording in progress is for, when a hotkey started it; nil when started from the record button.
+    var capturingHotkey: UUID?
     private(set) var session: Hotkey.Action?
 
     private(set) var pane: Pane?
@@ -62,25 +56,17 @@ final class AppModel {
     var notesEditing = false
     var notesEmpty = true
     var notesScroll = ScrollMetrics()
-    /// What the notes pane shows: the note being edited, or the list of saved notes.
     enum NotesView { case editor, library }
     var notesView = NotesView.editor
     var history: [HistoryEntry] = []
-    /// The glass opens below the bar instead of above it: set when the control sits too high on the screen for the
-    /// tallest pane to fit above.
     var opensDown = false
 
-    /// Words are typed into the focused app: a chat app's dock is streaming into it, the typing switch is on, or a
-    /// "type it" hotkey is recording. A dock recording that collects types nothing: its message goes in at the end.
     var typingNow: Bool {
         if let chatTarget { return !chatTarget.collects }
         return typing || session == .insert
     }
-    /// Finished phrases go to the notes: notes are being kept, or an "add to notes" hotkey is recording. A dock
-    /// dictation is a message, never a note.
     var notingNow: Bool { chatTarget == nil && (notesCapturing || session == .note) }
 
-    /// Where finished phrases are going, in a few words: a chat app, "Notes", the app in front, or both.
     var destination: String? {
         if let chatTarget { return chatTarget.name }
         let app = typingNow ? frontApp ?? "the app in front" : nil
@@ -92,7 +78,6 @@ final class AppModel {
         }
     }
 
-    /// The status line above the bar.
     var activity: String? {
         if engineStalled { return "Engine not responding. Restart Iridium Live." }
         if let notice { return notice }
@@ -114,7 +99,6 @@ final class AppModel {
         return finishing ? "Finishing" : nil
     }
 
-    /// Shows `text` in the status line for a few seconds.
     func show(notice text: String) {
         notice = text
         Task { @MainActor [weak self] in
@@ -133,21 +117,17 @@ final class AppModel {
 
     var onRecord: (Bool) -> Void = { _ in }
     var onCancel: () -> Void = {}
-    var onTypingRequest: (Bool) -> Void = { _ in }  // main checks permission, then sets `typing`
+    var onTypingRequest: (Bool) -> Void = { _ in }
     var onPaneChange: (Pane?) -> Void = { _ in }
     var onSettingsChange: (Settings, Settings) -> Void = { _, _ in }
     var onUnload: () -> Void = {}
     var onEditInstructions: () -> Void = {}
-    /// "Clean up note": the note's whole text goes to the cleanup model, and comes back as one undoable edit.
     var onCleanUpNote: (String) -> Void = { _ in }
-    /// A note is at the model right now: the menu item waits for it rather than asking twice.
     var cleaningNote = false
     var onShowBenchmarks: () -> Void = {}
-    /// The chat apps as saved; the dock owns them and the settings section shows them.
     var chatApps: ChatApps?
     var onEditChatApps: () -> Void = {}
 
-    /// How long to wait before unloading the models, counting from now: nil while recording or when switched off.
     var idleUnloadMinutes: Int? { settings.autoUnload && !recording ? settings.autoUnloadMinutes : nil }
     var onOpenRecordings: () -> Void = {}
     var onDeleteHistory: (UUID) -> Void = { _ in }
@@ -155,7 +135,6 @@ final class AppModel {
     var onAddToNote: (HistoryEntry) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
 
-    /// Memory is tight. Settings says so beside a model that is loaded; the control itself stays quiet.
     var memoryWarning: Bool { memory?.warning == true }
 
     var paneHeight: CGFloat {
@@ -167,29 +146,23 @@ final class AppModel {
         }
     }
 
-    /// The status line beside the bar: what it is doing.
     var linesHeight: CGFloat {
         activity == nil ? 0 : Self.lineHeight
     }
 
-    /// The glass: the bar alone, or opened upward into a pane, with any status lines just above the bar.
     var glassSize: CGSize {
         CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth, height: Self.barSize.height + paneHeight + linesHeight)
     }
 
-    /// The record button: a recording of your own, typed or noted as the switches say.
     func toggleRecording() {
         if recording { stopRecording() } else { startRecording(for: nil) }
     }
 
-    /// Start recording, for `action` when a hotkey asked. The purpose outlives the stop, so the phrase that finishes
-    /// just after it still goes where it was meant to. Nothing starts before the engine is ready: until then it reads
-    /// no commands, and a start and a stop would wait in the pipe and run back to back, recording nothing.
     @discardableResult
     func startRecording(for action: Hotkey.Action?) -> Bool {
         guard ready else { return false }
         session = action
-        recording = true  // answer at once; the engine's state events confirm or undo it
+        recording = true
         recordingSince = Date()
         onRecord(true)
         return true
@@ -200,31 +173,25 @@ final class AppModel {
         onRecord(false)
     }
 
-    /// Drop the recording in progress and whatever it heard: a hotkey tap that turned out not to be a hold.
     func cancelRecording() {
         recording = false
         session = nil
         onCancel()
     }
 
-    /// The notes button: opens the notes and starts keeping them, or closes them and stops.
     func toggleNotes() {
         notesCapturing = pane != .notes
         go(to: notesCapturing ? .notes : nil)
     }
 
-    /// The settings button: opens settings over whatever is showing; closing returns to the notes while they are kept.
     func toggleSettings() {
         toggle(.settings)
     }
 
-    /// The history button: the same, for everything said so far.
     func toggleHistory() {
         toggle(.history)
     }
 
-    /// Puts the floating control out of sight. Hotkeys, captions and the chat button carry on; the menu bar icon
-    /// brings it back.
     func hideControl() {
         settings.controlHidden = true
     }
@@ -233,26 +200,22 @@ final class AppModel {
         settings.controlHidden = false
     }
 
-    /// Opens the notes pane on the list of saved notes ("My notes"), leaving note keeping as it was.
     func showMyNotes() {
         notesView = .library
         if pane != .notes { go(to: .notes) }
     }
 
-    /// "Clean up note" in the notes' own menu: the whole note to the model, once at a time.
     func cleanUpNote(_ text: String) {
         guard settings.cleanupEnabled, !cleaningNote, !text.isEmpty else { return }
         cleaningNote = true
         onCleanUpNote(text)
     }
 
-    /// Remove a phrase from the history, on screen and on disk.
     func deleteHistory(_ id: UUID) {
         history.removeAll { $0.id == id }
         onDeleteHistory(id)
     }
 
-    /// Input level, 0...1: rises at once, falls gently.
     func receive(level value: Double) {
         level = max(value, level * 0.72)
     }
@@ -271,3 +234,4 @@ final class AppModel {
         onPaneChange(next)
     }
 }
+

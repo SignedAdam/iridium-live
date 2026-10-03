@@ -1,10 +1,5 @@
 import Foundation
 
-/// The app used to be called PhononLive, and until it was bundled it kept its settings under `IridiumLive` rather
-/// than its bundle id. On the first launch of the bundle, everything either of them kept comes along: the data
-/// folder (notes, saved notes, history, journal, backups, recordings) is moved, not copied, and the settings and the
-/// control's position are carried over from the newer of the two domains. The token usage log is rebuilt from the
-/// history under the new source name, so the ledger never sees the old one.
 enum Migration {
     private static let oldDomains = ["IridiumLive", "PhononLive"]
     private static let carried = ["settings", "barCenter"]
@@ -31,3 +26,4 @@ enum Migration {
         }
     }
 }
+

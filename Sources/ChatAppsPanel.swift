@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The chat apps editor: the apps on the left, everything about the chosen one on the right. Changes apply as they
-/// are made and are saved to `chat-apps.json`. One at a time, like the instructions editor.
 @MainActor
 final class ChatAppsPanel {
     private static var open: ChatAppsPanel?
@@ -40,7 +38,6 @@ final class ChatAppsPanel {
     }
 }
 
-/// Borderless, but it takes the keyboard for the text fields without making the app active.
 private final class ChatAppsKeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
@@ -232,7 +229,6 @@ private struct ChatAppsEditor: View {
     }
 }
 
-/// One app in the list: its switch, its name, and whether it is the one being edited.
 private struct AppRow: View {
     @Binding var profile: ChatAppProfile
     let chosen: Bool
@@ -262,7 +258,6 @@ private struct AppRow: View {
     }
 }
 
-/// Adds an app by picking one of the apps running now.
 private struct AddAppButton: View {
     let add: (String, String) -> Void
     @State private var box = DockViewBox()
@@ -295,7 +290,6 @@ private struct AddAppButton: View {
     }
 }
 
-/// One rectangle of a profile: the corner it hangs from and its four numbers.
 private struct RectRow: View {
     let title: String
     @Binding var rect: AnchoredRect
@@ -324,9 +318,6 @@ private struct RectRow: View {
     }
 }
 
-// MARK: - The modal's own controls
-
-/// A titled block of rows, with hairlines between them, like the settings pane's sections.
 private struct DockGroup<Content: View>: View {
     let title: String
     var detail: String?
@@ -384,7 +375,6 @@ private struct DockRow<Control: View>: View {
     }
 }
 
-/// A number in a small field: typed in, or nudged with the arrow keys the field already answers.
 private struct DockNumber: View {
     @Binding var value: Double
     var step = 1.0
@@ -422,7 +412,6 @@ private struct DockNumber: View {
     }
 }
 
-/// A short string in a field: the SF Symbol name.
 private struct DockText: View {
     @Binding var text: String
     var width: CGFloat = 120
@@ -442,7 +431,6 @@ private struct DockText: View {
     }
 }
 
-/// A colour as its hex, with a swatch of it.
 private struct DockColour: View {
     @Binding var colour: Colour
     @State private var text = ""
@@ -546,7 +534,6 @@ private struct DockAction: ButtonStyle {
     }
 }
 
-/// Remembers where a control is on screen, so a menu can be put under it.
 @MainActor
 private final class DockViewBox {
     weak var view: NSView?
@@ -570,3 +557,4 @@ private struct DockScreenRect: NSViewRepresentable {
         box.view = view
     }
 }
+

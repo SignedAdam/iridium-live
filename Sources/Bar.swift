@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The bar along the bottom of the control: record, input level and elapsed time, then the typing, notes, history
-/// and settings switches.
 struct ControlBar: View {
     @Bindable var model: AppModel
 
@@ -31,8 +29,6 @@ struct ControlBar: View {
     }
 }
 
-/// The record button: a glowing red dot in a glass well. Recording turns it into a rounded square with a slow halo;
-/// a thin arc circles it until the model is ready (recording already works; audio waits for the model).
 struct RecordOrb: View {
     let recording: Bool
     let loading: Bool
@@ -43,7 +39,7 @@ struct RecordOrb: View {
         Button(action: action) {
             TimelineView(.animation(paused: !recording && !loading)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
-                let pulse = 1 - pow(1 - time.truncatingRemainder(dividingBy: 1.8) / 1.8, 2)  // ease-out, repeating
+                let pulse = 1 - pow(1 - time.truncatingRemainder(dividingBy: 1.8) / 1.8, 2)
                 ZStack {
                     Circle().fill(.white.opacity(hovering ? 0.15 : 0.08))
                         .overlay(Circle().strokeBorder(.white.opacity(0.2)))
@@ -78,7 +74,6 @@ struct RecordOrb: View {
     }
 }
 
-/// Nine bars that follow the voice, tallest in the middle; resting dots when not recording.
 struct LevelMeter: View {
     private static let profile: [CGFloat] = [0.38, 0.58, 0.8, 0.94, 1, 0.94, 0.8, 0.58, 0.38]
     let level: Double
@@ -101,7 +96,6 @@ struct LevelMeter: View {
     }
 }
 
-/// Elapsed recording time; dim while stopped.
 struct Clock: View {
     let recording: Bool
     let since: Date
@@ -116,3 +110,4 @@ struct Clock: View {
         }
     }
 }
+

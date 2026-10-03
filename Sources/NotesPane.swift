@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The notes pane: the note being edited, or the list of saved notes once "My notes" is open.
 struct NotesPane: View {
     @Bindable var model: AppModel
     let editor: NotesEditor
@@ -14,9 +13,6 @@ struct NotesPane: View {
     }
 }
 
-/// The note being edited: the editor, a placeholder while empty, the outline of the text area while you edit, a slim
-/// indicator of where you are whenever there is more text than fits, and, in a slim footer of its own under the text,
-/// the note's name and the way into "My notes".
 struct NoteEditorPane: View {
     @Bindable var model: AppModel
     let editor: NotesEditor
@@ -55,8 +51,6 @@ struct NoteEditorPane: View {
         .animation(.easeOut(duration: 0.2), value: model.notesEditing)
     }
 
-    /// The name of the note, dim, with the way into the saved notes beside it once the pointer is here. While a note
-    /// has just been saved its name is a field instead, ready to be typed over.
     private var corner: some View {
         let library = editor.library
         let naming = library.naming.flatMap { library.note($0) }
@@ -87,8 +81,6 @@ struct NoteEditorPane: View {
     }
 }
 
-/// Names a note the moment it is made: focused with its name whole, so typing replaces it. Return or clicking away
-/// keeps what was typed, Escape leaves the name as it was.
 struct NoteNameField: View {
     let library: NotesLibrary
     let note: SavedNote
@@ -122,7 +114,6 @@ struct NoteNameField: View {
     }
 }
 
-/// A slim thumb on the right edge: how much of the text is visible and where. Only there when the text overflows.
 struct ScrollIndicator: View {
     let metrics: ScrollMetrics
 
@@ -140,3 +131,4 @@ struct ScrollIndicator: View {
         .allowsHitTesting(false)
     }
 }
+

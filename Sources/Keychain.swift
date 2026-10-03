@@ -1,9 +1,6 @@
 import Foundation
 import Security
 
-/// The API keys the cleanup models need, kept together as one item in the login keychain under the app's bundle id:
-/// one item, so a new build of the app is asked about them once rather than once per key. The installed app has no
-/// shell environment, so this is where they come from; the engine is handed them when it starts.
 struct Keychain {
     let service: String
 
@@ -15,8 +12,6 @@ struct Keychain {
          kSecAttrAccount as String: "keys"]
     }
 
-    /// Which keys are stored, read from the item's attributes (which name them): only the secrets themselves are
-    /// guarded, so this never brings up the keychain's "wants to use your confidential information" dialog.
     func stored() -> Set<String> {
         var query = item
         query[kSecReturnAttributes as String] = true
@@ -28,14 +23,10 @@ struct Keychain {
         return Set(text.split(separator: ",").map(String.init))
     }
 
-    /// Every stored key by id, in one read.
     func values() -> [String: String] {
         read().values
     }
 
-    /// Stores `value` under `id` beside the others; an empty or missing value removes it. Returns the keychain's own
-    /// result, so a failure can be said out loud rather than swallowed; a refused read writes nothing, so the other
-    /// keys are never lost.
     @discardableResult
     func set(_ value: String?, for id: String) -> OSStatus {
         var (status, values) = read()
@@ -68,7 +59,6 @@ struct Keychain {
     }
 }
 
-/// One of the keys the user can hold: how it is named on screen, and the variable the engine reads it from.
 struct ApiKey: Identifiable, Sendable {
     let id: String
     let name: String
@@ -80,3 +70,4 @@ struct ApiKey: Identifiable, Sendable {
                                    site: "openrouter.ai/keys")
     static let all = [groq, openRouter]
 }
+
