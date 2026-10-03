@@ -150,6 +150,7 @@ MainActor.assumeIsolated {
         if model.settings.cleanupBenchmark { engine.send("benchmark on") }
         engine.send(model.settings.correctionsCommand)
         engine.send(model.settings.rulesCommand)
+        engine.send("compare " + model.settings.openRouterModels.map(\.id).joined(separator: ","))
         engine.send(model.settings.failureCommand(folder: recordings.path))
         if model.settings.saveAudio { archive(model.settings) }
     }
@@ -193,6 +194,7 @@ MainActor.assumeIsolated {
     }
     model.onCleanUpNote = { text in engine.send("rewrite note " + jsonString(text)) }
     model.onShowBenchmarks = { BenchmarkPanel.show(history: model.history, on: control.window.screen ?? screen) }
+    model.onManageModels = { ModelsPanel.show(on: control.window.screen ?? screen, model: model) }
     let ourselves = ProcessInfo.processInfo.processIdentifier
     let front = { @MainActor @Sendable (app: NSRunningApplication?) in
         if let app, app.processIdentifier != ourselves { model.frontApp = app.localizedName }
@@ -242,6 +244,9 @@ MainActor.assumeIsolated {
     }
     model.onSettingsChange = { new, old in
         if new.typingHold != old.typingHold { engine.send("hold \(new.typingHold)") }
+        if new.openRouterModels != old.openRouterModels {
+            engine.send("compare " + new.openRouterModels.map(\.id).joined(separator: ","))
+        }
         if new.cleanupCommand != old.cleanupCommand {
             engine.send(new.cleanupCommand)
             model.lastCleanupMs = nil

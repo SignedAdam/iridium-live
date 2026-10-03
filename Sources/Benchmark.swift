@@ -12,7 +12,7 @@ struct BenchmarkRun: Codable, Equatable, Sendable, Identifiable {
     var error: String?
 
     var id: String { "\(provider):\(model)" }
-    var modelName: String { Settings.cleanupModels(on: provider).first { $0.0 == model }?.1 ?? model }
+    var modelName: String { Settings.modelName(provider: provider, model: model) }
 
     var cleanup: PhraseTiming.Cleanup {
         PhraseTiming.Cleanup(provider: provider, model: model, skipped: false, ms: ms, promptTokens: promptTokens,
@@ -31,7 +31,7 @@ struct BenchmarkSummary: Identifiable {
     var spent = 0.0
 
     var id: String { "\(provider):\(model)" }
-    var name: String { Settings.cleanupModels(on: provider).first { $0.0 == model }?.1 ?? model }
+    var name: String { Settings.modelName(provider: provider, model: model) }
     var answered: Int { runs - failures }
     var medianMs: Double? { times.isEmpty ? nil : times.sorted()[times.count / 2] }
     var p90Ms: Double? {

@@ -51,7 +51,7 @@ struct ControlView: View {
             pane(.notes) {
                 NotesPane(model: model, editor: notes)
                     .frame(width: AppModel.paneWidth,
-                           height: model.notesView == .library ? AppModel.libraryHeight : model.notesHeight + AppModel.notesFooter)
+                           height: model.notesView == .library ? AppModel.libraryHeight : model.notesHeight + AppModel.notesHeader)
             }
             pane(.history) { HistoryPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.historyHeight) }
             pane(.settings) { SettingsPane(model: model).frame(width: AppModel.paneWidth, height: AppModel.settingsHeight) }

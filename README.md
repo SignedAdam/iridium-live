@@ -15,6 +15,8 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   inserts the whole message at the end and can send it.
 - **AI cleanup** (optional, Groq or OpenRouter): removes filler words and formats numbers, dates and links. Custom
   instructions.
+- **Models window:** every OpenRouter model and provider with latency, throughput, price, context and uptime, measured
+  per provider. Sort by any column, save a model and provider to My models, pick from the last three in Settings.
 - **Corrections:** say "Let's meet on Tuesday", then "I mean Wednesday", and "Tuesday" becomes "Wednesday", also in
   the typed text. Works with correction keywords such as "I mean", "no wait" and "scratch that".
 - **Add quotes** (optional): "quote … end quote" becomes quotation marks.
@@ -38,7 +40,7 @@ M1 Max, 32 GB.
 | Phonon-2 vs Parakeet TDT v3 | 9.28% vs 9.27% word error rate, 86x vs 58x realtime |
 | Pause that splits speech | 0.7 s |
 | Cleanup, Groq with Qwen3.8 27B | 143 ms median |
-| Corrections test | 22 of 22 corrections right, 0 wrong edits, 0 of 20 look-alikes changed |
+| Corrections test, Qwen3.8 27B on Cerebras (OpenRouter) | 22 of 22 corrections right, 0 wrong edits, 0 of 20 look-alikes changed, 284 ms median |
 | Memory | 1.0 GB with the speech model loaded, 0.5 GB unloaded |
 
 English only.
@@ -91,6 +93,7 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
 | `cleanup.py` | AI cleanup with Groq and OpenRouter |
 | `archive.py` | saves audio |
 | `downloads.py` | downloads the speech model |
+| `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |
 
 ## Credits
 

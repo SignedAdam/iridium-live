@@ -36,7 +36,7 @@ struct PhraseTiming: Codable, Equatable, Sendable {
         }
 
         var providerName: String { Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider }
-        var modelName: String { Settings.cleanupModels(on: provider).first { $0.0 == model }?.1 ?? model }
+        var modelName: String { Settings.modelName(provider: provider, model: model) }
     }
 
     var speechMs: Double

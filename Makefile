@@ -1,7 +1,7 @@
 APP := .build/Iridium Live.app
 BINARY := $(APP)/Contents/MacOS/Iridium Live
 STAMP := .build/.app
-SOURCES := $(wildcard Sources/*.swift)
+SOURCES := $(wildcard Sources/*.swift) $(wildcard Packages/ModelCatalog/Sources/*/*.swift)
 ENGINE := live.py segmenter.py asr.py cleanup.py archive.py downloads.py
 FONT := fonts/TikTokSans.ttf
 CERT := Iridium Live Dev

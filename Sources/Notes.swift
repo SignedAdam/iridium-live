@@ -205,6 +205,11 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         }
     }
 
+    func save(named proposed: String) {
+        let note = library.save(text.string)
+        library.rename(note.id, to: proposed)
+    }
+
     private func name(_ note: SavedNote) {
         view.window?.makeKey()
         library.naming = note.id

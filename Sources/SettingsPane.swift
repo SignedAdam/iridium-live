@@ -94,15 +94,42 @@ struct SettingsPane: View {
                         Row("Provider") {
                             Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                         }
-                        Row("Model") {
-                            let provider = model.settings.cleanupProvider
-                            let options = Settings.cleanupModels(on: provider)
-                            GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
-                                AnyView(ModelStatsCard(name: options.first { $0.0 == id }?.1 ?? id,
-                                                       providerName: Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider,
-                                                       stats: ModelStats(provider: provider, model: id), history: model.history))
+                        if model.settings.cleanupProvider == "openrouter" {
+                            let saved = model.settings.savedModelsByRecency
+                            let current = model.settings.cleanupModel
+                            ForEach(saved.prefix(3)) { item in
+                                Row(item.shortName, detail: item.providerName) {
+                                    if item.id == current {
+                                        Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(accent)
+                                    } else {
+                                        Button("Use") { model.use(item) }.buttonStyle(GlassButton())
+                                    }
+                                }
                             }
-                            .frame(width: 180)
+                            let more = Array(saved.dropFirst(3))
+                            Row(more.isEmpty ? "My models" : "Other models") {
+                                HStack(spacing: 8) {
+                                    if !more.isEmpty {
+                                        GlassMenu(selection: Binding(get: { "" }, set: { id in
+                                                      if let item = more.first(where: { $0.id == id }) { model.use(item) }
+                                                  }),
+                                                  options: more.map { ($0.id, $0.title) }, label: "\(more.count) more")
+                                            .frame(width: 120)
+                                    }
+                                    Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
+                                }
+                            }
+                        } else {
+                            Row("Model") {
+                                let provider = model.settings.cleanupProvider
+                                let options = model.settings.cleanupModels(on: provider)
+                                GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
+                                    AnyView(ModelStatsCard(name: options.first { $0.0 == id }?.1 ?? id,
+                                                           providerName: Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider,
+                                                           stats: ModelStats(provider: provider, model: id), history: model.history))
+                                }
+                                .frame(width: 180)
+                            }
                         }
                         Row("Instructions", detail: instructionsPreview) {
                             Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
@@ -398,14 +425,14 @@ private struct Figure: View {
     }
 }
 
-private struct Pill: View {
+struct Pill: View {
     var fill = 0.1
     var body: some View {
         Capsule().fill(.white.opacity(fill)).overlay(Capsule().strokeBorder(.white.opacity(0.13)))
     }
 }
 
-private struct GlassButton: ButtonStyle {
+struct GlassButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Surface(configuration: configuration)
     }
@@ -430,7 +457,7 @@ private struct GlassButton: ButtonStyle {
     }
 }
 
-private struct Segments<Value: Hashable>: View {
+struct Segments<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
     @Namespace private var pill
@@ -459,7 +486,7 @@ private struct Segments<Value: Hashable>: View {
     }
 }
 
-private struct GlassSwitch: View {
+struct GlassSwitch: View {
     @Binding var isOn: Bool
 
     var body: some View {
@@ -523,6 +550,7 @@ private struct GlassSlider: View {
 private struct GlassMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
+    var label: String? = nil
 
     var body: some View {
         Menu {
@@ -533,7 +561,7 @@ private struct GlassMenu<Value: Hashable>: View {
             .labelsHidden()
         } label: {
             HStack(spacing: 4) {
-                Text(options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
+                Text(label ?? options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
             }

@@ -440,6 +440,7 @@ def main() -> None:
     benchmarking = False
     context = ""
     failure = {"mode": "raw", "retries": 0, "folder": None}
+    compare: list[str] = []
 
     def watch_for_stalls() -> None:
         reported = None
@@ -462,10 +463,14 @@ def main() -> None:
         nonlocal polishing, benchmarking, context
 
         def comparing() -> None:
-            bench.configure(cleanup_slot.want if benchmarking else None)
+            bench.configure(cleanup_slot.want if benchmarking else None, compare)
 
         for line in sys.stdin:
             command, _, argument = line.strip().partition(" ")
+            if command == "compare":
+                compare[:] = [model for model in argument.split(",") if model]
+                comparing()
+                continue
             if command == "start":
                 resume()
                 audio.put(Job("start", (context,)))

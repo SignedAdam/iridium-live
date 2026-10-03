@@ -23,7 +23,7 @@ final class AppModel {
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
     static let libraryHeight: CGFloat = 340
-    static let notesFooter: CGFloat = 20
+    static let notesHeader: CGFloat = 34
     static let lineHeight: CGFloat = 14
     static let lineSpacing: CGFloat = 17
     static let seam: CGFloat = 1
@@ -139,7 +139,7 @@ final class AppModel {
 
     var paneHeight: CGFloat {
         switch pane {
-        case .notes: (notesView == .library ? Self.libraryHeight : notesHeight + Self.notesFooter) + Self.seam
+        case .notes: (notesView == .library ? Self.libraryHeight : notesHeight + Self.notesHeader) + Self.seam
         case .history: Self.historyHeight + Self.seam
         case .settings: Self.settingsHeight + Self.seam
         case nil: 0
@@ -191,6 +191,25 @@ final class AppModel {
     func toggleHistory() {
         toggle(.history)
     }
+
+    func use(_ saved: SavedModel) {
+        if !settings.openRouterModels.contains(where: { $0.id == saved.id }) { settings.openRouterModels.append(saved) }
+        settings.cleanupProvider = "openrouter"
+        settings.cleanupModels["openrouter"] = saved.id
+        settings.openRouterRecent = [saved.id] + settings.openRouterRecent.filter { $0 != saved.id }
+    }
+
+    func save(_ saved: SavedModel) {
+        guard !settings.openRouterModels.contains(where: { $0.id == saved.id }) else { return }
+        settings.openRouterModels.append(saved)
+    }
+
+    func removeSaved(_ id: String) {
+        settings.openRouterModels.removeAll { $0.id == id }
+        settings.openRouterRecent.removeAll { $0 == id }
+    }
+
+    var onManageModels: () -> Void = {}
 
     func hideControl() {
         settings.controlHidden = true

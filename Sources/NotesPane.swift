@@ -16,11 +16,12 @@ struct NotesPane: View {
 struct NoteEditorPane: View {
     @Bindable var model: AppModel
     let editor: NotesEditor
-    @State private var hovering = false
 
     var body: some View {
         let outline = RoundedRectangle(cornerRadius: 12, style: .continuous)
         VStack(spacing: 0) {
+            NoteNameHeader(model: model, library: editor.library, saveAs: editor.save(named:))
+                .frame(height: AppModel.notesHeader)
             NotesEditorView(editor: editor)
                 .background {
                     outline.fill(.white.opacity(model.notesEditing ? 0.045 : 0))
@@ -44,40 +45,88 @@ struct NoteEditorPane: View {
                         .padding(.vertical, 12)
                 }
                 .frame(height: model.notesHeight)
-            HStack { Spacer(minLength: 0); corner }
-                .frame(height: AppModel.notesFooter, alignment: .top)
         }
-        .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.2), value: model.notesEditing)
     }
+}
 
-    private var corner: some View {
-        let library = editor.library
-        let naming = library.naming.flatMap { library.note($0) }
-        return HStack(spacing: 5) {
-            if let naming {
-                NoteNameField(library: library, note: naming)
-            } else {
-                Text(library.currentName)
-                    .font(tiktok(10.5, "Medium"))
-                    .foregroundStyle(.white.opacity(hovering ? 0.5 : 0.28))
-                    .lineLimit(1)
-            }
+struct NoteNameHeader: View {
+    let model: AppModel
+    let library: NotesLibrary
+    let saveAs: (String) -> Void
+    @State private var name = ""
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        return HStack(spacing: 7) {
+            Text("Name")
+                .font(tiktok(13, "Medium"))
+                .foregroundStyle(.white.opacity(0.4))
+            TextField("", text: $name)
+                .textFieldStyle(.plain)
+                .font(tiktok(13, "Medium"))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+                .focused($focused)
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .background {
+                    shape.fill(.white.opacity(focused ? 0.13 : 0.07))
+                        .overlay(shape.strokeBorder(.white.opacity(focused ? 0.22 : 0.1), lineWidth: 1))
+                }
+                .onSubmit { focused = false }
+                .onExitCommand { cancel() }
+                .onChange(of: focused) { _, now in if !now { commit() } }
             Image(systemName: "list.bullet")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
-                .frame(width: 18, height: 16)
+                .foregroundStyle(.white.opacity(hovering ? 0.9 : 0.55))
+                .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
                 .onTapGesture { model.showMyNotes() }
+                .onHover { hovering = $0 }
                 .tip("My notes")
-                .opacity(hovering || naming != nil ? 1 : 0)
-                .allowsHitTesting(hovering || naming != nil)
         }
-        .padding(.leading, 7)
-        .padding(.trailing, 3)
-        .background(Capsule().fill(.black.opacity(hovering || naming != nil ? 0.22 : 0)))
-        .padding(.trailing, 11)
-        .animation(.easeOut(duration: 0.14), value: hovering)
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.top, 6)
+        .onAppear {
+            name = library.currentName
+            claim()
+        }
+        .onChange(of: library.currentName) { _, now in if !focused { name = now } }
+        .onChange(of: library.naming) { _, _ in claim() }
+        .animation(.easeOut(duration: 0.14), value: focused)
+    }
+
+    private func claim() {
+        guard let naming = library.naming, naming == library.currentNote?.id else { return }
+        name = library.currentName
+        focused = true
+    }
+
+    private func cancel() {
+        name = library.currentName
+        release()
+        focused = false
+    }
+
+    private func commit() {
+        guard let note = library.currentNote else {
+            let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !typed.isEmpty, typed != library.currentName { saveAs(typed) }
+            name = library.currentName
+            release()
+            return
+        }
+        release()
+        library.rename(note.id, to: name)
+        name = library.currentName
+    }
+
+    private func release() {
+        if library.naming == library.currentNote?.id { library.naming = nil }
     }
 }
 

@@ -324,6 +324,7 @@ class Remote:
         self.name = key.split(":", 1)[0]
         self.provider = provider(key)
         self.model = key.split(":", 1)[1]
+        self.model_id, _, self.route = self.model.rpartition("@") if "@" in self.model else (self.model, "", "")
         self.notify = notify or (lambda state, message="": None)
         self.conn = None
         self.failed = False
@@ -443,7 +444,7 @@ class Remote:
         while status != 200:
             if b"reasoning" in data.lower() and self.quiet + 1 < len(self.provider.quiet):
                 self.quiet += 1
-            elif correcting and self.json_format and b"response_format" in data.lower():
+            elif correcting and self.json_format and (b"response_format" in data.lower() or status in (400, 404)):
                 self.json_format = False
             else:
                 break
@@ -492,8 +493,9 @@ class Remote:
             messages = ([{"role": "system", "content": system_prompt()}] + self.shots
                         + [{"role": "user", "content": preface() + lead + text}])
             extra = {}
+        routing = {"provider": {"order": [self.route], "allow_fallbacks": True, "sort": "latency"}} if self.route else {}
         return json.dumps({
-            "model": self.model,
+            "model": self.model_id,
             "messages": messages,
             "temperature": 0,
             "stream": False,
@@ -501,6 +503,7 @@ class Remote:
             **self.provider.accounting,
             **self.provider.quiet[self.quiet],
             **extra,
+            **routing,
         }).encode()
 
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
@@ -574,11 +577,12 @@ class Bench:
         self.delay: dict[str, float] = {}
         self.thread: threading.Thread | None = None
 
-    def configure(self, key: str | None) -> None:
+    def configure(self, key: str | None, compare: list[str] | None = None) -> None:
         for remote in self.models.values():
             remote.close()
         name = key.split(":", 1)[0] if key else ""
-        others = [model for model in BENCH_MODELS.get(name, []) if f"{name}:{model}" != key]
+        offered = compare if compare and name == "openrouter" else BENCH_MODELS.get(name, [])
+        others = [model for model in offered if f"{name}:{model}" != key] if key else []
         self.models = {model: Remote(f"{name}:{model}") for model in others}
         self.ready = {model: 0.0 for model in others}
         self.delay = {model: BENCH_BACKOFF_S for model in others}
