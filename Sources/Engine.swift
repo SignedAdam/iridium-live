@@ -61,11 +61,16 @@ func jsonString(_ text: String) -> String {
     return (try? encoder.encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
 }
 
-/// The engine as a child process: commands go to its stdin, events come back from its stdout, its stderr is ours.
+/// The engine as a child process: commands go to its stdin, events come back from its stdout. Its stderr is ours in a
+/// terminal (`make run`), and otherwise goes to `log`, which is where a hang or a crash leaves its trace.
 /// When it exits, so does the app. It is given its own environment rather than inheriting a shell's: launched from
 /// Finder there is none, and the API keys come from the keychain.
 @MainActor
 final class Engine {
+    /// The engine's log when the app was opened from Finder: this file and one older, 5 MB each at most.
+    static let log = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/Iridium Live/engine.log")
+
     private let process = Process()
     private let commands = Pipe()
 
@@ -78,6 +83,7 @@ final class Engine {
         process.currentDirectoryURL = directory
         process.standardInput = commands
         process.standardOutput = events
+        if isatty(STDERR_FILENO) == 0, let log = Self.openLog() { process.standardError = log }
         try process.run()
         let output = events.fileHandleForReading
         Task.detached {
@@ -96,5 +102,21 @@ final class Engine {
     /// Commands written before the engine is up wait in the pipe, so the app never has to.
     func send(_ command: String) {
         try? commands.fileHandleForWriting.write(contentsOf: Data((command + "\n").utf8))
+    }
+
+    /// The log, opened for appending with a line marking this launch; past 5 MB it becomes `engine.1.log` first.
+    private static func openLog() -> FileHandle? {
+        let files = FileManager.default
+        try? files.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let size = (try? files.attributesOfItem(atPath: log.path))?[.size] as? Int, size > 5 << 20 {
+            let older = log.deletingPathExtension().appendingPathExtension("1.log")
+            try? files.removeItem(at: older)
+            try? files.moveItem(at: log, to: older)
+        }
+        if !files.fileExists(atPath: log.path) { files.createFile(atPath: log.path, contents: nil) }
+        guard let handle = try? FileHandle(forWritingTo: log) else { return nil }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data("--- launched \(Date().ISO8601Format())\n".utf8))
+        return handle
     }
 }

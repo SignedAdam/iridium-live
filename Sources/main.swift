@@ -53,7 +53,9 @@ MainActor.assumeIsolated {
         engine = try Engine(command: command, environment: AppResources.engineEnvironment(),
                             directory: AppResources.directory) { event in
             dock.handle(event)
+            if ["partial", "final", "work"].contains(event.kind) { model.engineStalled = false }  // it is moving again
             switch event.kind {
+            case "stalled": model.engineStalled = true
             case "state":
                 if event.recording {
                     model.recording = true
@@ -65,7 +67,9 @@ MainActor.assumeIsolated {
                     model.stopped()
                     idle.arm(after: model.idleUnloadMinutes)
                 }
-            case "ready": model.ready = true
+            case "ready":
+                model.ready = true
+                model.engineStalled = false
             case "level": if model.recording { model.receive(level: event.value) }
             case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":

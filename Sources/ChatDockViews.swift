@@ -34,6 +34,7 @@ struct DockButton: View {
                     .scaleEffect(1 + (recording ? min(state.level, 1) * 0.12 : 0))
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .opacity(state.ready || recording ? 1 : 0.45)
             .scaleEffect(holding ? 0.9 : 1)
             .contentShape(shape)
             .onHover { hovering = $0 }

@@ -42,6 +42,8 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
   {"kind": "work", "pending": bool}                true when a "stop" left work behind (audio queued, a phrase
                                                    open or decoding, a cleanup running); false once every stop or
                                                    cancel has been seen through, even one that left nothing behind
+  {"kind": "stalled"}                              the transcriber has held one item for STALL_S: stuck, with
+                                                   every thread's stack written to stderr
   {"kind": "partial" | "final", "text": ...}       caption: the whole in-flight phrase, replacing the previous one
                                                    (final also carries "raw" and "cleanup_ms" when cleanup is on)
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
@@ -68,6 +70,7 @@ waits for it, the connection and network time, what the provider reports of its 
 time, the token counts, the cost in dollars and any error that left the phrase raw.
 """
 import argparse
+import faulthandler
 import gc
 import json
 import math
@@ -94,6 +97,7 @@ import cleanup as cleanup_model
 import segmenter as seg
 
 TYPE_HOLD_S = 0.7  # a word is typed once the phrase up to it has read the same for this much audio
+STALL_S = 90.0     # one item in the transcriber's hands this long is a hang: a model load or a cleanup pass ends well before
 BLOCK = int(0.05 * seg.SAMPLE_RATE)
 CACHE_DIR = Path.home() / ".cache" / "iridium-live"
 if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():  # the app's former name: keep its models
@@ -471,12 +475,14 @@ def main() -> None:
     parser.add_argument("--wav", help="on start, play this file at real time instead of opening the microphone")
     parser.add_argument("--asr", choices=sorted(asr.MODELS), default="phonon-2", help="the speech model to load")
     args = parser.parse_args()
+    faulthandler.enable()  # a crash in native code (MLX, PortAudio) still leaves its stacks in the log
 
     events = Events()
     audio: queue.Queue = queue.Queue()
     control: queue.Queue = queue.Queue()  # slots whose files are on disk, waiting to be loaded here
     work = Work(events)
-    working = threading.Event()           # the transcriber has an item in hand
+    working = threading.Event()           # the transcriber has an item in hand...
+    taken = [time.monotonic()]            # ...since this moment
     discarding = threading.Event()        # a cancel is on its way: this recording says nothing more
     session: seg.Segmenter | None = None  # built below, once there is a speech model to decode with
 
@@ -496,6 +502,21 @@ def main() -> None:
     polishing = True       # one pass over the whole of a recording when it stops
     benchmarking = False   # the provider's other models run over each phrase, behind the speaker
     context = ""           # what the next recording continues, until a start takes it
+
+    def watch_for_stalls() -> None:
+        """The transcriber holding one item for STALL_S is stuck: every thread's stack goes to stderr (the app's
+        log), and the app is told, so a speaker who gets nothing back learns why. Once per stall."""
+        reported = None
+        while True:
+            time.sleep(5)
+            held = taken[0]
+            if working.is_set() and time.monotonic() - held > STALL_S and reported != held:
+                reported = held
+                print(f"stalled: one item in hand for {time.monotonic() - held:.0f} s", file=sys.stderr, flush=True)
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                events.send({"kind": "stalled"})
+
+    threading.Thread(target=watch_for_stalls, daemon=True).start()
 
     def resume() -> None:
         """Anything that needs a model brings back what `unload` dropped. Only the speech model is ever dropped:
@@ -666,10 +687,12 @@ def main() -> None:
         dictation.drop()
 
     session = seg.Segmenter(speech, vad, on_partial=on_partial, on_final=on_final, on_frame=archive.feed)
+    stopped_unheard = False  # a stop came while its phrases waited for a speech model: the reload finishes it
     try:
         while True:
             working.clear()
             block = audio.get()
+            taken[0] = time.monotonic()
             working.set()
             if block is QUIT:
                 break
@@ -689,15 +712,25 @@ def main() -> None:
                         if slot.model is not None:
                             asr.warm_up(speech)
                             session.drain()  # whatever was said while no model was loaded
-                            work.set(False)  # ...which is the last of what a stop could still be waiting for
+                            if stopped_unheard:  # ...ended a recording whose stop came before the model
+                                stopped_unheard = False
+                                finish_dictation()
+                                with audio.mutex:
+                                    another = any(item is STOP for item in audio.queue)
+                                if not another:  # a later stop still in the queue says done for itself
+                                    work.done()
             elif block is STOP:
                 session.finish()
                 archive.flush()
                 if stable.typed:  # the phrase ended without a final decode: what is typed stands
                     send({"kind": "type", "text": " ".join(stable.typed), "final": True})
                     stable.reset()
-                finish_dictation()  # the whole recording, polished, before the speaker is told the work is done
-                work.done()
+                if session.held:  # said with no speech model loaded: decoded and reported once one is back
+                    stopped_unheard = True
+                    work.set(True)
+                else:
+                    finish_dictation()  # the whole recording, polished, before the speaker is told it is done
+                    work.done()
             elif block is CANCEL:
                 session.discard()  # the phrase in flight is not decoded, typed or kept
                 archive.discard()

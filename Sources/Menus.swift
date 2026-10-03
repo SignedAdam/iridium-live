@@ -455,7 +455,8 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
     let shown: (@escaping @MainActor () -> Void) -> @MainActor () -> Void = { open in { model.showControl(); open() } }
     return [
         MenuItem(id: "record", title: model.recording ? "Stop recording" : "Start recording",
-                 symbol: model.recording ? "stop.circle" : "record.circle", action: { model.toggleRecording() }),
+                 symbol: model.recording ? "stop.circle" : "record.circle", enabled: model.ready || model.recording,
+                 action: { model.toggleRecording() }),
         .separator(),
         MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
                  action: { hidden ? model.showControl() : model.hideControl() }),

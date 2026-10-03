@@ -35,7 +35,8 @@ final class AppModel {
 
     var recording = false
     var recordingSince = Date()
-    var ready = false
+    var ready = false  // the engine has its speech model in and reads commands; nothing records before that
+    var engineStalled = false  // the engine has held one piece of work far too long: nothing more will come back
     private(set) var level = 0.0
     var speech = ModelStatus(state: "loading")
     var cleanup = ModelStatus()
@@ -88,9 +89,16 @@ final class AppModel {
         }
     }
 
-    /// What the control is doing, for the line above the bar: where the words are going while recording, and that it
-    /// is still finishing after a stop. Nothing worth saying otherwise.
+    /// What the control is doing, for the line above the bar: the speech model on its way in, where the words are
+    /// going while recording, that it is still finishing after a stop, or that the engine is stuck.
     var activity: String? {
+        if engineStalled { return "Engine stuck. Quit and reopen" }
+        switch speech.state {
+        case "downloading": return "Downloading speech model \(Int(speech.progress * 100))%"
+        case "loading": return "Loading speech model"
+        case "error" where !ready: return "Speech model failed to load"
+        default: if !ready { return "Loading speech model" }
+        }
         if let chatTarget { return recording ? "Dictating to \(chatTarget.name)" : "Finishing" }
         if recording {
             switch (typingNow, notingNow) {
@@ -157,16 +165,20 @@ final class AppModel {
 
     /// The record button: a recording of your own, typed or noted as the switches say.
     func toggleRecording() {
-        recording ? stopRecording() : startRecording(for: nil)
+        if recording { stopRecording() } else { startRecording(for: nil) }
     }
 
     /// Start recording, for `action` when a hotkey asked. The purpose outlives the stop, so the phrase that finishes
-    /// just after it still goes where it was meant to.
-    func startRecording(for action: Hotkey.Action?) {
+    /// just after it still goes where it was meant to. Nothing starts before the engine is ready: until then it reads
+    /// no commands, and a start and a stop would wait in the pipe and run back to back, recording nothing.
+    @discardableResult
+    func startRecording(for action: Hotkey.Action?) -> Bool {
+        guard ready else { return false }
         session = action
         recording = true  // answer at once; the engine's state events confirm or undo it
         recordingSince = Date()
         onRecord(true)
+        return true
     }
 
     func stopRecording() {

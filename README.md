@@ -72,6 +72,8 @@ model (about 1 GB) downloads on first use.
 | `Recordings/` | audio, with *Save audio* on |
 | `chat-apps.json` | chat app settings |
 
+Engine log: `~/Library/Logs/Iridium Live/engine.log`
+
 ## Code
 
 | | |

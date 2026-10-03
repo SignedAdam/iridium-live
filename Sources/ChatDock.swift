@@ -22,6 +22,7 @@ final class DockState {
     var live = ""       // the phrase being spoken
     var collected = ""  // the finished phrases of this recording
     var attached = false  // the overlay runs across the chat pane, joined to the input row, rather than as a card
+    var ready = false  // the engine reads commands: until then the button is dimmed and does nothing
 
     /// Everything heard so far, for the overlay.
     var transcript: String {
@@ -100,6 +101,7 @@ final class ChatDock {
 
     /// The engine's side of a dictation started from the dock.
     func handle(_ event: EngineEvent) {
+        if event.kind == "ready" { state.ready = true }
         guard model.chatTarget != nil else { return }
         switch event.kind {
         case "level": state.level = event.value
@@ -162,7 +164,7 @@ final class ChatDock {
             stop()
             return
         }
-        guard let current, model.chatTarget == nil, !model.recording else { return }
+        guard let current, model.ready, model.chatTarget == nil, !model.recording else { return }
         pressStarted = Date()
         delivered = false
         state.reset()
