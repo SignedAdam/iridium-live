@@ -12,6 +12,10 @@ struct Settings: Codable, Equatable {
     var cleanupInstructions = ""                // the user's own rules for the cleanup model, added to its prompt
     var cleanupPolish = true                    // one more pass over the whole of a recording when it stops
     var cleanupBenchmark = false                // every other model of the provider answers each phrase as well
+    var cleanupCorrections = true               // "I mean ..." fixes an earlier sentence of the same recording
+    var cleanupContextSentences = 5             // earlier sentences the model reads in front of each phrase
+    var cleanupEditReach = 2                    // ...of which the last this many a correction may change
+    var cleanupQuotes = false                   // "quote ... end quote" becomes quotation marks
     var captionsShown = true
     var captionPosition = CaptionPosition.top
     var captionFont = "TikTok Sans"
@@ -70,6 +74,17 @@ struct Settings: Codable, Equatable {
         guard cleanupEnabled else { return "cleanup off" }
         return "cleanup \(cleanupProvider):\(cleanupModel)"
     }
+
+    /// The engine command for spoken corrections as set.
+    var correctionsCommand: String {
+        cleanupCorrections ? "corrections \(cleanupContextSentences) \(min(cleanupEditReach, cleanupContextSentences))"
+                           : "corrections off"
+    }
+
+    /// The engine command for the optional cleanup rules that are on.
+    var rulesCommand: String {
+        "rules " + (cleanupQuotes ? ["quotes"] : []).joined(separator: ",")
+    }
 }
 
 extension Settings {
@@ -88,6 +103,10 @@ extension Settings {
         cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
         cleanupPolish = value(.cleanupPolish, fallback.cleanupPolish)
         cleanupBenchmark = value(.cleanupBenchmark, fallback.cleanupBenchmark)
+        cleanupCorrections = value(.cleanupCorrections, fallback.cleanupCorrections)
+        cleanupContextSentences = value(.cleanupContextSentences, fallback.cleanupContextSentences)
+        cleanupEditReach = value(.cleanupEditReach, fallback.cleanupEditReach)
+        cleanupQuotes = value(.cleanupQuotes, fallback.cleanupQuotes)
         captionsShown = value(.captionsShown, fallback.captionsShown)
         captionPosition = value(.captionPosition, fallback.captionPosition)
         captionFont = value(.captionFont, fallback.captionFont)

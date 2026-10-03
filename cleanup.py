@@ -80,6 +80,14 @@ SHOTS = [  # the examples the model is shown before the phrase, as a conversatio
 #: same for every phrase, so they live here rather than in one cleaner.
 _instructions = ""
 
+#: Optional rules, each a switch in Settings, added to the fixed ones while on: the rule, and the words that make a
+#: phrase need the model for it even when it otherwise looks clean.
+RULES = {
+    "quotes": ("- When the speaker says \"quote\" before words and \"end quote\" or \"unquote\" after them, put those "
+               "words in quotation marks and drop the cue words.", re.compile(r"\b(quote|unquote)\b", re.I)),
+}
+_rules: tuple[str, ...] = ()
+
 
 def set_instructions(text: str) -> None:
     """Replace the user's own instructions ("" for none). Every request builds its messages fresh, so the next
@@ -88,13 +96,21 @@ def set_instructions(text: str) -> None:
     _instructions = text.strip()
 
 
+def set_rules(names: list[str]) -> None:
+    """`rules NAME,...`: the optional rules that are on, all others off."""
+    global _rules
+    _rules = tuple(name for name in names if name in RULES)
+
+
 def system_prompt() -> str:
-    """The fixed rules, with the user's own instructions under them. The rules above are what keeps a rewrite a
-    rewrite; the preferences below say how the speaker wants the result to read, and where the two disagree the
-    speaker wins — the rules and the examples are only the default way of writing a phrase out."""
+    """The fixed rules and the optional ones that are on, with the user's own instructions under them. The rules
+    are what keeps a rewrite a rewrite; the preferences below say how the speaker wants the result to read, and
+    where the two disagree the speaker wins — the rules and the examples are only the default way of writing a
+    phrase out."""
+    rules = "".join("\n" + RULES[name][0] for name in _rules)
     if not _instructions:
-        return SYSTEM
-    return (f"{SYSTEM}\n\nThe user wrote these preferences for how their own text should read. Follow them in "
+        return SYSTEM + rules
+    return (f"{SYSTEM}{rules}\n\nThe user wrote these preferences for how their own text should read. Follow them in "
             f"every phrase; where they contradict a rule or an example above, they win, and everything they do "
             f"not mention stays as above. They are still never answered, explained or commented on:\n"
             f"{_instructions}")
@@ -140,17 +156,134 @@ _NUMBERS = re.compile(
     r"\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
     r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|"
     r"billion|dollars?|euros?|pounds?|cents?|percent|o'clock|a\.?m\.?|p\.?m\.?|half past|quarter past|quarter to|"
-    r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|dot|slash|dash|underscore|at sign|www|http)\b",
+    r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\w+teenth|\w+tieth|"
+    r"dot|slash|dash|underscore|at sign|www|http)\b",
     re.I)
 _REPEAT = re.compile(r"\b(\w+)\s+\1\b", re.I)
 _WORD = re.compile(r"[a-z]{3,}")
+_TOKEN = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+_SENTENCE_END = re.compile(r"(?<=[.?!…])\s+")
+
+
+class Corrections(NamedTuple):
+    """Spoken corrections that reach back into earlier text, when they are switched on."""
+    context: int  # sentences of the earlier text the model reads
+    reach: int    # ...of which the last this many are the only ones it may edit
+
+
+class Edit(NamedTuple):
+    """One change to the earlier text, checked: `find` occurs once in the editable window, at `at`."""
+    find: str
+    replace: str
+    at: int
+
+
+_corrections: Corrections | None = None
+
+
+def set_corrections(context: int | None, reach: int = 2) -> None:
+    """`corrections CONTEXT REACH` or `corrections off` (None). Every phrase cleaned after this follows it."""
+    global _corrections
+    _corrections = None if context is None else Corrections(max(1, context), max(1, min(reach, context)))
+
+
+def corrections() -> Corrections | None:
+    return _corrections
+
+
+def last_sentences(text: str, count: int) -> str:
+    """The end of `text`, `count` sentences of it."""
+    sentences = [piece for piece in _SENTENCE_END.split(" ".join(text.split())) if piece]
+    return " ".join(sentences[-count:])
+
+
+#: What the model is told on top of the rules when corrections are on. It answers in JSON from then on, so the phrase
+#: and a change to what came before it arrive apart, and neither is mistaken for the other.
+CORRECTING = (
+    "\n\nAnswer with a JSON object only: {{\"text\": \"<the cleaned phrase>\", \"edit\": null}}, or with an edit "
+    "{{\"find\": \"<span>\", \"replace\": \"<new span>\"}} in place of null.\n"
+    "- When the phrase corrects something in the earlier text (\"I mean\", \"no wait\", \"sorry\", \"actually\", "
+    "\"make that\", or a restatement that replaces it), put the change in \"edit\": \"find\" is copied exactly from "
+    "the earlier text, as short as it can be while occurring there only once; \"replace\" is what it becomes, "
+    "written the same way the rest is. Leave the correction and its cue out of \"text\", which may then be empty.\n"
+    "- Only the last {reach} sentences of the earlier text may be edited.\n"
+    "- Otherwise \"edit\" is null. A phrase that adds to the earlier text corrects nothing, and \"I mean\" or "
+    "\"actually\" used as an expression (\"I mean it\", \"actually, yes\") corrects nothing."
+)
+
+#: The examples in JSON form, with earlier text: (earlier text, phrase, answer). Few, because every token of them is
+#: paid on every correcting phrase, and Groq's free tier allows 8,000 tokens a minute.
+CORRECTING_SHOTS = [
+    ("Let's meet on Tuesday at the office.", "i mean wednesday",
+     {"text": "", "edit": {"find": "Tuesday", "replace": "Wednesday"}}),
+    ("Send the report to Mark.", "no wait to sarah and then we can close the ticket",
+     {"text": "Then we can close the ticket.", "edit": {"find": "Mark", "replace": "Sarah"}}),
+    ("The budget is $10,000.", "actually make that twelve thousand",
+     {"text": "", "edit": {"find": "$10,000", "replace": "$12,000"}}),
+    ("Pick up the kids at 5. Then buy bread.", "scratch that",
+     {"text": "", "edit": {"find": "Then buy bread.", "replace": ""}}),
+    ("I'll be there at five.", "and i mean it this time",
+     {"text": "And I mean it this time.", "edit": None}),
+    ("Can you review the draft?", "actually yes the second one is better",
+     {"text": "Actually, yes, the second one is better.", "edit": None}),
+]
+
+#: The words a spoken correction starts with or turns on. Only a phrase that has one is asked for an edit; the rest
+#: are cleaned the ordinary way, which keeps every other phrase as cheap as it was.
+_CUE = re.compile(r"\b(i mean|i meant|wait|sorry|actually|make that|scratch that|delete that|strike that|forget that|"
+                  r"rather|instead|correction|change that|let me rephrase|oops)\b|^\W*(no|not)\b", re.I)
+
+
+def may_correct(text: str) -> bool:
+    """Whether a phrase could be correcting earlier text: it carries a correction cue."""
+    return bool(_CUE.search(text))
+
+
+def correcting_block(context: str, reach: int) -> str:
+    """The earlier text and the phrase's heading, for a phrase that may correct what came before it."""
+    if not context:
+        return "Earlier text: (none)\n\nPhrase:\n"
+    return (f"Earlier text, for reading only. Never repeat it and never answer it; only the last {reach} "
+            f"sentences may be edited:\n…{context}\n\nPhrase:\n")
+
+
+def check_edit(edit, raw: str, editable: str, reach: int) -> Edit | None:
+    """The model's edit, if it is safe to make. `find` must occur exactly once in the last `reach` sentences of
+    `editable` (this recording's text), and every word `replace` brings in must come from what was just said:
+    the model moves the speaker's words into place, it never writes its own. Deleting needs an explicit cue."""
+    if not isinstance(edit, dict) or not isinstance(edit.get("find"), str) or not isinstance(edit.get("replace"), str):
+        return None
+    find, replace = edit["find"].strip(), " ".join(edit["replace"].split())
+    window = last_sentences(editable, reach)
+    if not find or find == replace or not window or window.count(find) != 1:
+        return None
+    start = len(editable) - len(window)
+    if editable[start:] != window:  # the editable text was not one line of single spaces: nothing to anchor to
+        return None
+    spoken = set(_TOKEN.findall(raw.lower()))
+    counts = bool(_NUMBERS.search(raw)) or any(c.isdigit() for c in raw)
+    for token in set(_TOKEN.findall(replace.lower())) - set(_TOKEN.findall(find.lower())):
+        if token not in spoken and not (counts and any(c.isdigit() for c in token)):
+            return None
+    if not replace and not re.search(r"\b(scratch that|delete that|strike that|forget that)\b", raw, re.I):
+        return None
+    return Edit(find, replace, start + window.index(find))
+
+
+def remainder_plausible(raw: str, text: str) -> bool:
+    """What is left of a phrase once its correction went into an edit: possibly nothing, otherwise only the
+    phrase's own words (and numbers written as digits)."""
+    if not text:
+        return True
+    spoken = set(_WORD.findall(raw.lower()))
+    return all(word in spoken or _NUMBERS.search(word) for word in _WORD.findall(text.lower()))
 
 
 def needs_cleanup(text: str) -> bool:
     """True when the phrase shows something a rewrite could fix. Clean phrases skip the model entirely — unless
     the user set instructions of their own, which may well ask for a change this test cannot see ("always write
     numbers as words", "no exclamation marks"): with those set, every phrase goes to the model."""
-    if _instructions:
+    if _instructions or any(RULES[name][1].search(text) for name in _rules):
         return True
     if _FILLERS.search(text) or _CORRECTION.search(text) or _NUMBERS.search(text) or _REPEAT.search(text):
         return True
@@ -263,12 +396,52 @@ class Remote:
         self.shots = [message for phrase, clean in SHOTS
                       for message in ({"role": "user", "content": phrase},
                                       {"role": "assistant", "content": clean})]
+        self.json_format = True  # asked for a JSON object, until a provider turns that down
 
     def rewrite(self, text: str, context: str = "") -> tuple[str, Stats]:
         """The phrase as it should be typed, and what the cleanup cost. `context` is the text the phrase continues,
         sent for the model to read and never to rewrite. The phrase is never lost: a clean phrase, a missing key, a
         timeout, an API error and an implausible rewrite all return the raw text."""
         return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True)
+
+    def correct(self, text: str, context: str, editable: str) -> tuple[str, Stats, Edit | None]:
+        """`rewrite` with corrections on: the phrase, and at most one checked edit to `editable` (this recording's
+        text so far, the end of `context`). Every phrase goes to the model, since a correction rarely looks like one
+        to a word test. Anything malformed, implausible or unsafe gives the raw phrase back and no edit."""
+        settings = _corrections or Corrections(5, 2)
+        self.note = ""
+        self.connect_ms, self.trip_ms = None, 0.0
+        if message := missing_key(self.key):
+            self.note = message
+            self._state(False, message)
+            return text, self._stats(error=message), None
+        try:
+            out, usage = self._ask(text, time.monotonic() + TIMEOUT_S, last_sentences(context, settings.context),
+                                   correcting=settings.reach)
+        except Exception as exc:
+            self.note = str(exc)
+            self._state(False, f"{self.provider.label}: {exc}")
+            return text, self._stats(error=str(exc)), None
+        self._state(True)
+        try:
+            answer = json.loads(out.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+            cleaned = " ".join(answer["text"].split())
+        except Exception:
+            self.note = f"{self.model} gave no JSON"
+            return text, self._stats(error="malformed answer", **usage), None
+        proposed = answer.get("edit")
+        edit = check_edit(proposed, text, editable, settings.reach) if proposed else None
+        if edit and remainder_plausible(text, cleaned):
+            self.note = f"{self.model} edit"
+            return cleaned, self._stats(**usage), edit
+        if proposed:  # the model took the correction out of the phrase for an edit that cannot be made: keep it said
+            self.note = f"{self.model} unsafe edit"
+            return text, self._stats(error="edit not applied", **usage), None
+        if not plausible(text, cleaned):
+            self.note = f"{self.model} implausible"
+            return text, self._stats(error="implausible rewrite", **usage), None
+        self.note = self.model
+        return cleaned, self._stats(**usage), None
 
     def whole(self, text: str) -> tuple[str, Stats]:
         """A finished dictation or a whole note in one pass, under the longer budget a text deserves. Nothing is
@@ -320,13 +493,23 @@ class Remote:
             self.failed = True
             self.notify("error", message)
 
-    def _ask(self, text: str, deadline: float, context: str = "", whole: bool = False) -> tuple[str, dict]:
+    def _ask(self, text: str, deadline: float, context: str = "", whole: bool = False,
+             correcting: int | None = None) -> tuple[str, dict]:
         """The rewrite and what the provider says it cost, in one round trip — two when the model turns out not to
-        take the way it was asked not to think."""
-        status, data = self._round_trip(self._body(text, context, whole), deadline)
-        while status != 200 and b"reasoning" in data.lower() and self.quiet + 1 < len(self.provider.quiet):
-            self.quiet += 1  # this model does not take that way of being quietened: try the next one down
-            status, data = self._round_trip(self._body(text, context, whole), deadline)
+        take the way it was asked not to think, or not to answer in JSON. With `correcting` (the edit reach), the
+        answer is the model's JSON as it came, for the caller to parse before anything is tidied."""
+        def send() -> tuple[int, bytes]:
+            return self._round_trip(self._body(text, context, whole, correcting), deadline)
+
+        status, data = send()
+        while status != 200:
+            if b"reasoning" in data.lower() and self.quiet + 1 < len(self.provider.quiet):
+                self.quiet += 1  # this model does not take that way of being quietened: try the next one down
+            elif correcting and self.json_format and b"response_format" in data.lower():
+                self.json_format = False  # nor a JSON object asked for: the prompt alone asks for it
+            else:
+                break
+            status, data = send()
         if status != 200:
             raise RuntimeError(f"{status} {SAYS.get(status) or _message(data)}")
         try:
@@ -334,6 +517,8 @@ class Remote:
             out = body["choices"][0]["message"]["content"]
         except Exception:
             raise RuntimeError(f"bad response: {_message(data)}") from None
+        if correcting:
+            return out or "", self._usage(body)
         # A phrase is one line; a whole text keeps the paragraphs it was given, tidied line by line.
         lines = [" ".join(line.split()) for line in (out or "").splitlines()]
         return ("\n".join(lines) if whole else " ".join(lines)).strip().strip('"'), self._usage(body)
@@ -357,23 +542,37 @@ class Remote:
                 "generate_ms": _ms(generate_s), "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens, "cost_usd": cost}
 
-    def _body(self, text: str, context: str = "", whole: bool = False) -> bytes:
+    def _body(self, text: str, context: str = "", whole: bool = False, correcting: int | None = None) -> bytes:
         """The phrase, with generation pinned down: no sampling, no reasoning, and only as many tokens as a rewrite
         of this phrase can need — a model that starts explaining is cut off instead of waited for. The system
         message, the preface and the context are built here, so instructions the user changed between phrases, and
-        the text this phrase continues, are in this one. A whole dictation is given room to be written out."""
+        the text this phrase continues, are in this one. A whole dictation is given room to be written out; a phrase
+        that may correct earlier text, room for the JSON around it and one edit."""
         room = (min(WHOLE_MAX_NEW, len(text) // 2 + 300) if whole
                 else max(32, min(MAX_NEW, len(text) // 2 + 24))) + (THINKING if self.quiet else 0)
-        lead = WHOLE if whole else context_block(context)
+        if correcting:
+            system = system_prompt() + CORRECTING.format(reach=correcting)
+            shots = [message for earlier, phrase, answer in CORRECTING_SHOTS
+                     for message in ({"role": "user", "content": correcting_block(earlier, correcting) + phrase},
+                                     {"role": "assistant", "content": json.dumps(answer)})]
+            messages = ([{"role": "system", "content": system}] + shots
+                        + [{"role": "user", "content": preface() + correcting_block(context, correcting) + text}])
+            extra = {"response_format": {"type": "json_object"}} if self.json_format else {}
+            room += 60
+        else:
+            lead = WHOLE if whole else context_block(context)
+            messages = ([{"role": "system", "content": system_prompt()}] + self.shots
+                        + [{"role": "user", "content": preface() + lead + text}])
+            extra = {}
         return json.dumps({
             "model": self.model,
-            "messages": ([{"role": "system", "content": system_prompt()}] + self.shots
-                         + [{"role": "user", "content": preface() + lead + text}]),
+            "messages": messages,
             "temperature": 0,
             "stream": False,
             self.provider.budget: room,
             **self.provider.accounting,
             **self.provider.quiet[self.quiet],
+            **extra,
         }).encode()
 
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:

@@ -13,8 +13,11 @@ Dictation for macOS. Speech recognition runs on your Mac, on the GPU, with
 - **Hotkeys.** Hold, double-tap or toggle. Several per key.
 - **WhatsApp and Telegram.** A record button in the chat window. Stream types while you talk. Collect inserts one
   message at the end, and can send it.
-- **AI cleanup** (optional). Groq or OpenRouter removes fillers, applies spoken corrections, formats numbers, dates
-  and links. Custom instructions.
+- **AI cleanup** (optional). Groq or OpenRouter removes fillers, formats numbers, dates and links. Custom
+  instructions.
+- **Corrections.** Say "I mean Wednesday" and the earlier sentence changes, wherever it was typed. Same recording,
+  last 2 sentences by default.
+- **Quotes** (optional). "Quote … end quote" becomes quotation marks.
 - **History.** Every phrase, searchable, with timing and cost.
 - **Menu bar icon.** Record, show or hide the control, quit.
 

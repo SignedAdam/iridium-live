@@ -23,6 +23,7 @@ struct EngineEvent: Sendable {
     let cleanup: PhraseTiming.Cleanup?  // "session" and "rewritten" events: what that one pass cost
     let phrase: String?      // "benchmark" events: the phrase the other models answered
     let results: [BenchmarkRun]  // ... and what each of them wrote
+    let edit: PhraseEdit?    // "final" events of a phrase that corrected earlier text
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -51,6 +52,23 @@ struct EngineEvent: Sendable {
         cleanup = kind == "final" ? nil : engineValue(object["timing"])
         phrase = object["phrase"] as? String
         results = (object["results"] as? [[String: Any]] ?? []).compactMap { engineValue($0) }
+        edit = PhraseEdit(engine: object["edit"])
+    }
+}
+
+/// A spoken correction, as the engine made it: each earlier phrase it changed with its new text, and the recording's
+/// whole text after it, which is what typed text, notes and a chat message are brought up to.
+struct PhraseEdit: Sendable {
+    let phrases: [(id: String, text: String)]
+    let text: String
+
+    init?(engine value: Any?) {
+        guard let object = value as? [String: Any], let text = object["text"] as? String,
+              let phrases = object["phrases"] as? [[String: Any]] else { return nil }
+        self.text = text
+        self.phrases = phrases.compactMap { phrase in
+            (phrase["id"] as? String).flatMap { id in (phrase["text"] as? String).map { (id, $0) } }
+        }
     }
 }
 

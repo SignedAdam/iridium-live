@@ -107,7 +107,10 @@ final class ChatDock {
         case "level": state.level = event.value
         case "partial": state.live = event.text
         case "final":
-            state.collected = state.collected.isEmpty ? event.text : state.collected + " " + event.text
+            if let edit = event.edit { state.collected = edit.text }  // a correction to what was said earlier
+            if !event.text.isEmpty {
+                state.collected = state.collected.isEmpty ? event.text : state.collected + " " + event.text
+            }
             state.live = ""
         case "state":
             if !event.recording, state.recording {

@@ -142,15 +142,19 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         if following { followEnd(animated: true) }
     }
 
-    /// The recording is over and the whole of it came back polished: it replaces exactly what it appended, where it
-    /// stands, as long as the speaker has not edited inside that block since. Like the phrases themselves, this is
-    /// not an undo step. Says whether the text was replaced.
+    /// The recording is over and the whole of it came back polished, or a spoken correction changed it mid-recording:
+    /// it replaces exactly what it appended, where it stands, as long as the speaker has not edited inside that block
+    /// since. Like the phrases themselves, this is not an undo step. With `keepingBlock` the block stays tracked, so
+    /// the phrases still to come join it. Says whether the text was replaced.
     @discardableResult
-    func replaceDictated(with polished: String) -> Bool {
+    func replaceDictated(with polished: String, keepingBlock: Bool = false) -> Bool {
         guard let range = block, let storage = text.textStorage, !polished.isEmpty,
               NSMaxRange(range) <= storage.length else { return false }
-        block = nil
-        guard (storage.string as NSString).substring(with: range) != polished else { return false }
+        block = keepingBlock ? NSRange(location: range.location, length: (polished as NSString).length) : nil
+        guard (storage.string as NSString).substring(with: range) != polished else {
+            if keepingBlock { block = range }
+            return false
+        }
         let following = isAtEnd
         let selection = text.selectedRange()
         applying = true

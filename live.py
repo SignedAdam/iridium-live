@@ -31,7 +31,9 @@ default) runs one more pass over the whole of a recording once it stops, which i
 sentence boundaries and inconsistencies that span two phrases. "rewrite ID JSON" cleans one whole text the same
 way, out of band, and answers with its id. "benchmark on|off" runs every other model of the chosen provider over
 each phrase in the background, after the phrase has been typed, for comparing them on real dictation; it never
-delays a phrase.
+delays a phrase. "corrections CONTEXT REACH" (or "corrections off", the default) lets a phrase with a correction cue
+("I mean", "no wait", "scratch that") edit this recording's earlier text: the model reads the last CONTEXT sentences
+and may change one span in the last REACH of them. "rules NAME,..." switches on optional rules (e.g. quotes).
 All act at once, even while a model is still loading: audio waits and is transcribed as soon as the model is
 ready, and any model that is not on disk is fetched first. Events on stdout, one JSON object per line:
   {"kind": "state", "recording": bool}             at startup and after every change
@@ -48,7 +50,9 @@ ready, and any model that is not on disk is fetched first. Events on stdout, one
                                                    recording it ended is out, and the engine exits to be started
                                                    again, which gets a working one
   {"kind": "partial" | "final", "text": ...}       caption: the whole in-flight phrase, replacing the previous one
-                                                   (final also carries "raw" and "cleanup_ms" when cleanup is on)
+                                                   (final also carries "raw" and "cleanup_ms" when cleanup is on,
+                                                   and "edit" when the phrase corrected earlier text: {"phrases":
+                                                   [{"id", "text"}] changed, "text": the recording's text after it})
   {"kind": "type", "text": ..., "final": bool}     the phrase as it should stand typed so far (the app decides
                                                    whether typing is on)
   {"kind": "session", "session": N, "text": ...,   one per recording that produced a final, after its last final
@@ -78,6 +82,7 @@ import gc
 import json
 import math
 import os
+import re
 import queue
 import sys
 import threading
@@ -151,6 +156,34 @@ class Dictation:
 
     def add(self, phrase: str, text: str) -> None:
         self.phrases.append((phrase, text))
+
+    def text(self) -> str:
+        """This recording's text so far, the phrases run together: what a spoken correction may edit."""
+        return " ".join(text for _, text in self.phrases if text)
+
+    def apply(self, edit: cleanup_model.Edit) -> list[tuple[str, str]]:
+        """Makes a checked edit to `text()` in the phrases it falls in. The first of them takes the edited text, any
+        others it spanned are emptied. Returns each changed phrase with its new text."""
+        spans, at = [], 0
+        for index, (_, text) in enumerate(self.phrases):
+            if not text:
+                continue
+            if spans:
+                at += 1  # the space between two phrases
+            spans.append((index, at, at + len(text)))
+            at += len(text)
+        start, end = edit.at, edit.at + len(edit.find)
+        hit = [span for span in spans if span[1] < end and start < span[2]]
+        if not hit:
+            return []
+        (first, first_at, _), (last, last_at, _) = hit[0], hit[-1]
+        joined = (self.phrases[first][1][:max(0, start - first_at)] + edit.replace
+                  + self.phrases[last][1][max(0, end - last_at):])
+        joined = re.sub(r"\s+([,.;:?!])", r"\1", " ".join(joined.split()))
+        changed = [(first, joined)] + [(index, "") for index, _, _ in hit[1:]]
+        for index, text in changed:
+            self.phrases[index] = (self.phrases[index][0], text)
+        return [(self.phrases[index][0], text) for index, text in changed]
 
     def drop(self) -> None:
         """A cancelled recording: nothing of it is polished or reported."""
@@ -575,6 +608,12 @@ def main() -> None:
                 comparing()
             elif command == "polish":
                 polishing = argument != "off"
+            elif command == "rules":  # "rules quotes,..." or "rules" for none
+                cleanup_model.set_rules([name for name in argument.split(",") if name])
+            elif command == "corrections":  # "corrections CONTEXT REACH", or "corrections off"
+                numbers = argument.split()
+                cleanup_model.set_corrections(int(numbers[0]) if numbers and numbers[0].isdigit() else None,
+                                              int(numbers[1]) if len(numbers) > 1 and numbers[1].isdigit() else 2)
             elif command == "benchmark":
                 benchmarking = argument == "on"
                 comparing()
@@ -669,11 +708,19 @@ def main() -> None:
         cleanup = None
         if cleaner := cleanup_slot.model:
             at = time.perf_counter()
-            rewritten, stats = cleaner.rewrite(text, before)
+            edited = None
+            if cleanup_model.corrections() and dictation.text() and cleanup_model.may_correct(text):
+                rewritten, stats, edit = cleaner.correct(text, before, dictation.text())
+                if edit and (changed := dictation.apply(edit)):
+                    edited = {"phrases": [{"id": id, "text": new} for id, new in changed], "text": dictation.text()}
+            else:
+                rewritten, stats = cleaner.rewrite(text, before)
             ms = (time.perf_counter() - at) * 1000
             cleanup = stats._replace(ms=round(ms))._asdict()
             final = {"kind": "final", "text": rewritten, "raw": text,
                      "cleanup_ms": 0.0 if stats.skipped else round(ms, 1)}
+            if edited:
+                final["edit"] = edited
             print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
         final["id"] = phrase
         final["session"] = dictation.number
@@ -709,7 +756,7 @@ def main() -> None:
         polishing is on and a model is loaded. Sent after the last final and before the work falls away."""
         if not dictation.phrases:
             return
-        said = " ".join(text for _, text in dictation.phrases)
+        said = dictation.text()  # a phrase that only corrected, or was scratched, adds nothing
         text, cost = (whole(said) if polishing else (said, None))
         events.send({"kind": "session", "session": dictation.number, "text": text, "heard": said,
                      "phrases": [phrase for phrase, _ in dictation.phrases],

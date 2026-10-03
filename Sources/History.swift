@@ -7,7 +7,7 @@ import SwiftUI
 struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     let time: Date
-    let text: String
+    var text: String          // as it stands, after any spoken correction made to it later
     var raw: String?
     var destination: String?  // "Notes", the app it was typed into, or both
     var timing: PhraseTiming?
@@ -232,7 +232,8 @@ struct HistoryPane: View {
                         .foregroundStyle(.white.opacity(0.4))
                         .frame(width: 52, alignment: .leading)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.text)
+                        Text(entry.text.isEmpty ? (entry.raw ?? "") : entry.text)  // a phrase that only corrected
+                            .opacity(entry.text.isEmpty ? 0.5 : 1)
                             .font(tiktok(13))
                             .multilineTextAlignment(.leading)
                         if let timing = entry.timing { TimingSummary(timing: timing) }

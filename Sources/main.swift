@@ -73,7 +73,19 @@ MainActor.assumeIsolated {
             case "level": if model.recording { model.receive(level: event.value) }
             case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":
-                if !dock.hidesCaptions { captions.show(event.text) }
+                if let edit = event.edit {
+                    // The phrase corrected earlier text: everything that holds this recording is brought up to the
+                    // corrected version first, under the same rules as the pass at the end, then the phrase lands.
+                    if !control.window.isKeyWindow { typist.revise(to: edit.text) }
+                    if model.notingNow { notes.replaceDictated(with: edit.text, keepingBlock: true) }
+                    for (id, text) in edit.phrases {
+                        guard let at = model.history.lastIndex(where: { $0.phrase == id }) else { continue }
+                        model.history[at].raw = model.history[at].raw ?? model.history[at].text
+                        model.history[at].text = text
+                        history.update(model.history[at])
+                    }
+                }
+                if !dock.hidesCaptions, !event.text.isEmpty { captions.show(event.text) }
                 let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
                                          destination: model.destination, timing: event.timing,
                                          audio: event.audio.isEmpty ? nil : event.audio, phrase: event.id,
@@ -136,6 +148,8 @@ MainActor.assumeIsolated {
         if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
         engine.send(model.settings.cleanupPolish ? "polish on" : "polish off")
         if model.settings.cleanupBenchmark { engine.send("benchmark on") }
+        engine.send(model.settings.correctionsCommand)
+        engine.send(model.settings.rulesCommand)
         if model.settings.saveAudio { archive(model.settings) }
     }
     configure()
@@ -226,6 +240,8 @@ MainActor.assumeIsolated {
         if new.cleanupInstructions != old.cleanupInstructions { engine.send("instructions " + jsonString(new.cleanupInstructions)) }
         if new.cleanupPolish != old.cleanupPolish { engine.send(new.cleanupPolish ? "polish on" : "polish off") }
         if new.cleanupBenchmark != old.cleanupBenchmark { engine.send(new.cleanupBenchmark ? "benchmark on" : "benchmark off") }
+        if new.correctionsCommand != old.correctionsCommand { engine.send(new.correctionsCommand) }
+        if new.rulesCommand != old.rulesCommand { engine.send(new.rulesCommand) }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }

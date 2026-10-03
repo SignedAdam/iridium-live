@@ -101,6 +101,22 @@ struct SettingsPane: View {
                             Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
                                 .buttonStyle(GlassButton())
                         }
+                        Row("Fix earlier sentences", detail: "Say “I mean …” and the earlier sentence changes") {
+                            GlassSwitch(isOn: $model.settings.cleanupCorrections)
+                        }
+                        Row("Sentences it reads") {
+                            GlassMenu(selection: $model.settings.cleanupContextSentences,
+                                      options: [2, 3, 5, 8, 12].map { ($0, "\($0)") }).frame(width: 100)
+                        }
+                        .dimmed(!model.settings.cleanupCorrections)
+                        Row("Sentences it may fix") {
+                            GlassMenu(selection: $model.settings.cleanupEditReach,
+                                      options: [1, 2, 3, 4].map { ($0, "\($0)") }).frame(width: 100)
+                        }
+                        .dimmed(!model.settings.cleanupCorrections)
+                        Row("Quotes", detail: "“Quote … end quote” becomes quotation marks") {
+                            GlassSwitch(isOn: $model.settings.cleanupQuotes)
+                        }
                         Row("Polish each recording", detail: "One more pass over the whole of it when you stop") {
                             GlassSwitch(isOn: $model.settings.cleanupPolish)
                         }
