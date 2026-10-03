@@ -87,6 +87,7 @@ import queue
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 from typing import NamedTuple
 
@@ -560,6 +561,7 @@ def main() -> None:
     polishing = True       # one pass over the whole of a recording when it stops
     benchmarking = False   # the provider's other models run over each phrase, behind the speaker
     context = ""           # what the next recording continues, until a start takes it
+    failure = {"mode": "raw", "retries": 0, "folder": None}  # what a phrase the provider failed becomes
 
     def watch_for_stalls() -> None:
         """The transcriber holding one item for STALL_S is stuck: every thread's stack goes to stderr (the app's
@@ -610,6 +612,12 @@ def main() -> None:
                 polishing = argument != "off"
             elif command == "rules":  # "rules quotes,..." or "rules" for none
                 cleanup_model.set_rules([name for name in argument.split(",") if name])
+            elif command == "failure":  # "failure raw|notify|retry RETRIES FOLDER"
+                mode, _, rest = argument.partition(" ")
+                retries, _, folder = rest.partition(" ")
+                failure.update(mode=mode if mode in ("raw", "notify", "retry") else "raw",
+                               retries=int(retries) if retries.isdigit() else 0,
+                               folder=Path(folder).expanduser() if folder else None)
             elif command == "corrections":  # "corrections CONTEXT REACH", or "corrections off"
                 numbers = argument.split()
                 cleanup_model.set_corrections(int(numbers[0]) if numbers and numbers[0].isdigit() else None,
@@ -676,7 +684,7 @@ def main() -> None:
     speech = TimedSpeech(speech_slot.model)
     asr.warm_up(speech)
     print(f"ready in {time.perf_counter() - started:.1f} s", file=sys.stderr, flush=True)
-    events.send({"kind": "ready"})
+    events.send({"kind": "ready", "cues": cleanup_model.CUES, "starting_cues": cleanup_model.STARTING_CUES})
     for slot in deferred:
         slot.apply()
 
@@ -692,11 +700,26 @@ def main() -> None:
         if cleanup_slot.model is None and (typed := stable.update(text, speech.audio_s)):
             send({"kind": "type", "text": typed, "final": False})
 
-    def on_final(text: str, timing: seg.Timing) -> None:
+    def save_failed(audio: np.ndarray) -> list[dict]:
+        """The audio of a phrase whose cleanup failed, kept even when audio is not being saved, so nothing said is
+        lost: a WAV in Failed/ under the recordings folder."""
+        if failure["folder"] is None:
+            return []
+        path = failure["folder"] / "Failed" / time.strftime("%Y-%m-%d") / time.strftime("%H-%M-%S.wav")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(seg.SAMPLE_RATE)
+            out.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        return [{"file": str(path), "start_s": 0.0, "end_s": round(len(audio) / seg.SAMPLE_RATE, 2)}]
+
+    def on_final(text: str, timing: seg.Timing, audio: np.ndarray) -> None:
         """One phrase is done. With cleanup on, the rewrite runs here, in the transcriber loop: audio keeps
         queueing behind it and the phrase is typed once, cleaned, with everything said earlier in this recording
         in front of it as context. The event carries where the wait went, from the last word the phrase held to
-        this line leaving, and where the phrase can be heard in the archive."""
+        this line leaving, and where the phrase can be heard in the archive. A phrase the provider failed is typed
+        raw, or, with "failure notify" or after the last retry, not typed at all and reported as failed."""
         if discarding.is_set():
             return
         # Asked before the rewrite, which can take seconds: this is where the phrase sits in the files as they
@@ -709,16 +732,21 @@ def main() -> None:
         if cleaner := cleanup_slot.model:
             at = time.perf_counter()
             edited = None
+            retries = failure["retries"] if failure["mode"] == "retry" else 0
             if cleanup_model.corrections() and dictation.text() and cleanup_model.may_correct(text):
-                rewritten, stats, edit = cleaner.correct(text, before, dictation.text())
+                rewritten, stats, edit = cleaner.correct(text, before, dictation.text(), retries)
                 if edit and (changed := dictation.apply(edit)):
                     edited = {"phrases": [{"id": id, "text": new} for id, new in changed], "text": dictation.text()}
             else:
-                rewritten, stats = cleaner.rewrite(text, before)
+                rewritten, stats = cleaner.rewrite(text, before, retries)
             ms = (time.perf_counter() - at) * 1000
             cleanup = stats._replace(ms=round(ms))._asdict()
             final = {"kind": "final", "text": rewritten, "raw": text,
                      "cleanup_ms": 0.0 if stats.skipped else round(ms, 1)}
+            if stats.failed and failure["mode"] != "raw":
+                final["text"] = ""
+                final["failed"] = stats.error
+                heard = heard or save_failed(audio)
             if edited:
                 final["edit"] = edited
             print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
@@ -736,7 +764,7 @@ def main() -> None:
         send({"kind": "type", "text": final["text"], "final": True})
         stable.reset()
         dictation.add(phrase, final["text"])
-        if cleanup is not None and not cleanup["skipped"]:
+        if cleanup is not None and not cleanup["skipped"] and not cleanup["failed"]:
             bench.submit(phrase, text, before)  # the same phrase and the same context, behind the speaker
 
     def whole(text: str) -> tuple[str, dict | None]:

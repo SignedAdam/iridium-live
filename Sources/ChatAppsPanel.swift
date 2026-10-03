@@ -146,7 +146,7 @@ private struct ChatAppsEditor: View {
                 DockChoice(selection: profile.mode, options: [(ChatAppProfile.Mode.stream, "Stream"),
                                                               (.collect, "Collect")])
             }
-            DockRow("Send after dictating") {
+            DockRow("Send automatically") {
                 DockToggle(isOn: profile.autoSend)
             }
             DockRow("Send by") {
@@ -157,7 +157,7 @@ private struct ChatAppsEditor: View {
                 DockChoice(selection: profile.insertion, options: [(ChatAppProfile.Insertion.accessibility, "Direct"),
                                                                    (.paste, "Paste")])
             }
-            DockRow("Hide screen captions") {
+            DockRow("Hide captions") {
                 DockToggle(isOn: profile.hideCaptions)
             }
         }
@@ -165,22 +165,22 @@ private struct ChatAppsEditor: View {
 
     private func places(_ profile: Binding<ChatAppProfile>) -> some View {
         DockGroup("Places", detail: note) {
-            DockRow("Read them from the app") {
+            DockRow("Find positions") {
                 Button("Detect") {
                     let id = profile.wrappedValue.bundleID
                     if let found = detect(id) {
                         note = "Box \(rect(found.box?.frame)), Send \(rect(found.send?.frame))"
                     } else {
                         note = NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
-                            ? "\(profile.wrappedValue.name) is not running" : "Nothing found in its window"
+                            ? "\(profile.wrappedValue.name) is not running" : "Nothing found"
                     }
                 }
                 .buttonStyle(DockAction(prominent: false))
             }
-            RectRow("Iridium button", rect: profile.button)
+            RectRow("Record button", rect: profile.button)
             RectRow("Message box", rect: profile.box)
             RectRow("App’s Send button", rect: profile.sendButton)
-            DockRow("Over the app’s voice button") {
+            DockRow("Cover voice button") {
                 DockToggle(isOn: profile.overVoiceButton)
             }
         }
@@ -220,7 +220,7 @@ private struct ChatAppsEditor: View {
             DockRow("Corner radius") { DockNumber(value: style.cornerRadius) }
             DockRow("Opacity") { DockNumber(value: style.opacity, step: 0.05) }
             DockRow("Background") { DockColour(colour: style.background) }
-            if style.wrappedValue.attached { DockRow("Chat colour") { DockColour(colour: style.joinColour) } }
+            if style.wrappedValue.attached { DockRow("Fade colour") { DockColour(colour: style.joinColour) } }
             DockRow("Text") { DockColour(colour: style.textColour) }
             DockRow("Accent") { DockColour(colour: style.accentColour) }
         }

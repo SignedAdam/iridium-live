@@ -58,20 +58,29 @@ struct SettingsPane: View {
                 }
                 if let chatApps = model.chatApps {
                     Section("Chat apps") {
-                        Row("Button beside Send", detail: "In a chat app, dictate straight into the message box") {
+                        Row("Button beside Send", detail: "Dictate into message box") {
                             GlassSwitch(isOn: Bindable(chatApps).enabled)
                         }
-                        ForEach(Bindable(chatApps).apps) { $profile in
-                            Row(profile.name.isEmpty ? profile.bundleID : profile.name,
-                                detail: profile.isPlaced ? nil : "Needs Detect", alert: !profile.isPlaced) {
-                                HStack(spacing: 8) {
-                                    Button("Customise", action: model.onEditChatApps).buttonStyle(GlassButton())
-                                    GlassSwitch(isOn: $profile.enabled)
+                        if chatApps.enabled {
+                            ForEach(Bindable(chatApps).apps) { $profile in
+                                Row(profile.name.isEmpty ? profile.bundleID : profile.name,
+                                    detail: profile.isPlaced ? nil : "Not set up", alert: !profile.isPlaced) {
+                                    HStack(spacing: 8) {
+                                        Button("Customise", action: model.onEditChatApps).buttonStyle(GlassButton())
+                                        GlassSwitch(isOn: $profile.enabled)
+                                    }
                                 }
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                             }
-                            .dimmed(!chatApps.enabled)
+                        } else {
+                            Row(chatApps.apps.map { $0.name.isEmpty ? $0.bundleID : $0.name }.joined(separator: ", ")) {
+                                EmptyView()
+                            }
+                            .opacity(0.4)
+                            .transition(.opacity)
                         }
                     }
+                    .animation(.easeOut(duration: 0.2), value: chatApps.enabled)
                 }
                 Section("Typing") {
                     Row("Wait before typing") {
@@ -84,7 +93,7 @@ struct SettingsPane: View {
                         GlassSwitch(isOn: $model.settings.cleanupEnabled)
                     }
                     Group {
-                        Row("Runs on") {
+                        Row("Provider") {
                             Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                         }
                         Row("Model") {
@@ -101,33 +110,49 @@ struct SettingsPane: View {
                             Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
                                 .buttonStyle(GlassButton())
                         }
-                        Row("Fix earlier sentences", detail: "Say “I mean …” and the earlier sentence changes") {
+                        Row("Fix previous sentences on correction keywords") {
                             GlassSwitch(isOn: $model.settings.cleanupCorrections)
                         }
-                        Row("Sentences it reads") {
-                            GlassMenu(selection: $model.settings.cleanupContextSentences,
-                                      options: [2, 3, 5, 8, 12].map { ($0, "\($0)") }).frame(width: 100)
+                        .tip(keywordsTip)
+                        if model.settings.cleanupCorrections {
+                            Row("Sentences to read") {
+                                GlassMenu(selection: $model.settings.cleanupContextSentences,
+                                          options: [2, 3, 5, 8, 12].map { ($0, "\($0)") }).frame(width: 100)
+                            }
+                            .transition(.opacity)
+                            Row("Sentences to fix") {
+                                GlassMenu(selection: $model.settings.cleanupEditReach,
+                                          options: [1, 2, 3, 4].map { ($0, "\($0)") }).frame(width: 100)
+                            }
+                            .transition(.opacity)
                         }
-                        .dimmed(!model.settings.cleanupCorrections)
-                        Row("Sentences it may fix") {
-                            GlassMenu(selection: $model.settings.cleanupEditReach,
-                                      options: [1, 2, 3, 4].map { ($0, "\($0)") }).frame(width: 100)
-                        }
-                        .dimmed(!model.settings.cleanupCorrections)
-                        Row("Quotes", detail: "“Quote … end quote” becomes quotation marks") {
+                        Row("Add quotes") {
                             GlassSwitch(isOn: $model.settings.cleanupQuotes)
                         }
-                        Row("Polish each recording", detail: "One more pass over the whole of it when you stop") {
+                        Row("Clean up full recording on stop") {
                             GlassSwitch(isOn: $model.settings.cleanupPolish)
                         }
-                        Row("Benchmark other models", detail: "They answer every phrase too, so you spend several times as much") {
+                        Row("Benchmark mode") {
                             HStack(spacing: 8) {
                                 Button("Results", action: model.onShowBenchmarks).buttonStyle(GlassButton())
                                 GlassSwitch(isOn: $model.settings.cleanupBenchmark)
                             }
                         }
+                        Row("When cleanup fails") {
+                            Segments(selection: $model.settings.cleanupFailure,
+                                     options: [(.retry, "Retry"), (.notify, "Fail and notify"), (.raw, "Insert raw")])
+                        }
+                        if model.settings.cleanupFailure == .retry {
+                            Row("Retries") {
+                                GlassMenu(selection: $model.settings.cleanupRetries,
+                                          options: [1, 2, 3, 5, 8].map { ($0, "\($0)") }).frame(width: 100)
+                            }
+                            .transition(.opacity)
+                        }
                     }
                     .dimmed(!model.settings.cleanupEnabled)
+                    .animation(.easeOut(duration: 0.2), value: model.settings.cleanupCorrections)
+                    .animation(.easeOut(duration: 0.2), value: model.settings.cleanupFailure)
                 }
                 Section("Recordings") {
                     Row("Save audio") {
@@ -157,7 +182,7 @@ struct SettingsPane: View {
                         Row("Size") {
                             GlassSlider(value: $model.settings.captionSize, range: 24...96, step: 1) { String(format: "%.0f pt", $0) }
                         }
-                        Row("Stay for") {
+                        Row("Show for") {
                             GlassSlider(value: $model.settings.captionSeconds, range: 1...10, step: 0.5) { String(format: "%.1f s", $0) }
                         }
                         Row("Opacity") {
@@ -187,6 +212,14 @@ struct SettingsPane: View {
         model.memoryWarning && model.speech.state == "ready" ? "Memory is low. Unloading frees about 1 GB." : nil
     }
 
+    /// The correction keywords, a few to a line.
+    private var keywordsTip: String {
+        let words = model.correctionKeywords
+        guard !words.isEmpty else { return "Keywords appear once the speech model is loaded" }
+        let lines = stride(from: 0, to: words.count, by: 4).map { words[$0..<min($0 + 4, words.count)].joined(separator: ", ") }
+        return (["Correction keywords:"] + lines).joined(separator: "\n")
+    }
+
     /// The start of the user's cleanup instructions, as a reminder under the row.
     private var instructionsPreview: String? {
         let text = model.settings.cleanupInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -201,7 +234,7 @@ struct SettingsPane: View {
         case "loading": "Loading…"
         case "unloaded": "Unloaded"
         case "error": status.model?.contains(":") == true ? status.message : "Couldn’t load: \(status.message)"  // provider:model is remote
-        case "ready": lastMs.map { "Last phrase took \(Int($0)) ms" }
+        case "ready": lastMs.map { "Last: \(Int($0)) ms" }
         default: nil
         }
     }
@@ -229,7 +262,7 @@ private struct SetupSection: View {
                         .buttonStyle(GlassButton())
                 }
             }
-            Row("Accessibility", detail: setup.accessibility ? nil : "Typing and hotkeys need it.",
+            Row("Accessibility", detail: setup.accessibility ? nil : "Needed for typing and hotkeys.",
                 alert: !setup.accessibility) {
                 if setup.accessibility {
                     Figure("Granted")
@@ -276,8 +309,8 @@ private struct SetupSection: View {
     private var microphone: String? {
         switch setup.microphone {
         case .granted: nil
-        case .denied: "Turned off for Iridium Live."
-        case .notAsked: "Not asked for yet."
+        case .denied: "Off. Turn on in System Settings."
+        case .notAsked: "Not requested yet."
         }
     }
 
@@ -555,7 +588,7 @@ private struct HotkeyRow: View {
                     }
                     .buttonStyle(Keycap(capturing: capturing))
                     .fixedSize()
-                    .tip("Click, then press a key or a lone modifier")
+                    .tip("Click, then press a key")
                     InlineMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames)
                     InlineMenu(selection: $hotkey.action, options: Hotkey.actionNames)
                 }
@@ -575,9 +608,9 @@ private struct HotkeyRow: View {
                 .tip("Remove")
             }
             if conflict {
-                note("Same key and gesture as another", color: accent)
+                note("Already used by another hotkey", color: accent)
             } else if waits {
-                note("Waits a moment for a double-tap", color: .white.opacity(0.45))
+                note("Taps wait for a possible double-tap", color: .white.opacity(0.45))
             }
         }
         .padding(.vertical, 6)

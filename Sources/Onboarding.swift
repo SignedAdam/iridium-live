@@ -80,7 +80,7 @@ private struct OnboardingView: View {
                 Text("Iridium Live")
                     .font(tiktok(17, "Medium"))
                     .foregroundStyle(.white.opacity(0.95))
-                Text("The first two let it hear you and type for you. The rest is up to you.")
+                Text("Microphone and Accessibility are needed. The rest is optional.")
                     .font(tiktok(12))
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
@@ -116,7 +116,7 @@ private struct OnboardingView: View {
                 .padding(.leading, 26)
                 .transition(.opacity)
             }
-            Step(title: "Open at login", detail: setup.isBundled ? "Start Iridium Live with the Mac."
+            Step(title: "Open at login", detail: setup.isBundled ? "Open Iridium Live when you log in."
                                                                  : "Needs the app in /Applications.",
                  done: setup.openAtLogin) {
                 GlassToggle(isOn: setup.openAtLogin) { setup.setOpenAtLogin($0) }
@@ -141,20 +141,20 @@ private struct OnboardingView: View {
     private var microphoneDetail: String {
         switch setup.microphone {
         case .granted: "Granted."
-        case .denied: "Turned off. Switch Iridium Live back on under Microphone."
-        case .notAsked: "Everything you dictate is transcribed on this Mac."
+        case .denied: "Off. Turn on Iridium Live in System Settings."
+        case .notAsked: "Speech is transcribed on this Mac."
         }
     }
 
     private var accessibilityDetail: String {
-        setup.accessibility ? "Granted." : "Needed to type into other apps and to watch your hotkeys."
+        setup.accessibility ? "Granted." : "Needed for typing and hotkeys."
     }
 
     private var keysDetail: String {
         let held = ApiKey.all.filter { setup.keys[$0.id] == true }.map(\.name)
         if !held.isEmpty { return "\(held.joined(separator: " and ")) ready." }
-        return keysLater ? "Later, in Settings under Setup. Dictation works without it."
-                         : "Optional. A Groq or OpenRouter key lets a model tidy what you say."
+        return keysLater ? "Add keys later in Settings, Setup."
+                         : "A Groq or OpenRouter key turns on AI cleanup."
     }
 }
 

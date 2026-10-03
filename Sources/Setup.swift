@@ -150,7 +150,7 @@ final class Setup {
     var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     func setOpenAtLogin(_ wanted: Bool) {
-        guard isBundled else { return trouble = "Open at login needs the installed app, not this build." }
+        guard isBundled else { return trouble = "Open at login works only for the app in /Applications." }
         do {
             if wanted { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             trouble = nil

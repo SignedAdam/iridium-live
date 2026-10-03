@@ -56,11 +56,11 @@ struct ModelStats {
         "groq:openai/gpt-oss-20b": Benchmark(medianMs: 414, p90Ms: 3517, usable: "34 of 40", exact: "15 of 40", perThousand: "$0.04",
                                              note: "5 of 40 took longer than 2.5 s"),
         "openrouter:openai/gpt-oss-120b:nitro": Benchmark(perThousand: "$0.02",
-                                                          note: "Not measured here (no OpenRouter credits). The same model on Groq: 343 ms."),
+                                                          note: "Not measured. On Groq: 343 ms."),
         "openrouter:qwen/qwen3.8-27b:nitro": Benchmark(medianMs: 440, p90Ms: 742, usable: "29 of 34", exact: "18 of 34", perThousand: "$0.27",
-                                                       note: "Measured on its free endpoint"),
+                                                       note: "Measured on the free endpoint"),
         "openrouter:inclusionai/ling-3.0-flash": Benchmark(medianMs: 825, p90Ms: 1177, usable: "27 of 31", exact: "18 of 31",
-                                                           perThousand: "$0.01", note: "Measured on its free endpoint"),
+                                                           perThousand: "$0.01", note: "Measured on the free endpoint"),
     ]
 }
 
@@ -83,19 +83,19 @@ struct ModelStatsCard: View {
                 block("Benchmark, 40 dictated phrases") {
                     if let ms = bench.medianMs { line("Median", duration(ms)) }
                     if let ms = bench.p90Ms { line("Slowest 10% from", duration(ms)) }
-                    if let usable = bench.usable { line("Right in substance", usable) }
+                    if let usable = bench.usable { line("Meaning kept", usable) }
                     if let exact = bench.exact { line("Word for word", exact) }
                     if let cost = bench.perThousand { line("Per 1,000 phrases", cost) }
                     if let note = bench.note { remark(note) }
                 }
             }
-            block(yours.sent + yours.skipped == 0 ? "Yours" : "Yours, \(yours.sent + yours.skipped) calls") {
+            block(yours.sent + yours.skipped == 0 ? "Your usage" : "Your usage, \(yours.sent + yours.skipped) calls") {
                 if yours.sent + yours.skipped == 0 {
                     remark("Not used yet")
                 } else {
                     if let ms = yours.medianMs { line("Median", duration(ms)) }
                     if let ms = yours.p90Ms { line("Slowest 10% from", duration(ms)) }
-                    if yours.skipped > 0 { line("Already clean, not sent", "\(yours.skipped)") }
+                    if yours.skipped > 0 { line("Skipped, already clean", "\(yours.skipped)") }
                     if yours.failed > 0 { line("Failed", "\(yours.failed)", alert: true) }
                     if let input = yours.tokensIn, let output = yours.tokensOut {
                         line("Tokens per phrase", "\(Int(input.rounded())) in, \(Int(output.rounded())) out")

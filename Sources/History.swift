@@ -145,7 +145,7 @@ struct HistoryPane: View {
             .padding(.bottom, 6)
 
             if days.isEmpty {
-                Text(model.history.isEmpty ? "Everything you say will be kept here." : "Nothing matches.")
+                Text(model.history.isEmpty ? "No history yet." : "Nothing matches.")
                     .font(tiktok(13))
                     .foregroundStyle(.white.opacity(0.34))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,7 +156,9 @@ struct HistoryPane: View {
                             Section {
                                 ForEach(group.entries) { entry in
                                     Row(entry: entry, copied: copied == entry.id, open: open == entry.id,
-                                        toggle: { toggle(entry) }, copy: { copy(entry) }, delete: { delete(entry) })
+                                        retrying: model.retrying.contains(entry.id),
+                                        toggle: { toggle(entry) }, copy: { copy(entry) }, delete: { delete(entry) },
+                                        retry: { model.onRetryHistory(entry) }, addToNote: { model.onAddToNote(entry) })
                                 }
                             } header: {
                                 HStack {
@@ -200,7 +202,7 @@ struct HistoryPane: View {
 
     private func copy(_ entry: HistoryEntry) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(entry.text, forType: .string)
+        NSPasteboard.general.setString(entry.text.isEmpty ? entry.raw ?? "" : entry.text, forType: .string)
         copied = entry.id
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.2))
@@ -218,9 +220,12 @@ struct HistoryPane: View {
         let entry: HistoryEntry
         let copied: Bool
         let open: Bool
+        let retrying: Bool
         let toggle: @MainActor () -> Void
         let copy: @MainActor () -> Void
         let delete: @MainActor () -> Void
+        let retry: @MainActor () -> Void
+        let addToNote: @MainActor () -> Void
         @State private var hovering = false
 
         var body: some View {
@@ -240,10 +245,14 @@ struct HistoryPane: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 2) {
+                        RowAction(symbol: "arrow.clockwise", tip: "Retry", action: retry)
+                            .opacity(retrying ? 0.35 : 1)
+                            .disabled(retrying)
+                        RowAction(symbol: "note.text.badge.plus", tip: "Add to current note", action: addToNote)
                         RowAction(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy", action: copy)
                         RowAction(symbol: "trash", tip: "Delete", action: delete)
                     }
-                    .opacity(hovering || copied ? 1 : 0)
+                    .opacity(hovering || copied || retrying ? 1 : 0)
                     .allowsHitTesting(hovering)
                 }
                 if open, let timing = entry.timing {
@@ -261,7 +270,9 @@ struct HistoryPane: View {
             .onTapGesture { if entry.timing != nil { toggle() } }
             .onHover { hovering = $0 }
             .onRightClick {
-                [MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", action: copy),
+                [MenuItem(id: "retry", title: "Retry", symbol: "arrow.clockwise", enabled: !retrying, action: retry),
+                 MenuItem(id: "note", title: "Add to current note", symbol: "note.text.badge.plus", action: addToNote),
+                 MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", action: copy),
                  MenuItem(id: "delete", title: "Delete", symbol: "trash", destructive: true, action: delete)]
             }
             .animation(.easeOut(duration: 0.12), value: hovering)

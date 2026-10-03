@@ -24,6 +24,8 @@ struct EngineEvent: Sendable {
     let phrase: String?      // "benchmark" events: the phrase the other models answered
     let results: [BenchmarkRun]  // ... and what each of them wrote
     let edit: PhraseEdit?    // "final" events of a phrase that corrected earlier text
+    let failed: String?      // "final" events whose cleanup failed and typed nothing: why
+    let cues: [String]       // "ready": the words that start a spoken correction
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -53,6 +55,8 @@ struct EngineEvent: Sendable {
         phrase = object["phrase"] as? String
         results = (object["results"] as? [[String: Any]] ?? []).compactMap { engineValue($0) }
         edit = PhraseEdit(engine: object["edit"])
+        failed = object["failed"] as? String
+        cues = (object["cues"] as? [String] ?? []) + (object["starting_cues"] as? [String] ?? []).map { "\($0) (at the start)" }
     }
 }
 

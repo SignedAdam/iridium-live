@@ -220,7 +220,7 @@ private struct BenchmarkTable: View {
             .padding(.bottom, 10)
 
             if summaries.isEmpty {
-                Text("Nothing benchmarked yet. Switch it on and dictate a few phrases.")
+                Text("No results yet. Turn on Benchmark mode and dictate.")
                     .font(tiktok(13))
                     .foregroundStyle(.white.opacity(0.4))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -236,8 +236,7 @@ private struct BenchmarkTable: View {
                     .padding(.horizontal, 18)
                 }
                 .scrollIndicators(.visible)
-                Text("Every model answers the same phrase, after it was typed. Agreement is how often it wrote exactly "
-                     + "what the model in use wrote.")
+                Text("Agreement: how often a model's output matches the current model's output word for word.")
                     .font(tiktok(11))
                     .foregroundStyle(.white.opacity(0.38))
                     .fixedSize(horizontal: false, vertical: true)

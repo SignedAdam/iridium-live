@@ -127,23 +127,26 @@ struct TipLayer: View {
     let tips: [Tip]
     let bar: ClosedRange<CGFloat>
     let barOnTop: Bool
-    @State private var width: CGFloat = 0
+    @State private var size = CGSize.zero
 
     var body: some View {
         GeometryReader { proxy in
             if let tip = tips.last {
                 let rect = proxy[tip.anchor]
-                let edge = width / 2 - floatingMargin + 4
+                let edge = size.width / 2 - floatingMargin + 4
+                let gap = size.height / 2 + 4
                 Text(tip.text)
                     .font(tiktok(11.5, "Medium"))
                     .foregroundStyle(.white.opacity(0.95))
                     .padding(.horizontal, 9)
-                    .frame(height: 20)
-                    .background(Capsule().fill(Color(white: 0.12).opacity(0.94)).overlay(Capsule().strokeBorder(.white.opacity(0.18))))
+                    .padding(.vertical, 3)
+                    .frame(minHeight: 20)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(white: 0.12).opacity(0.94))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.white.opacity(0.18))))
                     .fixedSize()
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+                    .onGeometryChange(for: CGSize.self, of: { $0.size }) { size = $0 }
                     .position(x: min(max(rect.midX, edge), proxy.size.width - edge),
-                              y: bar.contains(rect.midY) ? (barOnTop ? -14 : proxy.size.height + 14) : rect.maxY + 14)
+                              y: bar.contains(rect.midY) ? (barOnTop ? -gap : proxy.size.height + gap) : rect.maxY + gap)
                     .allowsHitTesting(false)
             }
         }

@@ -34,7 +34,7 @@ struct NoteEditorPane: View {
                 }
                 .overlay(alignment: .topLeading) {
                     if model.notesEmpty {
-                        Text("Speak for notes")
+                        Text("Dictate or type")
                             .font(tiktok(15))
                             .foregroundStyle(.white.opacity(0.34))
                             .padding(.leading, NotesEditor.inset.width + 5)

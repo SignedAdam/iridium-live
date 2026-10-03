@@ -59,7 +59,7 @@ private struct InstructionsEditor: View {
             Text("Cleanup instructions")
                 .font(tiktok(15, "Medium"))
                 .foregroundStyle(.white.opacity(0.95))
-            Text("Added to the model's rules for every phrase. Write them as you would to a person.")
+            Text("Extra rules for AI cleanup.")
                 .font(tiktok(12))
                 .foregroundStyle(.white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)

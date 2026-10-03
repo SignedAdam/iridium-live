@@ -3,6 +3,7 @@ import Foundation
 /// Everything the user can set. Saved in the user defaults; values missing from an older save keep their defaults.
 struct Settings: Codable, Equatable {
     enum CaptionPosition: String, Codable { case top, bottom }
+    enum CleanupFailure: String, Codable { case retry, notify, raw }
 
     var speechModel = "phonon-2"
     var typingHold = 0.7
@@ -16,6 +17,8 @@ struct Settings: Codable, Equatable {
     var cleanupContextSentences = 5             // earlier sentences the model reads in front of each phrase
     var cleanupEditReach = 2                    // ...of which the last this many a correction may change
     var cleanupQuotes = false                   // "quote ... end quote" becomes quotation marks
+    var cleanupFailure = CleanupFailure.raw     // a failed or rate-limited cleanup: retry, report it, or type raw
+    var cleanupRetries = 3
     var captionsShown = true
     var captionPosition = CaptionPosition.top
     var captionFont = "TikTok Sans"
@@ -85,6 +88,11 @@ struct Settings: Codable, Equatable {
     var rulesCommand: String {
         "rules " + (cleanupQuotes ? ["quotes"] : []).joined(separator: ",")
     }
+
+    /// The engine command for a failed cleanup; `folder` keeps the audio of phrases that failed.
+    func failureCommand(folder: String) -> String {
+        "failure \(cleanupFailure.rawValue) \(cleanupRetries) \(folder)"
+    }
 }
 
 extension Settings {
@@ -107,6 +115,8 @@ extension Settings {
         cleanupContextSentences = value(.cleanupContextSentences, fallback.cleanupContextSentences)
         cleanupEditReach = value(.cleanupEditReach, fallback.cleanupEditReach)
         cleanupQuotes = value(.cleanupQuotes, fallback.cleanupQuotes)
+        cleanupFailure = value(.cleanupFailure, fallback.cleanupFailure)
+        cleanupRetries = value(.cleanupRetries, fallback.cleanupRetries)
         captionsShown = value(.captionsShown, fallback.captionsShown)
         captionPosition = value(.captionPosition, fallback.captionPosition)
         captionFont = value(.captionFont, fallback.captionFont)

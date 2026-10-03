@@ -95,7 +95,7 @@ struct TimingSummary: View {
                 if cleanup.error != nil {
                     Text("\(cleanup.providerName) failed").foregroundStyle(accent)
                 } else if cleanup.skipped {
-                    Text("Already clean")
+                    Text("Skipped")
                 } else {
                     Text("\(cleanup.providerName) \(duration(cleanup.ms))")
                 }
@@ -132,7 +132,7 @@ struct PhraseTimeline: View {
             bar
             VStack(spacing: 3) {
                 ForEach(steps) { step in line(step) }
-                line(Step(id: "total", label: "Last word to text", ms: timing.totalMs), bold: true)
+                line(Step(id: "total", label: "Total", ms: timing.totalMs), bold: true)
             }
             if let cleanup = timing.cleanup, !cleanup.skipped {
                 HStack(spacing: 12) {
@@ -165,11 +165,11 @@ struct PhraseTimeline: View {
     /// The pass over the whole recording, which ran after this phrase: what it cost, and the text it left behind
     /// where that is not simply the phrases run together.
     private func polished(_ polish: PolishRun) -> some View {
-        block("Whole recording") {
+        block("Full recording") {
             if let cleanup = polish.cleanup {
                 line(cleanup.error.map {
-                    Step(id: "polish", label: "Polishing failed: \($0)", ms: cleanup.ms, shade: 0.85, alert: true)
-                } ?? Step(id: "polish", label: "Polished on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.7))
+                    Step(id: "polish", label: "Cleanup failed: \($0)", ms: cleanup.ms, shade: 0.85, alert: true)
+                } ?? Step(id: "polish", label: "Cleanup on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.7))
             }
             if polish.text != polish.heard {
                 Text(polish.text)
@@ -189,7 +189,7 @@ struct PhraseTimeline: View {
     }
 
     private var steps: [Step] {
-        var steps = [Step(id: "pause", label: "Pause before sending", ms: timing.endpointMs, shade: 0.22)]
+        var steps = [Step(id: "pause", label: "End of speech", ms: timing.endpointMs, shade: 0.22)]
         if timing.queueMs >= 1 { steps.append(Step(id: "wait", label: "Waiting", ms: timing.queueMs, shade: 0.12)) }
         steps.append(Step(id: "transcribe", label: "Transcribing", ms: timing.decodeMs, shade: 0.5))
         guard let cleanup = timing.cleanup else { return steps }
@@ -198,13 +198,13 @@ struct PhraseTimeline: View {
             return steps
         }
         if cleanup.skipped {
-            steps.append(Step(id: "cleanup", label: "Already clean, not sent", ms: cleanup.ms, shade: 0.85))
+            steps.append(Step(id: "cleanup", label: "Skipped, already clean", ms: cleanup.ms, shade: 0.85))
             return steps
         }
         steps.append(Step(id: "cleanup", label: "Cleanup on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.85))
         let parts: [(String, Double?)] = [("Connecting", cleanup.connectMs), ("Network", cleanup.networkMs),
                                           ("Queued at \(cleanup.providerName)", cleanup.queueMs),
-                                          ("Reading the prompt", cleanup.promptMs), ("Writing", cleanup.generateMs)]
+                                          ("Prompt", cleanup.promptMs), ("Writing", cleanup.generateMs)]
         steps += parts.compactMap { label, ms in ms.map { Step(id: label, label: label, ms: $0) } }
         return steps
     }

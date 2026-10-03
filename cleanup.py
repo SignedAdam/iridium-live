@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 import os
 import queue
+import random
 import re
+import sys
 import threading
 import time
 from typing import NamedTuple
@@ -47,6 +49,27 @@ class Stats(NamedTuple):
     completion_tokens: int | None = None
     cost_usd: float | None = None    # OpenRouter reports it; for Groq it is the token counts at list price
     error: str | None = None         # why the phrase came back raw
+    failed: bool = False             # the provider could not be reached or refused: the cleanup did not happen
+
+
+class Failed(RuntimeError):
+    """A request the provider did not answer: its HTTP status (0 for no response) and how long it asked us to wait."""
+
+    def __init__(self, message: str, status: int = 0, wait_s: float | None = None):
+        super().__init__(message)
+        self.status = status
+        self.wait_s = wait_s
+
+    @property
+    def retryable(self) -> bool:
+        return self.status in (0, 408, 409, 429) or self.status >= 500
+
+
+def backoff(attempt: int, wait_s: float | None) -> float:
+    """Seconds before retry `attempt` (0 first): doubling from 0.5 s with some jitter, at most 8 s, and at least
+    what the provider asked for when it said."""
+    delay = min(8.0, 0.5 * 2 ** attempt) * random.uniform(0.8, 1.2)
+    return max(delay, min(wait_s or 0.0, 10.0))
 
 
 SYSTEM = (
@@ -230,8 +253,10 @@ CORRECTING_SHOTS = [
 
 #: The words a spoken correction starts with or turns on. Only a phrase that has one is asked for an edit; the rest
 #: are cleaned the ordinary way, which keeps every other phrase as cheap as it was.
-_CUE = re.compile(r"\b(i mean|i meant|wait|sorry|actually|make that|scratch that|delete that|strike that|forget that|"
-                  r"rather|instead|correction|change that|let me rephrase|oops)\b|^\W*(no|not)\b", re.I)
+CUES = ["I mean", "I meant", "wait", "sorry", "actually", "make that", "scratch that", "delete that", "strike that",
+        "forget that", "rather", "instead", "correction", "change that", "let me rephrase", "oops"]
+STARTING_CUES = ["no", "not"]  # only at the start: they are everywhere else in speech
+_CUE = re.compile(r"\b(" + "|".join(map(re.escape, CUES)) + r")\b|^\W*(" + "|".join(STARTING_CUES) + r")\b", re.I)
 
 
 def may_correct(text: str) -> bool:
@@ -397,17 +422,19 @@ class Remote:
                       for message in ({"role": "user", "content": phrase},
                                       {"role": "assistant", "content": clean})]
         self.json_format = True  # asked for a JSON object, until a provider turns that down
+        self.wait_s: float | None = None  # what the last response said to wait before asking again
 
-    def rewrite(self, text: str, context: str = "") -> tuple[str, Stats]:
+    def rewrite(self, text: str, context: str = "", retries: int = 0) -> tuple[str, Stats]:
         """The phrase as it should be typed, and what the cleanup cost. `context` is the text the phrase continues,
-        sent for the model to read and never to rewrite. The phrase is never lost: a clean phrase, a missing key, a
-        timeout, an API error and an implausible rewrite all return the raw text."""
-        return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True)
+        sent for the model to read and never to rewrite. A request the provider fails is tried `retries` more times.
+        The phrase is never lost: a clean phrase, a missing key, a failure and an implausible rewrite all return the
+        raw text, and `Stats.failed` says when the provider was the reason."""
+        return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True, retries=retries)
 
-    def correct(self, text: str, context: str, editable: str) -> tuple[str, Stats, Edit | None]:
+    def correct(self, text: str, context: str, editable: str, retries: int = 0) -> tuple[str, Stats, Edit | None]:
         """`rewrite` with corrections on: the phrase, and at most one checked edit to `editable` (this recording's
-        text so far, the end of `context`). Every phrase goes to the model, since a correction rarely looks like one
-        to a word test. Anything malformed, implausible or unsafe gives the raw phrase back and no edit."""
+        text so far, the end of `context`). Anything malformed, implausible or unsafe gives the raw phrase back and
+        no edit."""
         settings = _corrections or Corrections(5, 2)
         self.note = ""
         self.connect_ms, self.trip_ms = None, 0.0
@@ -416,12 +443,12 @@ class Remote:
             self._state(False, message)
             return text, self._stats(error=message), None
         try:
-            out, usage = self._ask(text, time.monotonic() + TIMEOUT_S, last_sentences(context, settings.context),
-                                   correcting=settings.reach)
+            out, usage = self._ask_retrying(retries, text, TIMEOUT_S, last_sentences(context, settings.context),
+                                            correcting=settings.reach)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
-            return text, self._stats(error=str(exc)), None
+            return text, self._stats(error=str(exc), failed=True), None
         self._state(True)
         try:
             answer = json.loads(out.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
@@ -448,7 +475,8 @@ class Remote:
         skipped: what this pass fixes spans phrases, which the per-phrase test cannot see."""
         return self._run(text, context="", whole=True, deadline=WHOLE_TIMEOUT_S, skippable=False)
 
-    def _run(self, text: str, *, context: str, whole: bool, deadline: float, skippable: bool) -> tuple[str, Stats]:
+    def _run(self, text: str, *, context: str, whole: bool, deadline: float, skippable: bool,
+             retries: int = 0) -> tuple[str, Stats]:
         self.note = ""
         self.connect_ms, self.trip_ms = None, 0.0
         if skippable and not needs_cleanup(text):
@@ -458,11 +486,11 @@ class Remote:
             self._state(False, message)
             return text, self._stats(error=message)
         try:
-            out, usage = self._ask(text, time.monotonic() + deadline, context, whole)
+            out, usage = self._ask_retrying(retries, text, deadline, context, whole)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
-            return text, self._stats(error=str(exc))
+            return text, self._stats(error=str(exc), failed=True)
         self._state(True)
         if not plausible(text, out):
             self.note = f"{self.model} implausible"
@@ -474,6 +502,21 @@ class Remote:
         """One phrase's `Stats`, with what this object knows already filled in. `ms` belongs to the caller: the
         wait it measures is the caller's."""
         return Stats(self.name, self.model, skipped, connect_ms=self.connect_ms, **fields)
+
+    def _ask_retrying(self, retries: int, text: str, deadline_s: float, context: str = "", whole: bool = False,
+                      correcting: int | None = None) -> tuple[str, dict]:
+        """`_ask`, tried again up to `retries` times after a timeout, a lost connection, a rate limit or a server
+        error, each time under a fresh deadline and after a growing wait. A refused key or model is not retried."""
+        for attempt in range(retries + 1):
+            try:
+                return self._ask(text, time.monotonic() + deadline_s, context, whole, correcting)
+            except (Failed, TimeoutError, OSError) as exc:
+                if attempt == retries or (isinstance(exc, Failed) and not exc.retryable):
+                    raise
+                wait = backoff(attempt, exc.wait_s if isinstance(exc, Failed) else None)
+                print(f"cleanup retry {attempt + 1}/{retries} in {wait:.1f} s: {exc}", file=sys.stderr, flush=True)
+                time.sleep(wait)
+        raise RuntimeError("unreachable")
 
     def close(self) -> None:
         if self.conn is not None:
@@ -511,7 +554,7 @@ class Remote:
                 break
             status, data = send()
         if status != 200:
-            raise RuntimeError(f"{status} {SAYS.get(status) or _message(data)}")
+            raise Failed(f"{status} {SAYS.get(status) or _message(data)}", status, self.wait_s)
         try:
             body = json.loads(data)
             out = body["choices"][0]["message"]["content"]
@@ -605,6 +648,8 @@ class Remote:
                 response = self.conn.getresponse()
                 data = response.read()
                 self.trip_ms = (time.perf_counter() - sent) * 1000
+                wait = response.getheader("retry-after")
+                self.wait_s = float(wait) if wait and wait.replace(".", "", 1).isdigit() else None
                 if response.will_close:
                     self.close()
                 return response.status, data

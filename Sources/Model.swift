@@ -37,6 +37,9 @@ final class AppModel {
     var recordingSince = Date()
     var ready = false  // the engine has its speech model in and reads commands; nothing records before that
     var engineStalled = false  // the engine has held one piece of work far too long: nothing more will come back
+    var notice: String?        // a short message in the status line, such as a cleanup that failed
+    var correctionKeywords: [String] = []  // the words that start a spoken correction, as the engine reports them
+    var retrying: Set<UUID> = []  // history entries being cleaned up again
     private(set) var level = 0.0
     var speech = ModelStatus(state: "loading")
     var cleanup = ModelStatus()
@@ -89,10 +92,10 @@ final class AppModel {
         }
     }
 
-    /// What the control is doing, for the line above the bar: the speech model on its way in, where the words are
-    /// going while recording, that it is still finishing after a stop, or that the engine is stuck.
+    /// The status line above the bar.
     var activity: String? {
-        if engineStalled { return "Engine stuck. Quit and reopen" }
+        if engineStalled { return "Engine not responding. Restart Iridium Live." }
+        if let notice { return notice }
         switch speech.state {
         case "downloading": return "Downloading speech model \(Int(speech.progress * 100))%"
         case "loading": return "Loading speech model"
@@ -102,13 +105,22 @@ final class AppModel {
         if let chatTarget { return recording ? "Dictating to \(chatTarget.name)" : "Finishing" }
         if recording {
             switch (typingNow, notingNow) {
-            case (true, true): return "Typing into \(frontApp ?? "the app in front") and notes"
-            case (true, false): return "Typing into \(frontApp ?? "the app in front")"
+            case (true, true): return frontApp.map { "Typing into \($0) and notes" } ?? "Typing and writing to notes"
+            case (true, false): return frontApp.map { "Typing into \($0)" } ?? "Typing"
             case (false, true): return "Writing to notes"
             case (false, false): return nil
             }
         }
         return finishing ? "Finishing" : nil
+    }
+
+    /// Shows `text` in the status line for a few seconds.
+    func show(notice text: String) {
+        notice = text
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            if self?.notice == text { self?.notice = nil }
+        }
     }
 
     var settings = Settings.load() {
@@ -139,6 +151,8 @@ final class AppModel {
     var idleUnloadMinutes: Int? { settings.autoUnload && !recording ? settings.autoUnloadMinutes : nil }
     var onOpenRecordings: () -> Void = {}
     var onDeleteHistory: (UUID) -> Void = { _ in }
+    var onRetryHistory: (HistoryEntry) -> Void = { _ in }
+    var onAddToNote: (HistoryEntry) -> Void = { _ in }
     var onCaptureHotkey: (UUID) -> Void = { _ in }
 
     /// Memory is tight. Settings says so beside a model that is loaded; the control itself stays quiet.

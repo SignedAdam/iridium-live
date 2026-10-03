@@ -70,6 +70,7 @@ MainActor.assumeIsolated {
             case "ready":
                 model.ready = true
                 model.engineStalled = false
+                model.correctionKeywords = event.cues
             case "level": if model.recording { model.receive(level: event.value) }
             case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":
@@ -86,6 +87,7 @@ MainActor.assumeIsolated {
                     }
                 }
                 if !dock.hidesCaptions, !event.text.isEmpty { captions.show(event.text) }
+                if event.failed != nil { model.show(notice: "Cleanup failed. Nothing typed.") }
                 let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
                                          destination: model.destination, timing: event.timing,
                                          audio: event.audio.isEmpty ? nil : event.audio, phrase: event.id,
@@ -109,9 +111,20 @@ MainActor.assumeIsolated {
                     if !control.window.isKeyWindow { typist.revise(to: polish.text) }
                 }
             case "rewritten":
-                guard event.id == "note" else { break }
-                model.cleaningNote = false
-                notes.replaceAll(with: event.text)
+                if event.id == "note" {
+                    model.cleaningNote = false
+                    notes.replaceAll(with: event.text)
+                } else if event.id?.hasPrefix("retry-") == true,
+                          let id = event.id.flatMap({ UUID(uuidString: String($0.dropFirst(6))) }) {
+                    model.retrying.remove(id)
+                    if let failure = event.cleanup?.error {
+                        model.show(notice: "Retry failed: \(failure)")
+                    } else if let at = model.history.firstIndex(where: { $0.id == id }) {
+                        model.history[at].raw = model.history[at].raw ?? model.history[at].text
+                        model.history[at].text = event.text
+                        history.update(model.history[at])
+                    }
+                }
                 if let cleanup = event.cleanup { usage.record(rewrite: cleanup, at: Date()) }
             case "benchmark":
                 guard let phrase = event.phrase,
@@ -150,6 +163,7 @@ MainActor.assumeIsolated {
         if model.settings.cleanupBenchmark { engine.send("benchmark on") }
         engine.send(model.settings.correctionsCommand)
         engine.send(model.settings.rulesCommand)
+        engine.send(model.settings.failureCommand(folder: recordings.path))
         if model.settings.saveAudio { archive(model.settings) }
     }
     configure()
@@ -179,6 +193,19 @@ MainActor.assumeIsolated {
     }
     model.onCancel = { engine.send("cancel") }
     model.onDeleteHistory = { history.delete($0) }
+    model.onRetryHistory = { entry in
+        let heard = entry.raw ?? entry.text
+        guard !heard.isEmpty, model.settings.cleanupEnabled else { return model.show(notice: "Turn on AI cleanup to retry") }
+        model.retrying.insert(entry.id)
+        engine.send("rewrite retry-\(entry.id.uuidString) " + jsonString(heard))
+    }
+    model.onAddToNote = { entry in
+        let text = entry.text.isEmpty ? entry.raw ?? "" : entry.text
+        guard !text.isEmpty else { return }
+        notes.startParagraph()
+        notes.append(HistoryEntry(time: entry.time, text: text, phrase: entry.phrase, session: entry.session))
+        model.show(notice: "Added to note")
+    }
     model.onCleanUpNote = { text in engine.send("rewrite note " + jsonString(text)) }
     model.onShowBenchmarks = { BenchmarkPanel.show(history: model.history, on: control.window.screen ?? screen) }
     // The app typed words land in, for the line above the bar and the history (never ourselves: our panels do not
@@ -242,6 +269,9 @@ MainActor.assumeIsolated {
         if new.cleanupBenchmark != old.cleanupBenchmark { engine.send(new.cleanupBenchmark ? "benchmark on" : "benchmark off") }
         if new.correctionsCommand != old.correctionsCommand { engine.send(new.correctionsCommand) }
         if new.rulesCommand != old.rulesCommand { engine.send(new.rulesCommand) }
+        if new.failureCommand(folder: "") != old.failureCommand(folder: "") {
+            engine.send(new.failureCommand(folder: recordings.path))
+        }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }

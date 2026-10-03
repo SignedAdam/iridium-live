@@ -14,7 +14,7 @@ struct MyNotes: View {
         VStack(spacing: 0) {
             header(library)
             if library.notes.isEmpty {
-                Text("Notes you save are kept here.")
+                Text("No saved notes.")
                     .font(tiktok(13))
                     .foregroundStyle(.white.opacity(0.34))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -91,7 +91,7 @@ struct MyNotes: View {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.prompt = "Export"
-        panel.message = "Where to put the notes"
+        panel.message = "Export notes to"
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? library.exportAll(to: url.appendingPathComponent("Iridium Live Notes"))

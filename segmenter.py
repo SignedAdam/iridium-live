@@ -101,7 +101,7 @@ class Segmenter:
     def __init__(self, speech, vad: Vad, *, on_partial=None, on_final=None, on_frame=None):
         self.speech, self.vad = speech, vad
         self.on_partial = on_partial or (lambda text: None)
-        self.on_final = on_final or (lambda text, timing: None)
+        self.on_final = on_final or (lambda text, timing, audio: None)
         self.on_frame = on_frame or (lambda frame, speech, at: None)
         self.pending = np.zeros(0, dtype=np.float32)          # samples not yet a whole frame
         self.preroll: deque[np.ndarray] = deque(maxlen=max(1, round(PREROLL_S * SAMPLE_RATE / FRAME)))
@@ -189,7 +189,7 @@ class Segmenter:
         text, _, _ = self.speech.transcribe_array(audio)
         if text:
             self.on_final(text, Timing(len(audio) / SAMPLE_RATE, started, last_speech, closed, decode_at,
-                                       time.time()))
+                                       time.time()), audio)
 
     def drain(self) -> None:
         """A speech model is loaded again: decode the phrases that finished without one, oldest first."""
