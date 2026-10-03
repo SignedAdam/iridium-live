@@ -148,7 +148,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     /// the phrases still to come join it. Says whether the text was replaced.
     @discardableResult
     func replaceDictated(with polished: String, keepingBlock: Bool = false) -> Bool {
-        guard let range = block, let storage = text.textStorage, !polished.isEmpty,
+        guard let range = block, let storage = text.textStorage, !polished.isEmpty || keepingBlock,
               NSMaxRange(range) <= storage.length else { return false }
         block = keepingBlock ? NSRange(location: range.location, length: (polished as NSString).length) : nil
         guard (storage.string as NSString).substring(with: range) != polished else {

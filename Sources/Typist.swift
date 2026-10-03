@@ -27,8 +27,10 @@ final class Typist {
     private let sink: KeySink
     private var typed = ""         // the current phrase, as typed so far
     private var owesSpace = false  // phrases are joined by one space
+    private var owedAtStart = false  // ...and whether the recording's first phrase needed one
     private var session = ""       // everything typed since the recording began, as it stands in the app
     private var disturbed = true   // someone else used the keyboard or the mouse since we last typed
+    private var broken = false     // ...between two of this recording's phrases: what came before is not ours now
     private var typedInto: pid_t?  // the app our keys went to
     private var watcher: Any?
 
@@ -48,10 +50,12 @@ final class Typist {
         }
     }
 
-    /// A recording started: what it types is one block, which its polished version may replace at the end.
+    /// A recording started: what it types is one block, which a correction or its polished version may replace.
     func startSession() {
         session = ""
         disturbed = false
+        broken = false
+        owedAtStart = owesSpace
     }
 
     /// Another keystroke or click of the speaker's own, for the tests: after one, nothing is revised.
@@ -70,6 +74,9 @@ final class Typist {
         session = String(session.dropLast(typed.count - kept)) + space + added
         typed = String(typed.prefix(kept)) + added
         typedInto = frontmost()
+        // A key or a click of the speaker's own since our last keystroke may have moved the insertion point: what
+        // this recording typed before it can never be backspaced over again, whatever is typed after.
+        if disturbed, session.count > space.count + added.count { broken = true }
         disturbed = false
         if final {
             owesSpace = owesSpace || !typed.isEmpty
@@ -77,13 +84,13 @@ final class Typist {
         }
     }
 
-    /// The whole recording came back polished: put the difference in, from where the two texts part company to the
-    /// end, with backspaces and typing. It only happens while the text is still ours to touch — nothing typed or
-    /// clicked by the speaker since, the same app still in front, and a change that reaches back no further than
-    /// `reach`. Otherwise what was typed stands, which is what the speaker already read.
+    /// A spoken correction, or the whole recording polished: put the difference in, from where the two texts part
+    /// company to the end, with backspaces and typing. It only happens while the text is still ours to touch —
+    /// nothing typed or clicked by the speaker since the recording began, the same app still in front, and a change
+    /// that reaches back no further than `reach`. Otherwise what was typed stands, which is what the speaker read.
     @discardableResult
     func revise(to polished: String) -> Bool {
-        guard isEnabled, !session.isEmpty, !disturbed, polished != session,
+        guard isEnabled, !session.isEmpty, !disturbed, !broken, polished != session,
               typedInto == nil || frontmost() == typedInto else { return false }
         let kept = session.commonPrefix(with: polished).count
         let drop = session.count - kept
@@ -92,6 +99,7 @@ final class Typist {
         sink.type(String(polished.dropFirst(kept)))
         session = polished
         typed = ""
+        if polished.isEmpty { owesSpace = owedAtStart }  // all of it was scratched: the next phrase starts as the first
         return true
     }
 }
