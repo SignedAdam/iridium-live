@@ -56,14 +56,13 @@ struct NoteNameHeader: View {
     let saveAs: (String) -> Void
     @State private var name = ""
     @State private var hovering = false
+    @State private var buttonHover = false
     @FocusState private var focused: Bool
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        let framed = hovering || focused
         return HStack(spacing: 7) {
-            Text("Name")
-                .font(tiktok(13, "Medium"))
-                .foregroundStyle(.white.opacity(0.4))
             TextField("", text: $name)
                 .textFieldStyle(.plain)
                 .font(tiktok(13, "Medium"))
@@ -73,19 +72,20 @@ struct NoteNameHeader: View {
                 .padding(.horizontal, 7)
                 .frame(height: 24)
                 .background {
-                    shape.fill(.white.opacity(focused ? 0.13 : 0.07))
-                        .overlay(shape.strokeBorder(.white.opacity(focused ? 0.22 : 0.1), lineWidth: 1))
+                    shape.fill(.white.opacity(framed ? (focused ? 0.13 : 0.07) : 0))
+                        .overlay(shape.strokeBorder(.white.opacity(framed ? (focused ? 0.22 : 0.12) : 0), lineWidth: 1))
                 }
+                .onHover { hovering = $0 }
                 .onSubmit { focused = false }
                 .onExitCommand { cancel() }
                 .onChange(of: focused) { _, now in if !now { commit() } }
-            Image(systemName: "list.bullet")
+            Image(systemName: "books.vertical")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(hovering ? 0.9 : 0.55))
+                .foregroundStyle(.white.opacity(buttonHover ? 1 : 0.75))
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
                 .onTapGesture { model.showMyNotes() }
-                .onHover { hovering = $0 }
+                .onHover { buttonHover = $0 }
                 .tip("My notes")
         }
         .padding(.leading, 14)
@@ -97,7 +97,7 @@ struct NoteNameHeader: View {
         }
         .onChange(of: library.currentName) { _, now in if !focused { name = now } }
         .onChange(of: library.naming) { _, _ in claim() }
-        .animation(.easeOut(duration: 0.14), value: focused)
+        .animation(.easeOut(duration: 0.12), value: framed)
     }
 
     private func claim() {
@@ -170,7 +170,7 @@ struct ScrollIndicator: View {
         GeometryReader { geometry in
             let track = geometry.size.height
             let thumb = max(18, track * metrics.visibleFraction)
-            Capsule().fill(.white.opacity(0.38))
+            Capsule().fill(.white.opacity(0.55))
                 .frame(width: 3, height: thumb)
                 .offset(y: (track - thumb) * metrics.position)
         }

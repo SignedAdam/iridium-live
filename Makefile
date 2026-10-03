@@ -4,17 +4,20 @@ STAMP := .build/.app
 SOURCES := $(wildcard Sources/*.swift) $(wildcard Packages/ModelCatalog/Sources/*/*.swift)
 ENGINE := live.py segmenter.py asr.py cleanup.py archive.py downloads.py
 FONT := fonts/TikTokSans.ttf
+BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
 CERT := Iridium Live Dev
 
 FOUND := $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p' | grep -x "$(CERT)" | sed -n 1p)
 SIGN := $(if $(FOUND),$(FOUND),-)
 
-$(STAMP): $(SOURCES) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT)
+$(STAMP): $(SOURCES) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS)
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	swiftc -O -swift-version 6 $(SOURCES) -o "$(BINARY)"
 	@cp Resources/Info.plist "$(APP)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@cp Resources/AppIcon.icns $(ENGINE) $(FONT) "$(APP)/Contents/Resources/"
+	@rm -rf "$(APP)/Contents/Resources/Brands"
+	@cp -R Packages/ModelCatalog/Brands "$(APP)/Contents/Resources/Brands"
 	@codesign --force --sign "$(SIGN)" --identifier com.albastov.iridium-live "$(APP)"
 	@touch $@
 

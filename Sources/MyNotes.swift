@@ -13,7 +13,7 @@ struct MyNotes: View {
             if library.notes.isEmpty {
                 Text("No saved notes.")
                     .font(tiktok(13))
-                    .foregroundStyle(.white.opacity(0.34))
+                    .foregroundStyle(.white.opacity(0.75))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -113,19 +113,19 @@ struct MyNotes: View {
                                 .onTapGesture(count: 2) { library.naming = note.id }
                         }
                         if note.favorite {
-                            Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.white.opacity(0.55))
+                            Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.white.opacity(0.9))
                         }
                     }
                     Text(note.preview.isEmpty ? "Empty" : note.preview)
                         .font(tiktok(11.5))
-                        .foregroundStyle(.white.opacity(note.preview.isEmpty ? 0.25 : 0.45))
+                        .foregroundStyle(.white.opacity(note.preview.isEmpty ? 0.35 : 0.75))
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(when(note.modified))
                     .font(tiktok(10.5))
                     .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.38))
+                    .foregroundStyle(.white.opacity(0.75))
                 HStack(spacing: 2) {
                     Action(symbol: note.favorite ? "star.fill" : "star", tip: "Favourite") {
                         library.toggleFavorite(note.id)
@@ -163,7 +163,7 @@ struct MyNotes: View {
             Button(action: action) {
                 Image(systemName: symbol)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.5))
+                    .foregroundStyle(.white.opacity(hovering ? 1 : 0.75))
                     .frame(width: 20, height: 18)
                     .contentShape(Rectangle())
             }

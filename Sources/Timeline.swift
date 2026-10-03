@@ -95,7 +95,7 @@ struct TimingSummary: View {
         }
         .font(tiktok(11))
         .monospacedDigit()
-        .foregroundStyle(.white.opacity(0.42))
+        .foregroundStyle(.white.opacity(0.78))
     }
 }
 
@@ -131,12 +131,12 @@ struct PhraseTimeline: View {
                 }
                 .font(tiktok(11))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.78))
             }
             if let heard {
                 Text("Heard: \(heard)")
                     .font(tiktok(11.5))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let polish { polished(polish) }
@@ -159,7 +159,7 @@ struct PhraseTimeline: View {
             if polish.text != polish.heard {
                 Text(polish.text)
                     .font(tiktok(11.5))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.white.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -167,7 +167,7 @@ struct PhraseTimeline: View {
 
     private func block(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased()).font(tiktok(10, "Medium")).kerning(0.6).foregroundStyle(.white.opacity(0.42))
+            Text(title.uppercased()).font(tiktok(10, "Medium")).kerning(0.6).foregroundStyle(.white.opacity(0.78))
             content()
         }
         .padding(.top, 2)
@@ -217,12 +217,12 @@ struct PhraseTimeline: View {
                 .frame(width: 7, height: 7)
                 .opacity(step.shade > 0 ? 1 : 0)
             Text(step.label)
-                .foregroundStyle(step.alert ? accent : .white.opacity(step.shade > 0 || bold ? 0.85 : 0.55))
+                .foregroundStyle(step.alert ? accent : .white.opacity(step.shade > 0 || bold ? 0.9 : 0.78))
                 .lineLimit(2)
             Spacer(minLength: 8)
             Text(duration(step.ms))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(bold ? 0.95 : 0.6))
+                .foregroundStyle(.white.opacity(bold ? 0.95 : 0.8))
         }
         .font(tiktok(11.5, bold ? "Medium" : "Regular"))
         .padding(.leading, step.shade > 0 || bold ? 0 : 14)

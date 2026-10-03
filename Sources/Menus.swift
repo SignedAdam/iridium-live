@@ -226,7 +226,7 @@ private struct MenuContent: View {
             if let shortcut = item.shortcut {
                 Text(shortcut)
                     .font(tiktok(12))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(.white.opacity(0.75))
                     .fixedSize()
             }
             if checkable {
@@ -323,7 +323,7 @@ struct GlassDropdown<Value: Hashable>: View {
             HStack(spacing: 4) {
                 Text(options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.8)
             }
             .font(tiktok(12, "Medium"))
             .foregroundStyle(.white.opacity(0.92))
@@ -409,7 +409,7 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
                  action: { model.onUnload() }),
         .separator(),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: { model.toggleNotes() }),
-        MenuItem(id: "library", title: "My notes", symbol: "tray.full", action: { model.showMyNotes() }),
+        MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: { model.showMyNotes() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: { model.toggleSettings() }),
         .separator(),
@@ -430,7 +430,7 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
         MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
                  action: { hidden ? model.showControl() : model.hideControl() }),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: shown { model.toggleNotes() }),
-        MenuItem(id: "library", title: "My notes", symbol: "tray.full", action: shown { model.showMyNotes() }),
+        MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: shown { model.showMyNotes() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: shown { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: shown { model.toggleSettings() }),
         .separator(),

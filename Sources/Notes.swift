@@ -449,7 +449,7 @@ final class NotesTextView: NSTextView {
                               enabled: !string.isEmpty && canCleanUp()) {
             [weak self] in self?.onCommand(.cleanUp)
         })
-        items.append(MenuItem(id: "library", title: "My notes", symbol: "list.bullet") {
+        items.append(MenuItem(id: "library", title: "My notes", symbol: "books.vertical") {
             [weak self] in self?.onCommand(.myNotes)
         })
         return items

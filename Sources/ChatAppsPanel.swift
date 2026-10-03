@@ -69,7 +69,7 @@ private struct ChatAppsEditor: View {
             Text("CHAT APPS")
                 .font(tiktok(10.5, "Medium"))
                 .kerning(0.8)
-                .foregroundStyle(.white.opacity(0.42))
+                .foregroundStyle(.white.opacity(0.78))
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
                 .padding(.bottom, 10)
@@ -101,7 +101,7 @@ private struct ChatAppsEditor: View {
                         .foregroundStyle(.white.opacity(0.95))
                     Text(profile.wrappedValue.bundleID)
                         .font(tiktok(11))
-                        .foregroundStyle(.white.opacity(0.35))
+                        .foregroundStyle(.white.opacity(0.78))
                     Spacer(minLength: 0)
                     Button("Remove") {
                         let id = profile.wrappedValue.bundleID
@@ -130,7 +130,7 @@ private struct ChatAppsEditor: View {
             }
         } else {
             VStack(spacing: 10) {
-                Text("No app chosen").foregroundStyle(.white.opacity(0.5))
+                Text("No app chosen").foregroundStyle(.white.opacity(0.78))
                 Button("Done", action: close).buttonStyle(DockAction(prominent: true))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -244,7 +244,7 @@ private struct AppRow: View {
                     .lineLimit(1)
                 Text(profile.isPlaced ? "Ready" : "Needs Detect")
                     .font(tiktok(10.5))
-                    .foregroundStyle(profile.isPlaced ? .white.opacity(0.4) : accent)
+                    .foregroundStyle(profile.isPlaced ? .white.opacity(0.78) : accent)
             }
             Spacer(minLength: 0)
         }
@@ -335,9 +335,9 @@ private struct DockGroup<Content: View>: View {
                 Text(title.uppercased())
                     .font(tiktok(10.5, "Medium"))
                     .kerning(0.8)
-                    .foregroundStyle(.white.opacity(0.42))
+                    .foregroundStyle(.white.opacity(0.78))
                 if let detail {
-                    Text(detail).font(tiktok(10.5)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    Text(detail).font(tiktok(10.5)).foregroundStyle(.white.opacity(0.78)).lineLimit(1)
                 }
             }
             .padding(.leading, 12)
@@ -385,7 +385,7 @@ private struct DockNumber: View {
     var body: some View {
         HStack(spacing: 4) {
             if let caption {
-                Text(caption).font(tiktok(10.5)).foregroundStyle(.white.opacity(0.4))
+                Text(caption).font(tiktok(10.5)).foregroundStyle(.white.opacity(0.78))
             }
             TextField("", text: $text)
                 .textFieldStyle(.plain)
@@ -497,7 +497,7 @@ private struct DockChoice<Value: Hashable>: View {
                 Button { selection = options[index].0 } label: {
                     Text(options[index].1)
                         .font(tiktok(12, "Medium"))
-                        .foregroundStyle(.white.opacity(chosen ? 0.95 : 0.55))
+                        .foregroundStyle(.white.opacity(chosen ? 0.95 : 0.72))
                         .padding(.horizontal, 11)
                         .frame(height: 22)
                         .background {

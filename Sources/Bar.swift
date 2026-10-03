@@ -106,7 +106,7 @@ struct Clock: View {
             Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
                 .font(tiktok(15, "Medium"))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(recording ? 0.92 : 0.4))
+                .foregroundStyle(.white.opacity(recording ? 0.92 : 0.78))
         }
     }
 }

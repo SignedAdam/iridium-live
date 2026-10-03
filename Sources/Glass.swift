@@ -66,7 +66,7 @@ struct IconToggle: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(isOn ? 1 : hovering ? 0.75 : 0.42))
+                .foregroundStyle(.white.opacity(isOn ? 1 : hovering ? 0.9 : 0.72))
                 .frame(width: 32, height: 32)
                 .background {
                     Circle().fill(.white.opacity(isOn ? 0.2 : hovering ? 0.08 : 0))

@@ -73,7 +73,7 @@ private struct OnboardingView: View {
                     .foregroundStyle(.white.opacity(0.95))
                 Text("Microphone and Accessibility are needed. The rest is optional.")
                     .font(tiktok(12))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Step(title: "Microphone", detail: microphoneDetail, done: setup.microphone == .granted) {
@@ -172,13 +172,13 @@ private struct Step<Control: View>: View {
                     if optional {
                         Text("Optional")
                             .font(tiktok(10, "Medium"))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.78))
                             .padding(.horizontal, 6)
                             .frame(height: 16)
                             .background(Capsule().strokeBorder(.white.opacity(0.22)))
                     }
                 }
-                Text(detail).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
+                Text(detail).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -197,7 +197,7 @@ private struct KeyRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(key.name).font(tiktok(12)).foregroundStyle(.white.opacity(0.7)).frame(width: 84, alignment: .leading)
+            Text(key.name).font(tiktok(12)).foregroundStyle(.white.opacity(0.85)).frame(width: 84, alignment: .leading)
             if editing {
                 SecureField(key.site, text: $text)
                     .textFieldStyle(.plain)
@@ -213,7 +213,7 @@ private struct KeyRow: View {
                 Text(stored ? "In the keychain" : "Not set")
                     .lineLimit(1)
                     .fixedSize()
-                    .font(tiktok(11.5)).foregroundStyle(.white.opacity(stored ? 0.45 : 0.3))
+                    .font(tiktok(11.5)).foregroundStyle(.white.opacity(0.78))
                 Spacer(minLength: 0)
                 Button(stored ? "Change" : "Set") { text = ""; editing = true }
                     .buttonStyle(PanelButton(prominent: false))

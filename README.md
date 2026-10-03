@@ -16,7 +16,8 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 - **AI cleanup** (optional, Groq or OpenRouter): removes filler words and formats numbers, dates and links. Custom
   instructions.
 - **Models window:** every OpenRouter model and provider with latency, throughput, price, context and uptime, measured
-  per provider. Sort by any column, save a model and provider to My models, pick from the last three in Settings.
+  per provider. Sort, resize, reorder, show or hide any column. Star a model and provider to save it to My models,
+  then pick from the last three in Settings.
 - **Corrections:** say "Let's meet on Tuesday", then "I mean Wednesday", and "Tuesday" becomes "Wednesday", also in
   the typed text. Works with correction keywords such as "I mean", "no wait" and "scratch that".
 - **Add quotes** (optional): "quote … end quote" becomes quotation marks.
@@ -102,3 +103,5 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
 - [Silero VAD](https://github.com/snakers4/silero-vad) (MIT)
 - [mlx-audio](https://github.com/Blaizzy/mlx-audio) (MIT)
 - [TikTok Sans](https://github.com/tiktok/TikTokSans) (SIL Open Font License, in `fonts/`)
+- [LobeHub icons](https://github.com/lobehub/lobe-icons) (MIT, in `Packages/ModelCatalog/Brands/`): model maker and
+  provider logos

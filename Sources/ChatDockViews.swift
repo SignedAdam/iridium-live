@@ -78,11 +78,11 @@ struct DockOverlay: View {
                 Spacer(minLength: 0)
                 Text(state.profile.mode == .collect ? "Collecting" : "Typing")
                     .font(tiktok(style.fontSize - 2, "Medium"))
-                    .foregroundStyle(style.textColour.color.opacity(0.4))
+                    .foregroundStyle(style.textColour.color.opacity(0.78))
             }
             Text(state.transcript.isEmpty ? "Listening…" : state.transcript)
                 .font(tiktok(style.fontSize))
-                .foregroundStyle(style.textColour.color.opacity(state.transcript.isEmpty ? 0.35 : 0.95))
+                .foregroundStyle(style.textColour.color.opacity(state.transcript.isEmpty ? 0.6 : 0.95))
                 .lineLimit(3)
                 .truncationMode(.head)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

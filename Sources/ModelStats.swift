@@ -71,7 +71,7 @@ struct ModelStatsCard: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(tiktok(13.5, "Medium")).foregroundStyle(.white.opacity(0.95))
                 Text("on \(providerName)")
-                    .font(tiktok(11.5)).foregroundStyle(.white.opacity(0.5))
+                    .font(tiktok(11.5)).foregroundStyle(.white.opacity(0.78))
             }
             if let bench = stats.benchmark {
                 block("Benchmark, 40 dictated phrases") {
@@ -104,14 +104,14 @@ struct ModelStatsCard: View {
 
     private func block(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased()).font(tiktok(10, "Medium")).kerning(0.6).foregroundStyle(.white.opacity(0.42))
+            Text(title.uppercased()).font(tiktok(10, "Medium")).kerning(0.6).foregroundStyle(.white.opacity(0.78))
             content()
         }
     }
 
     private func line(_ label: String, _ value: String, alert: Bool = false) -> some View {
         HStack {
-            Text(label).foregroundStyle(.white.opacity(0.7))
+            Text(label).foregroundStyle(.white.opacity(0.8))
             Spacer(minLength: 8)
             Text(value).monospacedDigit().foregroundStyle(alert ? accent : .white.opacity(0.92))
         }
@@ -119,7 +119,7 @@ struct ModelStatsCard: View {
     }
 
     private func remark(_ text: String) -> some View {
-        Text(text).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+        Text(text).font(tiktok(11.5)).foregroundStyle(.white.opacity(0.78)).fixedSize(horizontal: false, vertical: true)
     }
 }
 

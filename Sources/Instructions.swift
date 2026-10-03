@@ -56,7 +56,7 @@ private struct InstructionsEditor: View {
                 .foregroundStyle(.white.opacity(0.95))
             Text("Extra rules for AI cleanup.")
                 .font(tiktok(12))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.78))
                 .fixedSize(horizontal: false, vertical: true)
             TextEditor(text: $text)
                 .font(tiktok(13))

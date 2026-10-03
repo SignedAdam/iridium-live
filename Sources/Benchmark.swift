@@ -123,10 +123,10 @@ struct BenchmarkLine: View {
                     Text(error).foregroundStyle(accent).lineLimit(1)
                 } else {
                     if let input = run.promptTokens, let output = run.completionTokens {
-                        Text("\(Int(input))/\(Int(output))").foregroundStyle(.white.opacity(0.45))
+                        Text("\(Int(input))/\(Int(output))").foregroundStyle(.white.opacity(0.78))
                     }
-                    if let cost = run.costUsd, cost > 0 { Text(dollars(cost)).foregroundStyle(.white.opacity(0.45)) }
-                    Text(duration(run.ms)).foregroundStyle(.white.opacity(0.7))
+                    if let cost = run.costUsd, cost > 0 { Text(dollars(cost)).foregroundStyle(.white.opacity(0.78)) }
+                    Text(duration(run.ms)).foregroundStyle(.white.opacity(0.85))
                 }
             }
             .font(tiktok(11.5))
@@ -141,7 +141,7 @@ struct BenchmarkLine: View {
         var line = AttributedString()
         for (word, changed) in wordDiff(run.text, from: chosen) {
             var piece = AttributedString(word + " ")
-            piece.foregroundColor = .white.opacity(changed ? 0.95 : 0.4)
+            piece.foregroundColor = .white.opacity(changed ? 0.95 : 0.72)
             piece.underlineStyle = changed ? .single : nil
             line += piece
         }
@@ -198,7 +198,7 @@ private struct BenchmarkTable: View {
             HStack {
                 Text("Benchmark").font(tiktok(15, "Medium"))
                 Spacer()
-                Button("Close", action: close).buttonStyle(.plain).font(tiktok(12)).foregroundStyle(.white.opacity(0.6))
+                Button("Close", action: close).buttonStyle(.plain).font(tiktok(12)).foregroundStyle(.white.opacity(0.85))
             }
             .padding(.horizontal, 18)
             .padding(.top, 16)
@@ -207,7 +207,7 @@ private struct BenchmarkTable: View {
             if summaries.isEmpty {
                 Text("No results yet. Turn on Benchmark mode and dictate.")
                     .font(tiktok(13))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(.white.opacity(0.78))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 header
@@ -223,7 +223,7 @@ private struct BenchmarkTable: View {
                 .scrollIndicators(.visible)
                 Text("Agreement: how often a model's output matches the current model's output word for word.")
                     .font(tiktok(11))
-                    .foregroundStyle(.white.opacity(0.38))
+                    .foregroundStyle(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
@@ -241,7 +241,7 @@ private struct BenchmarkTable: View {
         cells(["Model", "Runs", "Median", "Slowest 10%", "Failed", "Agrees", "Spent"])
             .font(tiktok(10, "Medium"))
             .kerning(0.6)
-            .foregroundStyle(.white.opacity(0.42))
+            .foregroundStyle(.white.opacity(0.78))
             .padding(.horizontal, 18)
             .padding(.bottom, 6)
     }
@@ -267,7 +267,7 @@ private struct BenchmarkTable: View {
             if summary.inUse {
                 Text("in use")
                     .font(tiktok(10, "Medium"))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.8))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
                     .background(Capsule().fill(.white.opacity(0.1)))

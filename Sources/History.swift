@@ -117,7 +117,7 @@ struct HistoryPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
+                Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.6))
                 TextField("Search", text: $query)
                     .textFieldStyle(.plain)
                     .font(tiktok(13))
@@ -132,7 +132,7 @@ struct HistoryPane: View {
             if days.isEmpty {
                 Text(model.history.isEmpty ? "No history yet." : "Nothing matches.")
                     .font(tiktok(13))
-                    .foregroundStyle(.white.opacity(0.34))
+                    .foregroundStyle(.white.opacity(0.78))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -152,7 +152,7 @@ struct HistoryPane: View {
                                     if group.cost > 0 { Text(dollars(group.cost)).monospacedDigit() }
                                 }
                                 .font(tiktok(10.5, "Medium"))
-                                .foregroundStyle(.white.opacity(0.42))
+                                .foregroundStyle(.white.opacity(0.78))
                                 .padding(.horizontal, 10)
                                 .padding(.top, 10)
                                 .padding(.bottom, 4)
@@ -217,11 +217,11 @@ struct HistoryPane: View {
                     Text(entry.time.formatted(date: .omitted, time: .shortened))
                         .font(tiktok(11))
                         .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(.white.opacity(0.78))
                         .frame(width: 52, alignment: .leading)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.text.isEmpty ? (entry.raw ?? "") : entry.text)
-                            .opacity(entry.text.isEmpty ? 0.5 : 1)
+                            .opacity(entry.text.isEmpty ? 0.85 : 1)
                             .font(tiktok(13))
                             .multilineTextAlignment(.leading)
                         if let timing = entry.timing { TimingSummary(timing: timing) }
@@ -273,7 +273,7 @@ struct HistoryPane: View {
             Button(action: action) {
                 Image(systemName: symbol)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.5))
+                    .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.7))
                     .frame(width: 20, height: 18)
                     .contentShape(Rectangle())
             }

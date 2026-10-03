@@ -203,8 +203,12 @@ final class AppModel {
     }
 
     func removeSaved(_ id: String) {
+        let known = settings.openRouterModels.map(\.id)
+        let picked = settings.cleanupModels["openrouter"].flatMap { known.contains($0) ? $0 : nil } ?? settings.openRouterRecent.first
+        let inUse = picked == id
         settings.openRouterModels.removeAll { $0.id == id }
         settings.openRouterRecent.removeAll { $0 == id }
+        if inUse { settings.cleanupModels["openrouter"] = settings.savedModelsByRecency.first?.id ?? "" }
     }
 
     var onManageModels: () -> Void = {}

@@ -1,235 +1,298 @@
 import SwiftUI
 
+extension ContainerValues {
+    @Entry var sectionBreak = false
+}
+
+@MainActor
 struct SettingsPane: View {
     @Bindable var model: AppModel
+    @State private var editingKey: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Section("Memory") {
-                    if let reading = model.memory {
-                        Row("Iridium Live") { Figure(gigabytes(reading.total)) }
-                        Row("Your Mac") {
-                            Figure("\(gigabytes(reading.physical - min(reading.physical, reading.available), unit: false)) of \(String(format: "%.0f GB", Double(reading.physical) / 1_073_741_824))")
-                        }
-                    }
-                    Row("Models") {
-                        Button(model.speech.state == "unloaded" ? "Unloaded" : "Unload", action: model.onUnload)
-                            .buttonStyle(GlassButton())
-                            .disabled(model.speech.state == "unloaded")
-                    }
-                    Row("Unload when idle") {
-                        GlassSwitch(isOn: $model.settings.autoUnload)
-                    }
-                    Row("After") {
-                        GlassMenu(selection: $model.settings.autoUnloadMinutes, options: Settings.idleChoices).frame(width: 100)
-                    }
-                    .dimmed(!model.settings.autoUnload)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    speech
+                    cleanup(proxy)
+                    typing
+                    hotkeys
+                    chatApps
+                    captions
+                    theme
+                    recordings
+                    memory
+                    SetupSection(editing: $editingKey)
                 }
-                SetupSection()
-                Section("Speech") {
-                    Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
-                        Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
+                .padding(12)
+            }
+            .scrollIndicators(.visible)
+        }
+        .font(tiktok(13))
+        .foregroundStyle(.white.opacity(0.88))
+    }
+
+    private var speech: some View {
+        Section("Speech") {
+            Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
+                Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cleanup(_ proxy: ScrollViewProxy) -> some View {
+        let openRouter = model.settings.cleanupProvider == "openrouter"
+        let key = openRouter ? ApiKey.openRouter : ApiKey.groq
+        let saved = model.settings.savedModelsByRecency
+        let recent = Array(saved.prefix(3))
+        let others = Array(saved.dropFirst(3))
+        Section("AI cleanup") {
+            Row("Clean up dictation",
+                detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs) : nil,
+                alert: model.cleanup.state == "error") {
+                GlassSwitch(isOn: $model.settings.cleanupEnabled)
+            }
+            Group {
+                Row("Provider") {
+                    Segments(selection: $model.settings.cleanupProvider,
+                             options: Settings.cleanupProviders.map { ($0.id, $0.name) })
+                }
+                if Setup.shared.keys[key.id] != true {
+                    Line(inset: 14) {
+                        Text("No \(key.name) key").foregroundStyle(accent)
+                        Spacer(minLength: 8)
+                        Button("Add key") {
+                            editingKey = key.id
+                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(key.id, anchor: .center) }
+                        }
+                        .buttonStyle(GlassButton())
                     }
                 }
-                Section("Hotkeys") {
-                    let clashing = Hotkey.conflicting(in: model.settings.hotkeys)
-                    let waiting = Hotkey.waitingForDoubleTap(in: model.settings.hotkeys)
-                    ForEach($model.settings.hotkeys) { $hotkey in
-                        HotkeyRow(hotkey: $hotkey, capturing: model.capturingHotkey == hotkey.id,
-                                  conflict: clashing.contains(hotkey.id), waits: waiting.contains(hotkey.id),
-                                  capture: { model.onCaptureHotkey(hotkey.id) },
-                                  remove: { model.settings.hotkeys.removeAll { $0.id == hotkey.id } })
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        AddRow {
-                            let hotkey = Hotkey(keyCode: 54)
-                            model.settings.hotkeys.append(hotkey)
-                            model.onCaptureHotkey(hotkey.id)
-                        }
-                        if !model.hotkeysListening, !model.settings.hotkeys.isEmpty {
-                            Text("Needs Accessibility access").font(tiktok(12)).foregroundStyle(accent)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-                if let chatApps = model.chatApps {
-                    Section("Chat apps") {
-                        Row("Button beside Send", detail: "Dictate into message box") {
-                            GlassSwitch(isOn: Bindable(chatApps).enabled)
-                        }
-                        if chatApps.enabled {
-                            ForEach(Bindable(chatApps).apps) { $profile in
-                                Row(profile.name.isEmpty ? profile.bundleID : profile.name,
-                                    detail: profile.isPlaced ? nil : "Not set up", alert: !profile.isPlaced) {
-                                    HStack(spacing: 8) {
-                                        Button("Customise", action: model.onEditChatApps).buttonStyle(GlassButton())
-                                        GlassSwitch(isOn: $profile.enabled)
-                                    }
-                                }
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                            }
-                        } else {
-                            Row(chatApps.apps.map { $0.name.isEmpty ? $0.bundleID : $0.name }.joined(separator: ", ")) {
-                                EmptyView()
-                            }
-                            .opacity(0.4)
+                if openRouter {
+                    ForEach(recent) { item in
+                        ModelRow(item: item, chosen: item.id == model.settings.cleanupModel) { choose(item) }
                             .transition(.opacity)
-                        }
                     }
-                    .animation(.easeOut(duration: 0.2), value: chatApps.enabled)
-                }
-                Section("Typing") {
-                    Row("Wait before typing") {
-                        GlassSlider(value: $model.settings.typingHold, range: 0.2...3, step: 0.1) { String(format: "%.1f s", $0) }
+                    Line(inset: 14) {
+                        ModelMenu(others: others, use: choose, manage: model.onManageModels)
+                        Spacer(minLength: 0)
                     }
-                }
-                Section("AI cleanup") {
-                    Row("Clean up dictation", detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs) : nil,
-                        alert: model.cleanup.state == "error") {
-                        GlassSwitch(isOn: $model.settings.cleanupEnabled)
-                    }
-                    Group {
-                        Row("Provider") {
-                            Segments(selection: $model.settings.cleanupProvider, options: Settings.cleanupProviders.map { ($0.id, $0.name) })
+                } else {
+                    Row("Model", inset: 14) {
+                        let options = model.settings.cleanupModels(on: "groq")
+                        GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
+                            AnyView(ModelStatsCard(name: options.first { $0.0 == id }?.1 ?? id, providerName: "Groq",
+                                                   stats: ModelStats(provider: "groq", model: id), history: model.history))
                         }
-                        if model.settings.cleanupProvider == "openrouter" {
-                            let saved = model.settings.savedModelsByRecency
-                            let current = model.settings.cleanupModel
-                            ForEach(saved.prefix(3)) { item in
-                                Row(item.shortName, detail: item.providerName) {
-                                    if item.id == current {
-                                        Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(accent)
-                                    } else {
-                                        Button("Use") { model.use(item) }.buttonStyle(GlassButton())
-                                    }
-                                }
-                            }
-                            let more = Array(saved.dropFirst(3))
-                            Row(more.isEmpty ? "My models" : "Other models") {
-                                HStack(spacing: 8) {
-                                    if !more.isEmpty {
-                                        GlassMenu(selection: Binding(get: { "" }, set: { id in
-                                                      if let item = more.first(where: { $0.id == id }) { model.use(item) }
-                                                  }),
-                                                  options: more.map { ($0.id, $0.title) }, label: "\(more.count) more")
-                                            .frame(width: 120)
-                                    }
-                                    Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
-                                }
-                            }
-                        } else {
-                            Row("Model") {
-                                let provider = model.settings.cleanupProvider
-                                let options = model.settings.cleanupModels(on: provider)
-                                GlassDropdown(selection: $model.settings.cleanupModel, options: options) { id in
-                                    AnyView(ModelStatsCard(name: options.first { $0.0 == id }?.1 ?? id,
-                                                           providerName: Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider,
-                                                           stats: ModelStats(provider: provider, model: id), history: model.history))
-                                }
-                                .frame(width: 180)
-                            }
-                        }
-                        Row("Instructions", detail: instructionsPreview) {
-                            Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
-                                .buttonStyle(GlassButton())
-                        }
-                        Row("Fix previous sentences on correction keywords") {
-                            GlassSwitch(isOn: $model.settings.cleanupCorrections)
-                        }
-                        .tip(keywordsTip)
-                        if model.settings.cleanupCorrections {
-                            Row("Sentences to read") {
-                                GlassMenu(selection: $model.settings.cleanupContextSentences,
-                                          options: [2, 3, 5, 8, 12].map { ($0, "\($0)") }).frame(width: 100)
-                            }
-                            .transition(.opacity)
-                            Row("Sentences to fix") {
-                                GlassMenu(selection: $model.settings.cleanupEditReach,
-                                          options: [1, 2, 3, 4].map { ($0, "\($0)") }).frame(width: 100)
-                            }
-                            .transition(.opacity)
-                        }
-                        Row("Add quotes") {
-                            GlassSwitch(isOn: $model.settings.cleanupQuotes)
-                        }
-                        Row("Clean up full recording on stop") {
-                            GlassSwitch(isOn: $model.settings.cleanupPolish)
-                        }
-                        Row("Benchmark mode") {
-                            HStack(spacing: 8) {
-                                Button("Results", action: model.onShowBenchmarks).buttonStyle(GlassButton())
-                                GlassSwitch(isOn: $model.settings.cleanupBenchmark)
-                            }
-                        }
-                        Row("When cleanup fails") {
-                            GlassMenu(selection: $model.settings.cleanupFailure,
-                                      options: [(.retry, "Retry"), (.notify, "Fail and notify"), (.raw, "Insert raw")])
-                                .frame(width: 160)
-                        }
-                        if model.settings.cleanupFailure == .retry {
-                            Row("Retries") {
-                                GlassMenu(selection: $model.settings.cleanupRetries,
-                                          options: [1, 2, 3, 5, 8].map { ($0, "\($0)") }).frame(width: 100)
-                            }
-                            .transition(.opacity)
-                        }
-                    }
-                    .dimmed(!model.settings.cleanupEnabled)
-                    .animation(.easeOut(duration: 0.2), value: model.settings.cleanupCorrections)
-                    .animation(.easeOut(duration: 0.2), value: model.settings.cleanupFailure)
-                }
-                Section("Recordings") {
-                    Row("Save audio") {
-                        GlassSwitch(isOn: $model.settings.saveAudio)
-                    }
-                    Row("Split at pauses of") {
-                        GlassSlider(value: $model.settings.audioSplitSeconds, range: 0.5...10, step: 0.5) { String(format: "%.1f s", $0) }
-                    }
-                    .dimmed(!model.settings.saveAudio)
-                    Row("Folder", detail: model.lastRecording.map { "Latest \($0.file), \(Int($0.seconds.rounded())) s" }) {
-                        Button("Open", action: model.onOpenRecordings).buttonStyle(GlassButton())
+                        .frame(width: 180)
                     }
                 }
-                Section("Captions") {
-                    Row("Show captions") {
-                        GlassSwitch(isOn: $model.settings.captionsShown)
-                    }
-                    Group {
-                        Row("Position") {
-                            Segments(selection: $model.settings.captionPosition,
-                                     options: [(Settings.CaptionPosition.top, "Top"), (.bottom, "Bottom")])
-                        }
-                        Row("Font") {
-                            GlassMenu(selection: $model.settings.captionFont, options: Settings.captionFonts.map { ($0, $0) })
-                                .frame(width: 150)
-                        }
-                        Row("Size") {
-                            GlassSlider(value: $model.settings.captionSize, range: 24...96, step: 1) { String(format: "%.0f pt", $0) }
-                        }
-                        Row("Show for") {
-                            GlassSlider(value: $model.settings.captionSeconds, range: 1...10, step: 0.5) { String(format: "%.1f s", $0) }
-                        }
-                        Row("Opacity") {
-                            GlassSlider(value: $model.settings.captionOpacity, range: 0.2...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
-                        }
-                    }
-                    .dimmed(!model.settings.captionsShown)
+                Break().containerValue(\.sectionBreak, true)
+                Row("Instructions", detail: instructionsPreview) {
+                    Button(model.settings.cleanupInstructions.isEmpty ? "Add instructions" : "Edit", action: model.onEditInstructions)
+                        .buttonStyle(GlassButton())
                 }
-                Section("Look") {
-                    Row("Glass tint") {
-                        GlassSlider(value: $model.settings.glassTint, range: 0...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
+                Row("Fix previous sentences on correction keywords") {
+                    GlassSwitch(isOn: $model.settings.cleanupCorrections)
+                }
+                .tip(keywordsTip)
+                if model.settings.cleanupCorrections {
+                    Row("Sentences to read", inset: 14) {
+                        GlassMenu(selection: $model.settings.cleanupContextSentences,
+                                  options: [2, 3, 5, 8, 12].map { ($0, "\($0)") }).frame(width: 100)
                     }
-                    Row("Opacity") {
-                        GlassSlider(value: $model.settings.controlOpacity, range: 0.3...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
+                    .transition(.opacity)
+                    Row("Sentences to fix", inset: 14) {
+                        GlassMenu(selection: $model.settings.cleanupEditReach,
+                                  options: [1, 2, 3, 4].map { ($0, "\($0)") }).frame(width: 100)
+                    }
+                    .transition(.opacity)
+                }
+                Row("Add quotes") {
+                    GlassSwitch(isOn: $model.settings.cleanupQuotes)
+                }
+                Row("Clean up full recording on stop") {
+                    GlassSwitch(isOn: $model.settings.cleanupPolish)
+                }
+                Break().containerValue(\.sectionBreak, true)
+                Row("When cleanup fails") {
+                    GlassMenu(selection: $model.settings.cleanupFailure,
+                              options: [(.retry, "Retry"), (.notify, "Fail and notify"), (.raw, "Insert raw")])
+                        .frame(width: 160)
+                }
+                if model.settings.cleanupFailure == .retry {
+                    Row("Retries", inset: 14) {
+                        GlassMenu(selection: $model.settings.cleanupRetries,
+                                  options: [1, 2, 3, 5, 8].map { ($0, "\($0)") }).frame(width: 100)
+                    }
+                    .transition(.opacity)
+                }
+                Row("Benchmark mode") {
+                    HStack(spacing: 8) {
+                        Button("Results", action: model.onShowBenchmarks).buttonStyle(GlassButton())
+                        GlassSwitch(isOn: $model.settings.cleanupBenchmark)
                     }
                 }
             }
-            .padding(12)
+            .dimmed(!model.settings.cleanupEnabled)
+            .animation(.easeOut(duration: 0.2), value: model.settings.cleanupCorrections)
+            .animation(.easeOut(duration: 0.2), value: model.settings.cleanupFailure)
         }
-        .scrollIndicators(.visible)
-        .font(tiktok(13))
-        .foregroundStyle(.white.opacity(0.88))
+    }
+
+    private var typing: some View {
+        Section("Typing") {
+            Row("Wait before typing") {
+                GlassSlider(value: $model.settings.typingHold, range: 0.2...3, step: 0.1) { String(format: "%.1f s", $0) }
+            }
+        }
+    }
+
+    private var hotkeys: some View {
+        Section("Hotkeys") {
+            let clashing = Hotkey.conflicting(in: model.settings.hotkeys)
+            let waiting = Hotkey.waitingForDoubleTap(in: model.settings.hotkeys)
+            ForEach($model.settings.hotkeys) { $hotkey in
+                HotkeyRow(hotkey: $hotkey, capturing: model.capturingHotkey == hotkey.id,
+                          conflict: clashing.contains(hotkey.id), waits: waiting.contains(hotkey.id),
+                          capture: { model.onCaptureHotkey(hotkey.id) },
+                          remove: { model.settings.hotkeys.removeAll { $0.id == hotkey.id } })
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                AddRow {
+                    let hotkey = Hotkey(keyCode: 54)
+                    model.settings.hotkeys.append(hotkey)
+                    model.onCaptureHotkey(hotkey.id)
+                }
+                if !model.hotkeysListening, !model.settings.hotkeys.isEmpty {
+                    Text("Needs Accessibility access").font(tiktok(12)).foregroundStyle(accent)
+                }
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var chatApps: some View {
+        if let chatApps = model.chatApps {
+            Section("Chat apps") {
+                Row("Button beside Send", detail: "Dictate into message box") {
+                    GlassSwitch(isOn: Bindable(chatApps).enabled)
+                }
+                if chatApps.enabled {
+                    ForEach(Bindable(chatApps).apps) { $profile in
+                        Row(profile.name.isEmpty ? profile.bundleID : profile.name,
+                            detail: profile.isPlaced ? nil : "Not set up", alert: !profile.isPlaced) {
+                            HStack(spacing: 8) {
+                                Button("Customise", action: model.onEditChatApps).buttonStyle(GlassButton())
+                                GlassSwitch(isOn: $profile.enabled)
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                } else {
+                    Line {
+                        Text(chatApps.apps.map { $0.name.isEmpty ? $0.bundleID : $0.name }.joined(separator: ", "))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: chatApps.enabled)
+        }
+    }
+
+    private var captions: some View {
+        Section("Captions") {
+            Row("Show captions") {
+                GlassSwitch(isOn: $model.settings.captionsShown)
+            }
+            Group {
+                Row("Position") {
+                    Segments(selection: $model.settings.captionPosition,
+                             options: [(Settings.CaptionPosition.top, "Top"), (.bottom, "Bottom")])
+                }
+                Row("Font") {
+                    GlassMenu(selection: $model.settings.captionFont, options: Settings.captionFonts.map { ($0, $0) })
+                        .frame(width: 150)
+                }
+                Row("Size") {
+                    GlassSlider(value: $model.settings.captionSize, range: 24...96, step: 1) { String(format: "%.0f pt", $0) }
+                }
+                Row("Show for") {
+                    GlassSlider(value: $model.settings.captionSeconds, range: 1...10, step: 0.5) { String(format: "%.1f s", $0) }
+                }
+                Row("Opacity") {
+                    GlassSlider(value: $model.settings.captionOpacity, range: 0.2...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
+                }
+            }
+            .dimmed(!model.settings.captionsShown)
+        }
+    }
+
+    private var theme: some View {
+        Section("Theme") {
+            Row("Glass tint") {
+                GlassSlider(value: $model.settings.glassTint, range: 0...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
+            }
+            Row("Opacity") {
+                GlassSlider(value: $model.settings.controlOpacity, range: 0.3...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
+            }
+        }
+    }
+
+    private var recordings: some View {
+        Section("Recordings") {
+            Row("Save audio") {
+                GlassSwitch(isOn: $model.settings.saveAudio)
+            }
+            Row("Split at pauses of") {
+                GlassSlider(value: $model.settings.audioSplitSeconds, range: 0.5...10, step: 0.5) { String(format: "%.1f s", $0) }
+            }
+            .dimmed(!model.settings.saveAudio)
+            Row("Folder", detail: model.lastRecording.map { "Latest \($0.file), \(Int($0.seconds.rounded())) s" }) {
+                Button("Open", action: model.onOpenRecordings).buttonStyle(GlassButton())
+            }
+        }
+    }
+
+    private var memory: some View {
+        Section("Memory") {
+            Line {
+                if let reading = model.memory {
+                    HStack(spacing: 16) {
+                        Figure("Iridium Live \(gigabytes(reading.total))")
+                        Figure("Mac \(whole(reading.physical - min(reading.physical, reading.available))) of \(whole(reading.physical)) GB")
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(model.speech.state == "unloaded" ? "Unloaded" : "Unload", action: model.onUnload)
+                    .buttonStyle(GlassButton())
+                    .disabled(model.speech.state == "unloaded")
+            }
+            Row("Unload after idle") {
+                GlassMenu(selection: idleAfter, options: [(0, "Never")] + Settings.idleChoices).frame(width: 100)
+            }
+        }
+    }
+
+    private var idleAfter: Binding<Int> {
+        Binding(get: { model.settings.autoUnload ? model.settings.autoUnloadMinutes : 0 },
+                set: { minutes in
+                    if minutes == 0 {
+                        model.settings.autoUnload = false
+                    } else {
+                        model.settings.autoUnload = true
+                        model.settings.autoUnloadMinutes = minutes
+                    }
+                })
+    }
+
+    private func choose(_ item: SavedModel) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { model.use(item) }
     }
 
     private var keywordsTip: String {
@@ -256,15 +319,19 @@ struct SettingsPane: View {
         }
     }
 
-    private func gigabytes(_ bytes: UInt64, unit: Bool = true) -> String {
-        String(format: unit ? "%.1f GB" : "%.1f", Double(bytes) / 1_073_741_824)
+    private func gigabytes(_ bytes: UInt64) -> String {
+        String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+    }
+
+    private func whole(_ bytes: UInt64) -> String {
+        String(format: "%.0f", Double(bytes) / 1_073_741_824)
     }
 }
 
 @MainActor
 private struct SetupSection: View {
+    @Binding var editing: String?
     private let setup = Setup.shared
-    @State private var editing: String?
     @State private var typed = ""
 
     var body: some View {
@@ -308,6 +375,7 @@ private struct SetupSection: View {
                         }
                     }
                 }
+                .id(key.id)
             }
             Row("Open at login", detail: setup.isBundled ? nil : "Needs the app in /Applications.") {
                 GlassSwitch(isOn: Binding(get: { setup.openAtLogin }, set: { setup.setOpenAtLogin($0) }))
@@ -346,16 +414,20 @@ private struct Section<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
                 .font(tiktok(10.5, "Medium"))
                 .kerning(0.8)
-                .foregroundStyle(.white.opacity(0.42))
+                .foregroundStyle(.white.opacity(0.78))
                 .padding(.leading, 12)
             Group(subviews: content) { rows in
+                let items = Array(rows)
+                let lined = items.indices
+                    .filter { $0 > 0 && !items[$0].containerValues.sectionBreak && !items[$0 - 1].containerValues.sectionBreak }
+                    .map { items[$0].id }
                 VStack(spacing: 0) {
                     ForEach(rows) { row in
-                        if row.id != rows.first?.id {
+                        if lined.contains(row.id) {
                             Rectangle().fill(.white.opacity(0.07)).frame(height: 1)
                         }
                         row
@@ -368,18 +440,99 @@ private struct Section<Content: View>: View {
     }
 }
 
+private struct Break: View {
+    var body: some View {
+        Rectangle().fill(.white.opacity(0.09)).frame(height: 1).padding(.vertical, 7)
+    }
+}
+
+private struct Line<Content: View>: View {
+    var inset: CGFloat = 0
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 10) { content }
+            .padding(.leading, inset)
+            .padding(.vertical, 4)
+            .frame(minHeight: Row<EmptyView>.height)
+    }
+}
+
+private struct ModelRow: View {
+    let item: SavedModel
+    let chosen: Bool
+    let use: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Text(item.shortName).lineLimit(1)
+                Text(item.providerName)
+                    .font(tiktok(12, "Light"))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if chosen {
+                Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.95))
+            } else {
+                Button("Use", action: use).buttonStyle(GlassButton())
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.vertical, 4)
+        .frame(minHeight: Row<EmptyView>.height)
+    }
+}
+
+private struct ModelMenu: View {
+    let others: [SavedModel]
+    let use: (SavedModel) -> Void
+    let manage: () -> Void
+
+    var body: some View {
+        if others.isEmpty {
+            Button("Manage models…", action: manage).buttonStyle(GlassButton())
+        } else {
+            Menu {
+                ForEach(others) { item in Button(item.title) { use(item) } }
+                Divider()
+                Button("Manage models…", action: manage)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("\(others.count) more")
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
+                }
+                .font(tiktok(12, "Medium"))
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(.horizontal, 12)
+                .frame(height: 24)
+                .background(Pill())
+                .contentShape(Capsule())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+    }
+}
+
 private struct Row<Control: View>: View {
-    static var height: CGFloat { 38 }
+    static var height: CGFloat { 30 }
 
     let title: String
     let detail: String?
     let alert: Bool
+    let inset: CGFloat
     @ViewBuilder let control: Control
 
-    init(_ title: String, detail: String? = nil, alert: Bool = false, @ViewBuilder control: () -> Control) {
+    init(_ title: String, detail: String? = nil, alert: Bool = false, inset: CGFloat = 0,
+         @ViewBuilder control: () -> Control) {
         self.title = title
         self.detail = detail
         self.alert = alert
+        self.inset = inset
         self.control = control()
     }
 
@@ -390,7 +543,7 @@ private struct Row<Control: View>: View {
                 if let detail {
                     Text(detail)
                         .font(tiktok(11.5))
-                        .foregroundStyle(alert ? accent : .white.opacity(0.45))
+                        .foregroundStyle(alert ? accent : .white.opacity(0.78))
                         .lineLimit(2)
                         .transition(.opacity)
                 }
@@ -398,7 +551,8 @@ private struct Row<Control: View>: View {
             Spacer(minLength: 0)
             control
         }
-        .padding(.vertical, 6)
+        .padding(.leading, inset)
+        .padding(.vertical, 4)
         .frame(minHeight: Self.height)
         .animation(.easeOut(duration: 0.2), value: detail)
     }
@@ -416,7 +570,7 @@ private struct Figure: View {
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text).monospacedDigit().foregroundStyle(.white.opacity(0.6))
+        Text(text).monospacedDigit().foregroundStyle(.white.opacity(0.85))
     }
 }
 
@@ -444,7 +598,7 @@ struct GlassButton: ButtonStyle {
                 .padding(.horizontal, 12)
                 .frame(height: 24)
                 .background(Pill(fill: configuration.isPressed ? 0.22 : hovering && isEnabled ? 0.16 : 0.1))
-                .opacity(isEnabled ? 1 : 0.45)
+                .opacity(isEnabled ? 1 : 0.38)
                 .contentShape(Capsule())
                 .onHover { hovering = $0 }
                 .animation(.easeOut(duration: 0.12), value: hovering)
@@ -464,7 +618,7 @@ struct Segments<Value: Hashable>: View {
                 Button { selection = options[index].0 } label: {
                     Text(options[index].1)
                         .font(tiktok(12, "Medium"))
-                        .foregroundStyle(.white.opacity(chosen ? 0.95 : 0.55))
+                        .foregroundStyle(.white.opacity(chosen ? 0.95 : 0.72))
                         .padding(.horizontal, 11)
                         .frame(height: 22)
                         .background {
@@ -536,7 +690,7 @@ private struct GlassSlider: View {
             Text(label(value))
                 .font(tiktok(12))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 40, alignment: .trailing)
         }
     }
@@ -602,7 +756,7 @@ private struct HotkeyRow: View {
                 Button(action: remove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(hoveringRemove ? 0.9 : 0.45))
+                        .foregroundStyle(.white.opacity(hoveringRemove ? 0.95 : 0.6))
                         .frame(width: 18, height: 18)
                         .background(Circle().fill(.white.opacity(hoveringRemove ? 0.14 : 0)))
                         .contentShape(Circle())
@@ -615,7 +769,7 @@ private struct HotkeyRow: View {
             if conflict {
                 note("Already used by another hotkey", color: accent)
             } else if waits {
-                note("Taps wait for a possible double-tap", color: .white.opacity(0.45))
+                note("Taps wait for a possible double-tap", color: .white.opacity(0.78))
             }
         }
         .padding(.vertical, 6)
@@ -695,7 +849,7 @@ private struct AddRow: View {
                 Text("Add hotkey")
             }
             .font(tiktok(12.5, "Medium"))
-            .foregroundStyle(.white.opacity(hovering ? 0.92 : 0.6))
+            .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.75))
             .frame(maxWidth: .infinity)
             .frame(height: 28)
             .background {

@@ -9,7 +9,8 @@ let package = Package(
         .library(name: "SortableTable", targets: ["SortableTable"]),
     ],
     targets: [
-        .target(name: "OpenRouterCatalog", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .target(name: "OpenRouterCatalog", resources: [.copy("../../Brands")],
+                swiftSettings: [.swiftLanguageMode(.v6)]),
         .target(name: "SortableTable", swiftSettings: [.swiftLanguageMode(.v6)]),
     ]
 )
