@@ -60,6 +60,7 @@ final class AppModel {
     var notesView = NotesView.editor
     var history: [HistoryEntry] = []
     var opensDown = false
+    var modelsWindowActive = false
 
     var typingNow: Bool {
         if let chatTarget { return !chatTarget.collects }

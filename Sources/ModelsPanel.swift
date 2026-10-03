@@ -6,6 +6,8 @@ enum ModelsPanel {
     private static var open: NSWindow?
     private static var keeper: ModelsWindowDelegate?
 
+    static var window: NSWindow? { open }
+
     static func show(on screen: NSScreen, model: AppModel) {
         if let open {
             NSApp.activate(ignoringOtherApps: true)
@@ -23,6 +25,7 @@ enum ModelsPanel {
         window.titleVisibility = .hidden
         window.title = "Models"
         window.isOpaque = false
+        window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.isMovableByWindowBackground = true
         window.appearance = NSAppearance(named: .darkAqua)
@@ -35,7 +38,7 @@ enum ModelsPanel {
         let host = NSHostingView(rootView: ModelsView(model: model, store: store))
         host.sizingOptions = []
         window.contentView = host
-        let delegate = ModelsWindowDelegate()
+        let delegate = ModelsWindowDelegate(model: model)
         window.delegate = delegate
         keeper = delegate
         open = window
@@ -54,8 +57,8 @@ enum ModelsPanel {
     }
 
     static func close() {
-        open?.delegate = nil
         open?.close()
+        open?.delegate = nil
         open = nil
         keeper = nil
     }
@@ -83,13 +86,30 @@ private final class ModelsWindow: NSWindow {
 }
 
 private final class ModelsWindowDelegate: NSObject, NSWindowDelegate {
+    private let model: AppModel
     private var leaving = false
+
+    init(model: AppModel) {
+        self.model = model
+    }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !leaving else { return true }
         leaving = true
         ModelsPanel.fadeOut(sender)
         return false
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        model.modelsWindowActive = true
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        model.modelsWindowActive = false
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        model.modelsWindowActive = false
     }
 }
 

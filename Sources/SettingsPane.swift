@@ -75,8 +75,9 @@ struct SettingsPane: View {
                             .transition(.opacity)
                     }
                     Line(inset: 14) {
-                        ModelMenu(others: others, use: choose, manage: model.onManageModels)
+                        if !others.isEmpty { ModelMenu(others: others, use: choose) }
                         Spacer(minLength: 0)
+                        Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
                     }
                 } else {
                     Row("Model", inset: 14) {
@@ -488,33 +489,26 @@ private struct ModelRow: View {
 private struct ModelMenu: View {
     let others: [SavedModel]
     let use: (SavedModel) -> Void
-    let manage: () -> Void
 
     var body: some View {
-        if others.isEmpty {
-            Button("Manage models…", action: manage).buttonStyle(GlassButton())
-        } else {
-            Menu {
-                ForEach(others) { item in Button(item.title) { use(item) } }
-                Divider()
-                Button("Manage models…", action: manage)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("\(others.count) more")
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
-                }
-                .font(tiktok(12, "Medium"))
-                .foregroundStyle(.white.opacity(0.92))
-                .padding(.horizontal, 12)
-                .frame(height: 24)
-                .background(Pill())
-                .contentShape(Capsule())
+        Menu {
+            ForEach(others) { item in Button(item.title) { use(item) } }
+        } label: {
+            HStack(spacing: 4) {
+                Text("\(others.count) more")
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            .font(tiktok(12, "Medium"))
+            .foregroundStyle(.white.opacity(0.92))
+            .padding(.horizontal, 12)
+            .frame(height: 24)
+            .background(Pill())
+            .contentShape(Capsule())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 }
 

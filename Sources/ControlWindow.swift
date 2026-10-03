@@ -46,7 +46,7 @@ final class ControlWindowController {
         window.contentView = holder
         mover.onEnd = { [weak self] in self?.settle() }
         follow()
-        followSystemSettings()
+        followLevel()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.recover() }
@@ -64,11 +64,16 @@ final class ControlWindowController {
         }
     }
 
-    private func followSystemSettings() {
-        let away = withObservationTracking { Setup.shared.inSystemSettings } onChange: { [weak self] in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followSystemSettings() } }
+    private func followLevel() {
+        let (away, behindModels) = withObservationTracking {
+            (Setup.shared.inSystemSettings || model.modelsWindowActive, model.modelsWindowActive)
+        } onChange: { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followLevel() } }
         }
         window.level = away ? .normal : .floating
+        if behindModels, window.isVisible, let models = ModelsPanel.window {
+            window.order(.below, relativeTo: models.windowNumber)
+        }
     }
 
     func setHidden(_ hidden: Bool) {
