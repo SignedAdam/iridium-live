@@ -52,6 +52,7 @@ MainActor.assumeIsolated {
             case "state":
                 if event.recording {
                     model.recording = true
+                    PhrasePlayer.shared.stop()
                     model.finishing = false
                     idle.arm(after: nil)
                     typist.startSession()

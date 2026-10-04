@@ -4,6 +4,10 @@ enum Migration {
     private static let oldDomains = ["IridiumLive", "PhononLive"]
     private static let carried = ["settings", "barCenter"]
 
+    static func current(_ path: String) -> String {
+        path.replacingOccurrences(of: "/Application Support/PhononLive/", with: "/Application Support/Iridium Live/")
+    }
+
     static func carryOver(to support: URL) {
         let manager = FileManager.default
         let old = support.deletingLastPathComponent().appendingPathComponent("PhononLive")

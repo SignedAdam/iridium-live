@@ -140,6 +140,7 @@ _NUMBERS = re.compile(
     re.I)
 _REPEAT = re.compile(r"\b(\w+)\s+\1\b", re.I)
 _WORD = re.compile(r"[a-z]{3,}")
+_MARKER = re.compile(r"<\|[^>]*\|>|</?think>|<[a-z_]*(?:eos|eot|token|turn)[a-z_]*>", re.I)
 _TOKEN = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
 _SENTENCE_END = re.compile(r"(?<=[.?!…])\s+")
 
@@ -254,7 +255,7 @@ def needs_cleanup(text: str) -> bool:
 
 
 def plausible(raw: str, out: str) -> bool:
-    if not out or len(out) > 3 * len(raw) + 40 or len(out) * 3 < len(raw):
+    if not out or len(out) > 3 * len(raw) + 40 or len(out) * 3 < len(raw) or _MARKER.search(out):
         return False
     if re.match(r"^(here'?s|sure|certainly|the cleaned|cleaned text|as an ai)\b", out, re.I):
         return False
@@ -329,6 +330,7 @@ class Remote:
         self.conn = None
         self.failed = False
         self.quiet = 0
+        self.cut = False
         self.note = ""
         self.connect_ms: int | None = None
         self.trip_ms = 0.0
@@ -357,6 +359,9 @@ class Remote:
             self._state(False, f"{self.provider.label}: {exc}")
             return text, self._stats(error=str(exc), failed=True), None
         self._state(True)
+        if self.cut:
+            self.note = f"{self.model} cut off"
+            return text, self._stats(error="answer cut off", **usage), None
         try:
             answer = json.loads(out.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
             cleaned = " ".join(answer["text"].split())
@@ -397,6 +402,9 @@ class Remote:
             self._state(False, f"{self.provider.label}: {exc}")
             return text, self._stats(error=str(exc), failed=True)
         self._state(True)
+        if self.cut:
+            self.note = f"{self.model} cut off"
+            return text, self._stats(error="answer cut off", **usage)
         if not plausible(text, out):
             self.note = f"{self.model} implausible"
             return text, self._stats(error="implausible rewrite", **usage)
@@ -453,7 +461,9 @@ class Remote:
             raise Failed(f"{status} {SAYS.get(status) or _message(data)}", status, self.wait_s)
         try:
             body = json.loads(data)
-            out = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            out = choice["message"]["content"]
+            self.cut = choice.get("finish_reason") == "length"
         except Exception:
             raise RuntimeError(f"bad response: {_message(data)}") from None
         if correcting:

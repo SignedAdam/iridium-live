@@ -21,9 +21,10 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 - **Corrections:** say "Let's meet on Tuesday", then "I mean Wednesday", and "Tuesday" becomes "Wednesday", also in
   the typed text. Works with correction keywords such as "I mean", "no wait" and "scratch that".
 - **Add quotes** (optional): "quote … end quote" becomes quotation marks.
-- **When cleanup fails:** retry, fail and notify, or insert the raw text.
-- **History:** everything dictated, searchable, with timing and cost. Retry the cleanup of any entry or add it to the
-  current note.
+- **When cleanup fails:** retry, fail and notify, or insert the raw text. An answer cut off at its length limit, or
+  containing model markers such as `<EOS_TOKEN>`, is never typed; what you said is typed instead.
+- **History:** everything dictated, searchable, with timing and cost. Play what you said (with *Save audio* on), retry
+  the cleanup of any entry or add it to the current note.
 - **Menu bar icon:** start recording, show or hide the control, quit.
 
 ![WhatsApp with the record button and the live transcript](docs/chat.png)

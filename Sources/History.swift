@@ -35,6 +35,13 @@ struct AudioRef: Codable, Equatable, Sendable {
         self.start = start
         self.end = end
     }
+
+    var url: URL? {
+        let manager = FileManager.default
+        if manager.fileExists(atPath: file) { return URL(fileURLWithPath: file) }
+        let moved = Migration.current(file)
+        return moved != file && manager.fileExists(atPath: moved) ? URL(fileURLWithPath: moved) : nil
+    }
 }
 
 @MainActor
@@ -113,6 +120,7 @@ struct HistoryPane: View {
     @State private var query = ""
     @State private var copied: UUID?
     @State private var open: UUID?
+    private let player = PhrasePlayer.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,10 +148,14 @@ struct HistoryPane: View {
                         ForEach(days, id: \.day) { group in
                             Section {
                                 ForEach(group.entries) { entry in
+                                    let audio = PhrasePlayer.availability(entry)
                                     Row(entry: entry, copied: copied == entry.id, open: open == entry.id,
                                         retrying: model.retrying.contains(entry.id),
+                                        audio: model.settings.saveAudio || audio == .playable ? audio : nil,
+                                        playing: player.playing == entry.id,
                                         toggle: { toggle(entry) }, copy: { copy(entry) }, delete: { delete(entry) },
-                                        retry: { model.onRetryHistory(entry) }, addToNote: { model.onAddToNote(entry) })
+                                        retry: { model.onRetryHistory(entry) }, addToNote: { model.onAddToNote(entry) },
+                                        play: { player.toggle(entry) })
                                 }
                             } header: {
                                 HStack {
@@ -204,11 +216,14 @@ struct HistoryPane: View {
         let copied: Bool
         let open: Bool
         let retrying: Bool
+        let audio: PhrasePlayer.Availability?
+        let playing: Bool
         let toggle: @MainActor () -> Void
         let copy: @MainActor () -> Void
         let delete: @MainActor () -> Void
         let retry: @MainActor () -> Void
         let addToNote: @MainActor () -> Void
+        let play: @MainActor () -> Void
         @State private var hovering = false
 
         var body: some View {
@@ -228,6 +243,10 @@ struct HistoryPane: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 2) {
+                        if let audio {
+                            RowAction(symbol: playing ? "stop" : "play", tip: playTip(audio), enabled: audio == .playable,
+                                      action: play)
+                        }
                         RowAction(symbol: "arrow.clockwise", tip: "Retry", action: retry)
                             .opacity(retrying ? 0.35 : 1)
                             .disabled(retrying)
@@ -235,7 +254,7 @@ struct HistoryPane: View {
                         RowAction(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy", action: copy)
                         RowAction(symbol: "trash", tip: "Delete", action: delete)
                     }
-                    .opacity(hovering || copied || retrying ? 1 : 0)
+                    .opacity(hovering || copied || retrying || playing ? 1 : 0)
                     .allowsHitTesting(hovering)
                 }
                 if open, let timing = entry.timing {
@@ -253,7 +272,7 @@ struct HistoryPane: View {
             .onTapGesture { if entry.timing != nil { toggle() } }
             .onHover { hovering = $0 }
             .onRightClick {
-                [MenuItem(id: "retry", title: "Retry", symbol: "arrow.clockwise", enabled: !retrying, action: retry),
+                playItems + [MenuItem(id: "retry", title: "Retry", symbol: "arrow.clockwise", enabled: !retrying, action: retry),
                  MenuItem(id: "note", title: "Add to current note", symbol: "note.text.badge.plus", action: addToNote),
                  MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", action: copy),
                  MenuItem(id: "delete", title: "Delete", symbol: "trash", destructive: true, action: delete)]
@@ -261,19 +280,34 @@ struct HistoryPane: View {
             .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.15), value: copied)
         }
+
+        private var playItems: [MenuItem] {
+            guard let audio else { return [] }
+            return [MenuItem(id: "play", title: playing ? "Stop" : "Play", symbol: playing ? "stop" : "play",
+                             enabled: audio == .playable, action: play)]
+        }
+
+        private func playTip(_ audio: PhrasePlayer.Availability) -> String {
+            switch audio {
+            case .playable: playing ? "Stop" : "Play"
+            case .notSaved: "No audio saved"
+            case .missing: "Audio file not found"
+            }
+        }
     }
 
     private struct RowAction: View {
         let symbol: String
         let tip: String
+        var enabled = true
         let action: () -> Void
         @State private var hovering = false
 
         var body: some View {
-            Button(action: action) {
+            Button { if enabled { action() } } label: {
                 Image(systemName: symbol)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.7))
+                    .foregroundStyle(.white.opacity(enabled ? (hovering ? 0.95 : 0.7) : 0.3))
                     .frame(width: 20, height: 18)
                     .contentShape(Rectangle())
             }
