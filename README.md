@@ -11,6 +11,8 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 - **Typing** into the app in front. Misheard words are fixed while you speak.
 - **Notes:** dictate into a note and edit it like any text. Saved notes are in My notes.
 - **Hotkeys:** hold, double-tap or toggle. Several hotkeys can share a key.
+- **Microphone:** the MacBook's own. While the lid is closed, your default input, such as AirPods or a USB microphone.
+  If no sound arrives, the status line says so.
 - **WhatsApp and Telegram:** a record button in the chat window. Stream mode types while you speak. Collect mode
   inserts the whole message at the end and can send it.
 - **AI cleanup** (optional, Groq or OpenRouter): removes filler words and formats numbers, dates and links. Custom

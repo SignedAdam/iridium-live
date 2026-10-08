@@ -132,6 +132,7 @@ MainActor.assumeIsolated {
                 model.finishing = event.pending && !model.recording
                 if !event.pending { idle.arm(after: model.idleUnloadMinutes) }
             case "asr": model.speech = event.status
+            case "notice": model.show(notice: event.text)
             default: break
             }
         }

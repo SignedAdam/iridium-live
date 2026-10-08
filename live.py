@@ -12,6 +12,7 @@
 # ]
 # ///
 import argparse
+import ctypes
 import faulthandler
 import gc
 import json
@@ -42,6 +43,7 @@ TYPE_HOLD_S = 0.7
 STALL_S = 90.0
 STOP_WAIT_S = 3.0
 BLOCK = int(0.05 * seg.SAMPLE_RATE)
+SILENT_AFTER_S = 1.0
 CACHE_DIR = Path.home() / ".cache" / "iridium-live"
 if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():
     (CACHE_DIR.parent / "phonon-live").rename(CACHE_DIR)
@@ -305,6 +307,40 @@ def _throttled(report, every: float = 0.25):
     return send
 
 
+_IOKIT = ctypes.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
+_CF = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+_IOKIT.IOServiceMatching.restype = ctypes.c_void_p
+_IOKIT.IOServiceMatching.argtypes = [ctypes.c_char_p]
+_IOKIT.IOServiceGetMatchingService.restype = ctypes.c_uint32
+_IOKIT.IOServiceGetMatchingService.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+_IOKIT.IORegistryEntryCreateCFProperty.restype = ctypes.c_void_p
+_IOKIT.IORegistryEntryCreateCFProperty.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
+_IOKIT.IOObjectRelease.argtypes = [ctypes.c_uint32]
+_CF.CFStringCreateWithCString.restype = ctypes.c_void_p
+_CF.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+_CF.CFBooleanGetValue.restype = ctypes.c_bool
+_CF.CFBooleanGetValue.argtypes = [ctypes.c_void_p]
+_CF.CFRelease.argtypes = [ctypes.c_void_p]
+_CLAMSHELL = _CF.CFStringCreateWithCString(None, b"AppleClamshellState", 0x08000100)
+
+
+def lid_closed() -> bool:
+    root = _IOKIT.IOServiceGetMatchingService(0, _IOKIT.IOServiceMatching(b"IOPMrootDomain"))
+    if not root:
+        return False
+    value = _IOKIT.IORegistryEntryCreateCFProperty(root, _CLAMSHELL, None, 0)
+    _IOKIT.IOObjectRelease(root)
+    if not value:
+        return False
+    closed = _CF.CFBooleanGetValue(value)
+    _CF.CFRelease(value)
+    return closed
+
+
+class NoMicrophone(RuntimeError):
+    pass
+
+
 class Recorder:
 
     def __init__(self, wav: str | None, audio: queue.Queue, events: Events, on_stop=None, on_cancel=None):
@@ -314,6 +350,9 @@ class Recorder:
         self.lock = threading.Lock()
         self.close_source = None
         self.stuck = False
+        self.take = 0
+        self.heard = False
+        self.microphone = ""
 
     def start(self) -> None:
         with self.lock:
@@ -325,10 +364,15 @@ class Recorder:
                 self.close_source = self._open_file() if self.wav else self._open_microphone()
             except Exception as exc:
                 print(f"could not start recording: {exc}", file=sys.stderr, flush=True)
+                self.events.send({"kind": "notice",
+                                  "text": str(exc) if isinstance(exc, NoMicrophone) else "Microphone failed to start"})
                 self.events.send({"kind": "state", "recording": False})
                 self.events.send({"kind": "work", "pending": False})
                 return
-        print("recording", file=sys.stderr, flush=True)
+            self.take += 1
+            self.heard = False
+            threading.Timer(SILENT_AFTER_S, self._check_heard, args=(self.take,)).start()
+        print(f"recording from {self.microphone}" if self.microphone else "recording", file=sys.stderr, flush=True)
         self.events.send({"kind": "state", "recording": True})
 
     def stop(self) -> None:
@@ -374,16 +418,33 @@ class Recorder:
             self.stuck = True
             print("the microphone did not close: the engine restarts after this recording", file=sys.stderr, flush=True)
 
+    def _check_heard(self, take: int) -> None:
+        with self.lock:
+            if not self.close_source or take != self.take or self.heard:
+                return
+        print(f"no sound from {self.microphone}", file=sys.stderr, flush=True)
+        self.events.send({"kind": "notice", "text": f"No sound from {self.microphone}"})
+
     def _capture(self, block: np.ndarray) -> None:
+        if not self.heard and np.any(block):
+            self.heard = True
         self.audio.put(Block(time.time() - block.size / seg.SAMPLE_RATE, block))
         rms = float(np.sqrt(np.mean(block * block))) + 1e-9
         self.events.send({"kind": "level", "value": round(min(max((20 * math.log10(rms) + 60) / 50, 0.0), 1.0), 3)})
 
     def _open_microphone(self):
-        device = next((i for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0
-                       and d["name"].startswith("MacBook") and "Microphone" in d["name"]), None)
-        if device is None:
-            raise RuntimeError("no built-in MacBook microphone found")
+        sd._terminate()
+        sd._initialize()
+        devices = sd.query_devices()
+        built_in = next((i for i, d in enumerate(devices) if d["max_input_channels"] > 0
+                         and d["name"].startswith("MacBook") and "Microphone" in d["name"]), None)
+        device = built_in
+        if built_in is None or lid_closed():
+            device = sd.default.device[0]
+            if device is None or device < 0 or device == built_in:
+                raise NoMicrophone("Lid closed and no other microphone connected" if built_in is not None
+                                   else "No microphone connected")
+        self.microphone = devices[device]["name"]
         stream = sd.InputStream(device=device, samplerate=seg.SAMPLE_RATE, channels=1, dtype="float32",
                                 blocksize=BLOCK, callback=lambda indata, *_: self._capture(indata[:, 0].copy()))
         stream.start()
