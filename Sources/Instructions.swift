@@ -6,13 +6,12 @@ final class InstructionsPanel {
     private static var open: InstructionsPanel?
     private let panel: KeyPanel
 
-    static func show(text: String, on screen: NSScreen, tint: Double, opacity: Double,
-                     save: @escaping @MainActor (String) -> Void) {
+    static func show(text: String, on screen: NSScreen, save: @escaping @MainActor (String) -> Void) {
         if let open { open.panel.makeKeyAndOrderFront(nil); return }
-        open = InstructionsPanel(text: text, screen: screen, tint: tint, opacity: opacity, save: save)
+        open = InstructionsPanel(text: text, screen: screen, save: save)
     }
 
-    private init(text: String, screen: NSScreen, tint: Double, opacity: Double, save: @escaping @MainActor (String) -> Void) {
+    private init(text: String, screen: NSScreen, save: @escaping @MainActor (String) -> Void) {
         let size = NSSize(width: 440, height: 320)
         let area = screen.visibleFrame
         panel = KeyPanel(contentRect: NSRect(x: (area.midX - size.width / 2).rounded(), y: (area.midY - size.height / 2).rounded(),
@@ -28,13 +27,13 @@ final class InstructionsPanel {
             InstructionsPanel.open?.panel.orderOut(nil)
             InstructionsPanel.open = nil
         }
-        let host = NSHostingView(rootView: InstructionsEditor(text: text, tint: tint, save: { save($0); close() }, cancel: close)
+        let host = NSHostingView(rootView: InstructionsEditor(text: text, save: { save($0); close() }, cancel: close)
             .frame(width: size.width, height: size.height))
         host.sizingOptions = []
         panel.contentView = host
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
-        panel.animator().alphaValue = opacity
+        followLook(panel)
     }
 }
 
@@ -44,7 +43,6 @@ private final class KeyPanel: NSPanel {
 
 private struct InstructionsEditor: View {
     @State var text: String
-    let tint: Double
     let save: (String) -> Void
     let cancel: () -> Void
     @FocusState private var focused: Bool
@@ -85,10 +83,8 @@ private struct InstructionsEditor: View {
             }
         }
         .padding(18)
-        .background(Glass(cornerRadius: 18, tint: tint))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glass(18)
         .padding(10)
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .onAppear { focused = true }
     }
 }

@@ -16,7 +16,7 @@ struct SpeakerSheet: View {
                 .onTapGesture { close() }
             card
                 .frame(width: 480)
-                .background(Glass(cornerRadius: 16, tint: 1).shadow(color: .black.opacity(0.5), radius: 26, y: 10))
+                .glass(16)
         }
         .onAppear { names = meeting.speakerNames }
     }

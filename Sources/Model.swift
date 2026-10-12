@@ -116,6 +116,7 @@ final class AppModel {
         didSet {
             guard settings != oldValue else { return }
             settings.save()
+            Look.shared.apply(settings)
             onSettingsChange(settings, oldValue)
         }
     }

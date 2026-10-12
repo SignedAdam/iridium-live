@@ -7,12 +7,12 @@ final class OnboardingPanel {
     private let panel: KeyPanel
     private let setup = Setup.shared
 
-    static func show(on screen: NSScreen, tint: Double, opacity: Double) {
+    static func show(on screen: NSScreen) {
         if let open { open.panel.makeKeyAndOrderFront(nil); return }
-        open = OnboardingPanel(screen: screen, tint: tint, opacity: opacity)
+        open = OnboardingPanel(screen: screen)
     }
 
-    private init(screen: NSScreen, tint: Double, opacity: Double) {
+    private init(screen: NSScreen) {
         let width: CGFloat = 460
         let area = screen.visibleFrame
         panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
@@ -30,7 +30,7 @@ final class OnboardingPanel {
             panel.orderOut(nil)
             OnboardingPanel.open = nil
         }
-        let controller = NSHostingController(rootView: OnboardingView(setup: setup, tint: tint, done: close)
+        let controller = NSHostingController(rootView: OnboardingView(setup: setup, done: close)
             .frame(width: width)
             .fixedSize(horizontal: false, vertical: true))
         controller.sizingOptions = [.preferredContentSize]
@@ -40,7 +40,7 @@ final class OnboardingPanel {
                               width: size.width, height: size.height), display: true)
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
-        panel.animator().alphaValue = opacity
+        followLook(panel)
         followSystemSettings()
     }
 
@@ -60,7 +60,6 @@ private final class KeyPanel: NSPanel {
 
 private struct OnboardingView: View {
     @Bindable var setup: Setup
-    let tint: Double
     let done: () -> Void
     @State private var editing: String?
     @State private var keysLater = false
@@ -128,10 +127,8 @@ private struct OnboardingView: View {
             }
         }
         .padding(20)
-        .background(Glass(cornerRadius: 18, tint: tint))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glass(18)
         .padding(10)
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
     }
 
     private var microphoneDetail: String {

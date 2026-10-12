@@ -51,9 +51,10 @@ enum MeetingsWindow {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().alphaValue = model.settings.controlOpacity
+            window.animator().alphaValue = Look.shared.opacity
             window.animator().setFrame(target, display: true)
         }
+        followLook(window)
     }
 
     static func close() {
@@ -124,7 +125,7 @@ struct MeetingsView: View {
 
     var body: some View {
         ZStack {
-            Glass(cornerRadius: 12, tint: model.settings.glassTint)
+            Glass(cornerRadius: 12)
             VStack(spacing: 0) {
                 titleBar
                 line
@@ -303,6 +304,7 @@ struct MeetingsView: View {
                      action: { meetings.selectedID = meeting.id }),
             MenuItem(id: "transcribe", title: meeting.state == .done ? "Re-transcribe" : "Transcribe",
                      symbol: "text.viewfinder", action: { meetings.transcribe(meeting.id) }),
+            MeetingEngines.chooserItem(for: meeting) { meetings.transcribe(meeting.id, engineID: $0) },
         ]
         if meeting.state == .done, meetings.canSummarize {
             items.append(MenuItem(id: "summarize", title: "Summarize", symbol: "sparkles",

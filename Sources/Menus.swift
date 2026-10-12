@@ -6,6 +6,7 @@ struct MenuItem: Identifiable {
     let id: String
     var title: String
     var symbol: String? = nil
+    var icon: (@MainActor () -> AnyView)? = nil
     var shortcut: String? = nil
     var destructive = false
     var enabled = true
@@ -53,10 +54,10 @@ enum MenuPanel {
             if y < area.minY + edge { y = screenRect.maxY + 4 }
             return NSPoint(x: x, y: y)
         }
+        trigger = screenRect
     }
 
-    static var justClosed: Bool { closedAt.map { Date().timeIntervalSince($0) < 0.3 } ?? false }
-    private static var closedAt: Date?
+    private static var trigger: NSRect?
 
     static func dismiss() {
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
@@ -68,7 +69,7 @@ enum MenuPanel {
         hovered.id = nil
         card?.orderOut(nil)
         card = nil
-        if panel != nil { closedAt = Date() }
+        trigger = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -92,6 +93,7 @@ enum MenuPanel {
         origin.y = min(max(origin.y, area.minY + edge), max(area.minY + edge, area.maxY - size.height - edge))
         panel.setFrame(NSRect(origin: origin.rounded, size: size), display: false)
         panel.orderFrontRegardless()
+        settleShadow(panel)
         Self.panel = panel
         watch()
     }
@@ -116,7 +118,15 @@ enum MenuPanel {
         y = min(max(y, area.minY + edge), max(area.minY + edge, area.maxY - size.height - edge))
         panel2.setFrame(NSRect(origin: NSPoint(x: x, y: y).rounded, size: size), display: false)
         panel2.order(.above, relativeTo: panel.windowNumber)
+        settleShadow(panel2)
         card = panel2
+    }
+
+    private static func settleShadow(_ panel: NSPanel) {
+        panel.invalidateShadow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            MainActor.assumeIsolated { if panel.isVisible { panel.invalidateShadow() } }
+        }
     }
 
     static func choose(_ item: MenuItem) {
@@ -131,7 +141,7 @@ enum MenuPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.becomesKeyOnlyIfNeeded = true
         panel.acceptsMouseMovedEvents = true
         panel.hidesOnDeactivate = false
@@ -145,10 +155,16 @@ enum MenuPanel {
     private static func watch() {
         let mouse: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         if let outside = NSEvent.addLocalMonitorForEvents(matching: mouse, handler: { event in
-            MainActor.assumeIsolated {
-                if event.window !== panel, event.window !== card { dismiss() }
+            let location = event.locationInWindow
+            let swallow = MainActor.assumeIsolated { () -> Bool in
+                let window = event.window
+                guard window !== panel, window !== card else { return false }
+                let point = window.map { $0.convertPoint(toScreen: location) } ?? location
+                let onTrigger = trigger?.contains(point) == true
+                dismiss()
+                return onTrigger
             }
-            return event
+            return swallow ? nil : event
         }) {
             monitors.append(outside)
         }
@@ -185,7 +201,7 @@ private struct MenuContent: View {
     @State private var shown = false
 
     private var checkable: Bool { items.contains { $0.checked } }
-    private var symbolic: Bool { items.contains { $0.symbol != nil } }
+    private var symbolic: Bool { items.contains { $0.symbol != nil || $0.icon != nil } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -204,7 +220,8 @@ private struct MenuContent: View {
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .coordinateSpace(name: "menu")
-        .background(Glass(cornerRadius: 12, tint: 1))
+        .background(Glass(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .opacity(shown ? 1 : 0)
         .scaleEffect(shown ? 1 : 0.96, anchor: .top)
         .onAppear { withAnimation(.easeOut(duration: 0.1)) { shown = true } }
@@ -214,9 +231,14 @@ private struct MenuContent: View {
         let lit = MenuPanel.hovered.id == item.id && item.enabled
         return HStack(spacing: 8) {
             if symbolic {
-                Image(systemName: item.symbol ?? "")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .frame(width: 14, alignment: .center)
+                ZStack {
+                    if let icon = item.icon {
+                        icon()
+                    } else {
+                        Image(systemName: item.symbol ?? "").font(.system(size: 11.5, weight: .medium))
+                    }
+                }
+                .frame(width: 14, alignment: .center)
             }
             Text(item.title)
                 .font(tiktok(13))
@@ -266,7 +288,8 @@ private struct MenuCard: View {
             .foregroundStyle(.white.opacity(0.88))
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Glass(cornerRadius: 10, tint: 1))
+            .background(Glass(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -305,12 +328,28 @@ final class RightClickView: NSView {
     }
 }
 
+struct MenuTrigger<Label: View>: View {
+    let items: @MainActor () -> [MenuItem]
+    @ViewBuilder let label: Label
+    @State private var box = ViewBox()
+
+    var body: some View {
+        Button(action: open) { label }
+            .buttonStyle(.plain)
+            .background(ScreenRectReader(box: box))
+    }
+
+    private func open() {
+        guard let rect = box.screenRect else { return }
+        MenuPanel.show(items(), under: rect)
+    }
+}
+
 struct GlassDropdown<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
     let detail: (@MainActor (Value) -> AnyView)?
     @State private var hovering = false
-    @State private var box = ViewBox()
 
     init(selection: Binding<Value>, options: [(Value, String)], detail: (@MainActor (Value) -> AnyView)? = nil) {
         _selection = selection
@@ -319,7 +358,7 @@ struct GlassDropdown<Value: Hashable>: View {
     }
 
     var body: some View {
-        Button(action: open) {
+        MenuTrigger { dropdownItems(options, selection: $selection, detail: detail) } label: {
             HStack(spacing: 4) {
                 Text(options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
                 Spacer(minLength: 0)
@@ -332,15 +371,8 @@ struct GlassDropdown<Value: Hashable>: View {
             .background(Capsule().fill(.white.opacity(hovering ? 0.16 : 0.1)).overlay(Capsule().strokeBorder(.white.opacity(0.13))))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .background(ScreenRectReader(box: box))
-    }
-
-    private func open() {
-        guard let rect = box.screenRect else { return }
-        MenuPanel.show(dropdownItems(options, selection: $selection, detail: detail), under: rect)
     }
 }
 

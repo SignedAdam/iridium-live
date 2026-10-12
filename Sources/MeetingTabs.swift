@@ -143,7 +143,7 @@ private struct LineDock: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Glass(cornerRadius: 14, tint: 1).shadow(color: .black.opacity(0.45), radius: 18, y: 6))
+        .glass(14)
         .padding(.horizontal, 14)
         .padding(.bottom, 12)
     }
@@ -185,7 +185,7 @@ private struct DeletedToast: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Glass(cornerRadius: 16, tint: 1).shadow(color: .black.opacity(0.4), radius: 12, y: 4))
+        .glass(16)
         .padding(.bottom, 14)
     }
 }

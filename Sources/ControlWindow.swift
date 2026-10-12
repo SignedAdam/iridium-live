@@ -19,13 +19,10 @@ final class ControlWindowController {
     private let holder: CanvasHolder
     private var shrink: DispatchWorkItem?
 
-    var opacity: CGFloat {
-        didSet { if !model.settings.controlHidden { window.animator().alphaValue = opacity } }
-    }
+    private var opacity: CGFloat { Look.shared.opacity }
 
     init(model: AppModel, notes: NotesEditor, screen: NSScreen) {
         self.model = model
-        opacity = model.settings.controlOpacity
         let center = Self.savedBarCenter() ?? Self.defaultBarCenter(on: screen)
         model.opensDown = Self.opensDown(barCenter: center)
         let size = Self.windowSize(model.glassSize)
@@ -46,6 +43,7 @@ final class ControlWindowController {
         window.contentView = holder
         mover.onEnd = { [weak self] in self?.settle() }
         follow()
+        followOpacity()
         followLevel()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in
@@ -62,6 +60,14 @@ final class ControlWindowController {
             window.animator().alphaValue = opacity
             window.animator().setFrame(target, display: true)
         }
+    }
+
+    private func followOpacity() {
+        let wanted = withObservationTracking { Look.shared.opacity } onChange: { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followOpacity() } }
+        }
+        guard !model.settings.controlHidden, window.isVisible else { return }
+        window.animator().alphaValue = wanted
     }
 
     private func followLevel() {

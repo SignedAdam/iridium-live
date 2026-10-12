@@ -99,9 +99,9 @@ struct MeetingDetail: View {
                     meetings.cancelTranscription(meeting.id)
                 }
             } else if meeting.state == .failed {
-                Button("Retry") { meetings.transcribe(meeting.id) }.buttonStyle(AccentButton())
+                TranscribeControl(title: "Retry", meeting: meeting, meetings: meetings)
             } else if meeting.state != .done {
-                Button("Transcribe") { meetings.transcribe(meeting.id) }.buttonStyle(AccentButton())
+                TranscribeControl(title: "Transcribe", meeting: meeting, meetings: meetings)
             }
             if meeting.transcript != nil {
                 MeetingIconButton(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy transcript") { copy() }
@@ -115,6 +115,7 @@ struct MeetingDetail: View {
         if meeting.state == .done {
             items.append(MenuItem(id: "retranscribe", title: "Re-transcribe", symbol: "arrow.clockwise",
                                   action: { meetings.transcribe(meeting.id) }))
+            items.append(MeetingEngines.chooserItem(for: meeting) { meetings.transcribe(meeting.id, engineID: $0) })
             if meetings.canSummarize {
                 items.append(MenuItem(id: "summarize",
                                       title: meeting.summary == nil ? "Summarize" : "Regenerate summary",
@@ -203,7 +204,7 @@ struct MeetingOverlays: View {
             }
             .padding(18)
             .frame(width: 360)
-            .background(Glass(cornerRadius: 16, tint: 1).shadow(color: .black.opacity(0.5), radius: 26, y: 10))
+            .glass(16)
         }
     }
 
@@ -342,6 +343,106 @@ struct MeetingMenuButton: View {
         .onHover { hovering = $0 }
         .tip("More")
         .background(MeetingRectReader(box: rect))
+    }
+}
+
+@MainActor
+enum MeetingEngines {
+    static func stored(_ option: EngineOption) -> Bool {
+        guard let key = option.key else { return true }
+        return Setup.shared.keys[key] == true
+    }
+
+    static func tag(_ option: EngineOption) -> String {
+        guard stored(option) else { return "Key needed" }
+        return option.local ? "On this Mac" : "Cloud"
+    }
+
+    static func line(_ option: EngineOption) -> String {
+        option.local ? "Runs on this Mac, the audio stays here" : "Sends the audio to \(option.name)"
+    }
+
+    static func keyName(_ option: EngineOption) -> String? {
+        option.key.flatMap { ApiKey.named($0)?.name ?? $0 }
+    }
+
+    static func items(for meeting: Meeting?, run: @escaping @MainActor (String) -> Void) -> [MenuItem] {
+        EngineFactory.options.map { option in
+            let held = stored(option)
+            var card = line(option)
+            if !held, let name = keyName(option) { card += ". Add the \(name) key in Settings" }
+            let id = option.id
+            return MenuItem(id: "engine." + id, title: option.name, shortcut: tag(option),
+                            enabled: held, checked: meeting?.engineID == id,
+                            detail: { AnyView(Text(card).frame(width: 186, alignment: .leading)) },
+                            action: { run(id) })
+        }
+    }
+
+    static func settingsItems(selected: String, choose: @escaping @MainActor (String) -> Void) -> [MenuItem] {
+        EngineFactory.options.map { option in
+            var card = line(option)
+            if !stored(option), let name = keyName(option) { card += ". Add the \(name) key below" }
+            let id = option.id
+            return MenuItem(id: "engine." + id, title: option.name, shortcut: tag(option), checked: id == selected,
+                            detail: { AnyView(Text(card).frame(width: 186, alignment: .leading)) },
+                            action: { choose(id) })
+        }
+    }
+
+    static func chooserItem(for meeting: Meeting, run: @escaping @MainActor (String) -> Void) -> MenuItem {
+        MenuItem(id: "transcribe.with", title: "Transcribe with", symbol: "cpu", action: {
+            MenuPanel.show(items(for: meeting, run: run), at: NSEvent.mouseLocation)
+        })
+    }
+}
+
+struct TranscribeControl: View {
+    let title: String
+    let meeting: Meeting
+    let meetings: MeetingsModel
+    @State private var rect = MeetingRect()
+    @State private var hovering = false
+    @State private var hoveringChoice = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button { meetings.transcribe(meeting.id) } label: {
+                Text(title)
+                    .font(tiktok(12, "Medium"))
+                    .padding(.horizontal, 12)
+                    .frame(height: 25)
+                    .background(.white.opacity(hovering ? 0.12 : 0))
+                    .contentShape(Rectangle())
+            }
+            .onHover { hovering = $0 }
+            Rectangle().fill(.white.opacity(0.4)).frame(width: 1, height: 14)
+            Button(action: open) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 22, height: 25)
+                    .background(.white.opacity(hoveringChoice ? 0.12 : 0))
+                    .contentShape(Rectangle())
+            }
+            .onHover { hoveringChoice = $0 }
+            .tip("Transcribe with")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .background(Capsule().fill(accent.opacity(0.85)))
+        .clipShape(Capsule())
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hoveringChoice)
+        .background(MeetingRectReader(box: rect))
+    }
+
+    private func open() {
+        let items = MeetingEngines.items(for: meeting) { meetings.transcribe(meeting.id, engineID: $0) }
+        if let frame = rect.screenRect {
+            MenuPanel.show(items, under: frame)
+        } else {
+            MenuPanel.show(items, at: NSEvent.mouseLocation)
+        }
     }
 }
 

@@ -51,9 +51,10 @@ enum ModelsPanel {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().alphaValue = model.settings.controlOpacity
+            window.animator().alphaValue = Look.shared.opacity
             window.animator().setFrame(target, display: true)
         }
+        followLook(window)
     }
 
     static func close() {
@@ -420,7 +421,7 @@ struct ModelsView: View {
 
     var body: some View {
         ZStack {
-            Glass(cornerRadius: 12, tint: model.settings.glassTint)
+            Glass(cornerRadius: 12)
             VStack(spacing: 0) {
                 titleBar
                 line
@@ -517,17 +518,7 @@ struct ModelsView: View {
     }
 
     private var makerMenu: some View {
-        Menu {
-            Button("All makers") { store.setMaker(nil) }
-            Divider()
-            ForEach(store.makers, id: \.slug) { maker in
-                Button {
-                    store.setMaker(maker.slug)
-                } label: {
-                    Label { Text(maker.name) } icon: { BrandMark(brand: maker, size: 14) }
-                }
-            }
-        } label: {
+        MenuTrigger(items: makerItems) {
             HStack(spacing: 6) {
                 if let slug = store.maker, let found = store.makers.first(where: { $0.slug == slug }) {
                     BrandMark(brand: found, size: 14)
@@ -542,9 +533,18 @@ struct ModelsView: View {
             .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(0.08)))
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
         .fixedSize()
+    }
+
+    private func makerItems() -> [MenuItem] {
+        var items = [MenuItem(id: "all", title: "All makers", checked: store.maker == nil) { store.setMaker(nil) },
+                     MenuItem.separator()]
+        for maker in store.makers {
+            items.append(MenuItem(id: maker.slug, title: maker.name,
+                                  icon: { AnyView(BrandMark(brand: maker, size: 14)) },
+                                  checked: store.maker == maker.slug) { store.setMaker(maker.slug) })
+        }
+        return items
     }
 
     private var status: some View {

@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 let accent = Color(red: 1.0, green: 0.29, blue: 0.31)
@@ -22,12 +23,45 @@ final class ClickThroughBlur: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+@MainActor
+@Observable
+final class Look {
+    static let shared = Look()
+
+    var tint = 0.0
+    var opacity = 0.95
+
+    func apply(_ settings: Settings) {
+        tint = settings.glassTint
+        opacity = settings.controlOpacity
+    }
+}
+
+@MainActor
+func followLook(_ window: NSWindow) {
+    let opacity = withObservationTracking { Look.shared.opacity } onChange: { [weak window] in
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let window else { return }
+                followLook(window)
+            }
+        }
+    }
+    guard window.isVisible else { return }
+    window.animator().alphaValue = opacity
+}
+
 struct Glass: View {
+    static let shadowColour = Color.black.opacity(0.4)
+    static let shadowRadius: CGFloat = 18
+    static let shadowDrop: CGFloat = 6
+    static let halo: CGFloat = 16
+
     let cornerRadius: CGFloat
-    let tint: Double
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let tint = Look.shared.tint
         GeometryReader { geometry in
             let height = max(geometry.size.height, 1)
             ZStack(alignment: .top) {
@@ -43,6 +77,14 @@ struct Glass: View {
                 .init(color: .white.opacity(0.16), location: 1),
             ], startPoint: .top, endPoint: .bottom), lineWidth: 1))
         }
+    }
+}
+
+extension View {
+    func glass(_ cornerRadius: CGFloat) -> some View {
+        background(Glass(cornerRadius: cornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: Glass.shadowColour, radius: Glass.shadowRadius, y: Glass.shadowDrop)
     }
 }
 

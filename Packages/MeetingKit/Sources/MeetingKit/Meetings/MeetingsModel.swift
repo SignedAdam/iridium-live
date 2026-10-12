@@ -135,11 +135,13 @@ public final class MeetingsModel {
 
     public func resume() { coordinator.resume() }
 
-    public func transcribe(_ id: UUID) {
+    public func transcribe(_ id: UUID, engineID: String? = nil) {
         guard let meeting = meeting(id) else { return }
         transcriptionTasks[id]?.cancel()
 
-        let c = config()
+        var c = config()
+        if let engineID { c.engineID = engineID }
+        let requested = c.engineID
         let engine = EngineFactory.resolvedEngine(for: c)
         let options = TranscriptionOptions(languageHint: c.languageHint, diarize: true)
         let folder = store.folder(meeting)
@@ -151,6 +153,9 @@ public final class MeetingsModel {
         }
         progress[id] = 0
         slow.remove(id)
+        if engine.id != requested {
+            lastError = "No \(EngineFactory.name(for: requested)) key stored. Transcribing with \(EngineFactory.name(for: engine.id))."
+        }
 
         let warn = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: (self?.slowWarningSeconds ?? 90) * 1_000_000_000)

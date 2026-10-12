@@ -150,10 +150,8 @@ struct SettingsPane: View {
         let engineKey = engine?.key.flatMap { ApiKey.named($0) }
         let summaryKey = ApiKey.named(model.settings.summaryKey)
         Section("Meetings") {
-            Row("Engine", detail: engine?.local == true ? "Runs on this Mac" : nil) {
-                GlassMenu(selection: $model.settings.meetingEngine,
-                          options: EngineFactory.options.map { ($0.id, $0.name) })
-                    .frame(width: 190)
+            Row("Engine", detail: engine.map { MeetingEngines.line($0) }) {
+                EngineMenu(selection: $model.settings.meetingEngine).frame(width: 190)
             }
             if let engineKey {
                 Row("\(engineKey.name) key", detail: keyDetail(engineKey), alert: !held(engineKey), inset: 14) {
@@ -575,11 +573,10 @@ private struct ModelRow: View {
 private struct ModelMenu: View {
     let others: [SavedModel]
     let use: (SavedModel) -> Void
+    @State private var hovering = false
 
     var body: some View {
-        Menu {
-            ForEach(others) { item in Button(item.title) { use(item) } }
-        } label: {
+        MenuTrigger { others.map { item in MenuItem(id: item.id, title: item.title) { use(item) } } } label: {
             HStack(spacing: 4) {
                 Text("\(others.count) more")
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
@@ -588,13 +585,47 @@ private struct ModelMenu: View {
             .foregroundStyle(.white.opacity(0.92))
             .padding(.horizontal, 12)
             .frame(height: 24)
-            .background(Pill())
+            .background(Pill(fill: hovering ? 0.16 : 0.1))
             .contentShape(Capsule())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+private struct EngineMenu: View {
+    @Binding var selection: String
+    @State private var rect = MeetingRect()
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 4) {
+                Text(EngineFactory.name(for: selection)).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
+            }
+            .font(tiktok(12, "Medium"))
+            .foregroundStyle(.white.opacity(0.92))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(Pill(fill: hovering ? 0.16 : 0.1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .background(MeetingRectReader(box: rect))
+    }
+
+    private func open() {
+        let items = MeetingEngines.settingsItems(selected: selection) { selection = $0 }
+        if let frame = rect.screenRect {
+            MenuPanel.show(items, under: frame)
+        } else {
+            MenuPanel.show(items, at: NSEvent.mouseLocation)
+        }
     }
 }
 
@@ -780,15 +811,10 @@ private struct GlassMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
     var label: String? = nil
+    @State private var hovering = false
 
     var body: some View {
-        Menu {
-            Picker("", selection: $selection) {
-                ForEach(options.indices, id: \.self) { Text(options[$0].1).tag(options[$0].0) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
+        MenuTrigger { dropdownItems(options, selection: $selection) } label: {
             HStack(spacing: 4) {
                 Text(label ?? options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
                 Spacer(minLength: 0)
@@ -798,12 +824,11 @@ private struct GlassMenu<Value: Hashable>: View {
             .foregroundStyle(.white.opacity(0.92))
             .padding(.horizontal, 9)
             .frame(height: 24)
-            .background(Pill())
+            .background(Pill(fill: hovering ? 0.16 : 0.1))
             .contentShape(Capsule())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
@@ -900,13 +925,7 @@ private struct InlineMenu<Value: Hashable>: View {
     @State private var hovering = false
 
     var body: some View {
-        Menu {
-            Picker("", selection: $selection) {
-                ForEach(options.indices, id: \.self) { Text(options[$0].1).tag(options[$0].0) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
+        MenuTrigger { dropdownItems(options, selection: $selection) } label: {
             HStack(spacing: 3) {
                 Text(options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 7.5, weight: .bold)).opacity(0.6)
@@ -918,9 +937,6 @@ private struct InlineMenu<Value: Hashable>: View {
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(hovering ? 0.09 : 0)))
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
         .onHover { hovering = $0 }
     }

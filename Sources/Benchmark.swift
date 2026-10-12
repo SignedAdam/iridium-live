@@ -185,7 +185,7 @@ final class BenchmarkPanel {
         panel.contentView = host
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
-        panel.animator().alphaValue = 1
+        followLook(panel)
     }
 }
 
@@ -230,10 +230,8 @@ private struct BenchmarkTable: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Glass(cornerRadius: 18, tint: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glass(18)
         .padding(10)
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .foregroundStyle(.white.opacity(0.9))
     }
 

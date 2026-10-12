@@ -16,6 +16,7 @@ MainActor.assumeIsolated {
     installEditMenu(in: app)
     let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
     let model = AppModel()
+    Look.shared.apply(model.settings)
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Iridium Live")
     Migration.carryOver(to: support)
@@ -61,7 +62,7 @@ MainActor.assumeIsolated {
         }
     }
     if Setup.shared.needsOnboarding {
-        OnboardingPanel.show(on: screen, tint: model.settings.glassTint, opacity: model.settings.controlOpacity)
+        OnboardingPanel.show(on: screen)
     }
 
     let engine: Engine
@@ -201,8 +202,7 @@ MainActor.assumeIsolated {
     }
     idle.arm(after: model.idleUnloadMinutes)
     model.onEditInstructions = {
-        InstructionsPanel.show(text: model.settings.cleanupInstructions, on: control.window.screen ?? screen,
-                               tint: model.settings.glassTint, opacity: model.settings.controlOpacity) {
+        InstructionsPanel.show(text: model.settings.cleanupInstructions, on: control.window.screen ?? screen) {
             model.settings.cleanupInstructions = $0
         }
     }
@@ -297,7 +297,6 @@ MainActor.assumeIsolated {
         if new.saveAudio != old.saveAudio || new.audioSplitSeconds != old.audioSplitSeconds { archive(new) }
         if new.hotkeys != old.hotkeys { hotkeys.hotkeys = new.hotkeys }
         captions.apply(new)
-        control.opacity = new.controlOpacity
         if new.controlHidden != old.controlHidden { control.setHidden(new.controlHidden) }
     }
     let memory = MemoryMonitor { engine.pid }

@@ -34,7 +34,7 @@ final class ChatAppsPanel {
         panel.contentView = host
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
-        panel.animator().alphaValue = 1
+        followLook(panel)
     }
 }
 
@@ -55,10 +55,8 @@ private struct ChatAppsEditor: View {
             Rectangle().fill(.white.opacity(0.08)).frame(width: 1)
             editor
         }
-        .background(Glass(cornerRadius: 18, tint: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .glass(18)
         .padding(10)
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
         .font(tiktok(13))
         .foregroundStyle(.white.opacity(0.88))
         .onAppear { if chosen.isEmpty { chosen = apps.apps.first?.bundleID ?? "" } }

@@ -26,14 +26,14 @@ struct ControlView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: down ? .top : .bottom)
-        .background(Glass(cornerRadius: AppModel.barSize.height / 2, tint: model.settings.glassTint))
+        .background(Glass(cornerRadius: AppModel.barSize.height / 2))
         .clipShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
         .gesture(DragGesture(minimumDistance: 2).onChanged { _ in mover.drag() }.onEnded { _ in mover.end() })
         .overlayPreferenceValue(TipKey.self) { tips in
             TipLayer(tips: tips, bar: down ? 0...barRegion : (size.height - barRegion)...size.height, barOnTop: down)
         }
-        .shadow(color: .black.opacity(0.32), radius: 16, y: 6)
+        .shadow(color: Glass.shadowColour, radius: Glass.shadowRadius, y: Glass.shadowDrop)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: down ? .top : .bottom)
         .padding(floatingMargin)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.pane)

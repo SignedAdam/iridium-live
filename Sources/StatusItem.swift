@@ -18,7 +18,7 @@ final class StatusItem: NSObject {
     }
 
     @objc private func open() {
-        guard !MenuPanel.justClosed, let button = item.button, let window = button.window else { return }
+        guard let button = item.button, let window = button.window else { return }
         MenuPanel.show(statusMenuItems(model), under: window.convertToScreen(button.convert(button.bounds, to: nil)))
     }
 
