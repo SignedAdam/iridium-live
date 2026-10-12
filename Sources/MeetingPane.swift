@@ -55,9 +55,14 @@ private struct MeetingPaneBody: View {
             Text("Meeting").font(tiktok(15, "Medium")).foregroundStyle(.white.opacity(0.95))
             Spacer(minLength: 8)
             Button("All meetings") { model.openMeetings() }.buttonStyle(GlassButton())
-            Button("Start") { meetings.toggleRecording() }
-                .buttonStyle(GlassButton())
-                .disabled(!coordinator.canRecord)
+            Button { meetings.toggleRecording() } label: {
+                HStack(spacing: 6) {
+                    Circle().fill(accent).frame(width: 7, height: 7)
+                    Text("Record")
+                }
+            }
+            .buttonStyle(GlassButton())
+            .disabled(!coordinator.canRecord)
         }
         .frame(height: 26)
     }

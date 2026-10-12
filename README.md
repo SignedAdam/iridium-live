@@ -27,7 +27,7 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   containing model markers such as `<EOS_TOKEN>`, is never typed; what you said is typed instead.
 - **History:** everything dictated, searchable, with timing and cost. Play what you said (with *Save audio* on), retry
   the cleanup of any entry or add it to the current note.
-- **Menu bar icon:** start recording, show or hide the control, quit.
+- **Menu bar icon:** start dictation, record a meeting, show or hide the control, quit.
 
 ![WhatsApp with the record button and the live transcript](docs/chat.png)
 
@@ -37,9 +37,9 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 
 Record a meeting with your microphone and the other side of the call, with a live transcript while it runs and a
 full transcript with speakers afterwards. The meeting button in the bar opens the meeting pane, where you choose the
-microphone, system audio and engine and press Start. While a meeting runs, a strip under the bar shows the time and
-the last thing said, with Pause and End, even with the pane closed. Dictation keeps working during a meeting, and
-the live transcript leaves out what your microphone picks up from your speakers.
+microphone, system audio and engine and press Record. While a meeting records, a strip under the bar shows the time
+and the last thing said, with Pause and Stop, even with the pane closed. Dictation keeps working during a meeting,
+and the live transcript leaves out what your microphone picks up from your speakers.
 Speakers can be renamed and merged, lines can be edited and played back, and a meeting can be exported as Markdown,
 SRT, VTT or text.
 

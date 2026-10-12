@@ -64,12 +64,13 @@ struct MeetingStrip: View {
                 .buttonStyle(.plain)
                 .tip(model.pane == .meeting ? "Hide meeting" : "Show meeting")
                 if !saving {
-                    IconToggle(symbol: paused ? "play.fill" : "pause.fill", isOn: paused, size: 26, glyph: 11,
-                               tip: paused ? "Resume" : "Pause",
-                               action: { paused ? meetings.resume() : meetings.pause() })
-                    Button("End") { model.toggleMeetingRecording() }
-                        .buttonStyle(GlassButton())
-                        .tip("End meeting")
+                    HStack(spacing: 2) {
+                        IconToggle(symbol: paused ? "play.fill" : "pause.fill", isOn: paused, size: 26, glyph: 11,
+                                   tip: paused ? "Resume" : "Pause",
+                                   action: { paused ? meetings.resume() : meetings.pause() })
+                        IconToggle(symbol: "stop.fill", isOn: false, size: 26, glyph: 10, tip: "Stop recording",
+                                   action: model.toggleMeetingRecording)
+                    }
                 }
             }
             .padding(.leading, 10)

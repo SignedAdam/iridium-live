@@ -442,8 +442,8 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
         .separator(),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: { model.toggleNotes() }),
         MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: { model.showMyNotes() }),
-        MenuItem(id: "meeting", title: model.meetingRecording ? "End meeting" : "Start meeting",
-                 symbol: model.meetingRecording ? "phone.down" : "person.2.wave.2",
+        MenuItem(id: "meeting", title: model.meetingRecording ? "Stop meeting recording" : "Record meeting",
+                 symbol: model.meetingRecording ? "stop.circle" : "person.2.wave.2",
                  action: { model.toggleMeetingRecording() }),
         MenuItem(id: "meetings", title: "Meetings", symbol: "rectangle.stack", action: { model.openMeetings() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: { model.toggleHistory() }),
@@ -459,11 +459,11 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
     let hidden = model.settings.controlHidden
     let shown: (@escaping @MainActor () -> Void) -> @MainActor () -> Void = { open in { model.showControl(); open() } }
     return [
-        MenuItem(id: "record", title: model.recording ? "Stop recording" : "Start recording",
+        MenuItem(id: "record", title: model.recording ? "Stop dictation" : "Start dictation",
                  symbol: model.recording ? "stop.circle" : "record.circle", enabled: model.ready || model.recording,
                  action: { model.toggleRecording() }),
-        MenuItem(id: "meeting", title: model.meetingRecording ? "End meeting" : "Start meeting",
-                 symbol: model.meetingRecording ? "phone.down" : "person.2.wave.2",
+        MenuItem(id: "meeting", title: model.meetingRecording ? "Stop meeting recording" : "Record meeting",
+                 symbol: model.meetingRecording ? "stop.circle" : "person.2.wave.2",
                  action: shown { model.toggleMeetingRecording() }),
         .separator(),
         MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
