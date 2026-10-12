@@ -89,14 +89,15 @@ public final class LiveTranscriptModel {
                     let (updates, sink) = AsyncStream.makeStream(of: LiveUpdate.self)
                     group.addTask {
                         defer { sink.finish() }
-                        try await stream.run(locale: locale) { text, start, end, isFinal in
-                            sink.yield(LiveUpdate(text: text, start: start, end: end, isFinal: isFinal))
+                        try await stream.run(locale: locale) { text, words, start, end, isFinal in
+                            sink.yield(LiveUpdate(text: text, words: words, start: start, end: end, isFinal: isFinal))
                         }
                     }
                     group.addTask { @MainActor [weak self] in
                         for await u in updates {
                             guard let self, self.session == id else { continue }
-                            self.transcript.apply(kind: kind, text: u.text, start: u.start, end: u.end, isFinal: u.isFinal)
+                            self.transcript.apply(kind: kind, text: u.text, words: u.words,
+                                                  start: u.start, end: u.end, isFinal: u.isFinal)
                         }
                         guard let self, self.session == id else { return }
                         self.transcript.discardPending(kind)
@@ -114,6 +115,7 @@ public final class LiveTranscriptModel {
 
 private struct LiveUpdate: Sendable {
     let text: String
+    let words: [LiveTranscript.Word]
     let start: TimeInterval
     let end: TimeInterval
     let isFinal: Bool

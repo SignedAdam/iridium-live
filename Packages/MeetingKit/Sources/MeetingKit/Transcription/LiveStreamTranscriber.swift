@@ -3,7 +3,8 @@ import AVFoundation
 import Speech
 
 final class LiveStreamTranscriber: @unchecked Sendable {
-    typealias Update = @Sendable (_ text: String, _ start: TimeInterval, _ end: TimeInterval, _ isFinal: Bool) -> Void
+    typealias Update = @Sendable (_ text: String, _ words: [LiveTranscript.Word],
+                                  _ start: TimeInterval, _ end: TimeInterval, _ isFinal: Bool) -> Void
 
     let kind: AudioStreamKind
     private let sessionStart: Date
@@ -57,7 +58,7 @@ final class LiveStreamTranscriber: @unchecked Sendable {
         let transcriber = SpeechTranscriber(locale: locale,
                                             transcriptionOptions: [],
                                             reportingOptions: [.volatileResults, .fastResults],
-                                            attributeOptions: [])
+                                            attributeOptions: [.audioTimeRange])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw AudioError("No audio format is available for on-device speech recognition.")
@@ -71,8 +72,8 @@ final class LiveStreamTranscriber: @unchecked Sendable {
                 let start = result.range.start.seconds
                 let end = result.range.end.seconds
                 guard start.isFinite else { continue }
-                onUpdate(String(result.text.characters), base + start,
-                         base + (end.isFinite ? end : start), result.isFinal)
+                onUpdate(String(result.text.characters), Self.words(in: result.text, base: base),
+                         base + start, base + (end.isFinite ? end : start), result.isFinal)
             }
         }
 
@@ -99,6 +100,21 @@ final class LiveStreamTranscriber: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return offset ?? 0
+    }
+
+    private static func words(in attributed: AttributedString, base: TimeInterval) -> [LiveTranscript.Word] {
+        var out: [LiveTranscript.Word] = []
+        for run in attributed.runs {
+            guard let range = run.audioTimeRange else { continue }
+            let start = range.start.seconds
+            let end = range.end.seconds
+            guard start.isFinite else { continue }
+            let from = base + start
+            let to = base + (end.isFinite && end > start ? end : start)
+            out.append(contentsOf: LiveTranscript.spread(String(attributed[run.range].characters),
+                                                         from: from, to: to))
+        }
+        return out
     }
 
     private static func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter,

@@ -36,9 +36,10 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 ## Meetings
 
 Record a meeting with your microphone and the other side of the call, with a live transcript while it runs and a
-full transcript with speakers afterwards. The meeting button in the bar opens the meeting pane, where you start and
-stop it and choose the microphone, system audio and engine. While a meeting records, a strip under the bar shows the
-time, the last thing said and a stop button, even with the pane closed. Dictation keeps working during a meeting.
+full transcript with speakers afterwards. The meeting button in the bar opens the meeting pane, where you choose the
+microphone, system audio and engine and press Start. While a meeting runs, a strip under the bar shows the time and
+the last thing said, with Pause and End, even with the pane closed. Dictation keeps working during a meeting, and
+the live transcript leaves out what your microphone picks up from your speakers.
 Speakers can be renamed and merged, lines can be edited and played back, and a meeting can be exported as Markdown,
 SRT, VTT or text.
 

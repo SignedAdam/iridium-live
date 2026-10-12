@@ -36,9 +36,7 @@ struct MeetingToggle: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        let live = model.meetingRecording
-        IconToggle(symbol: "person.2.wave.2", isOn: live || model.pane == .meeting, tint: live ? accent : nil,
-                   tip: "Meeting", action: model.toggleMeeting)
+        IconToggle(symbol: "person.2.wave.2", isOn: model.pane == .meeting, tip: "Meeting", action: model.toggleMeeting)
     }
 }
 
@@ -47,58 +45,90 @@ struct MeetingStrip: View {
 
     var body: some View {
         if let meetings = model.meetings {
-            HStack(spacing: 8) {
-                StripDot()
-                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                    Text(formatTimecode(meetings.coordinator.elapsed,
-                                        includeHours: meetings.coordinator.elapsed >= 3600))
-                        .font(tiktok(12.5, "Medium"))
-                        .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.92))
-                }
-                if model.meetingCaptionShown {
-                    HStack(spacing: 6) {
-                        Text(speaker(meetings))
-                            .font(tiktok(11, "Medium"))
-                            .foregroundStyle(speakerIsYou(meetings) ? .white.opacity(0.82) : accent)
-                            .fixedSize()
-                        Text(caption(meetings))
-                            .font(tiktok(12))
-                            .foregroundStyle(.white.opacity(0.82))
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            let paused = meetings.coordinator.state == .paused
+            let saving = meetings.coordinator.state == .stopping
+            HStack(spacing: 10) {
+                Button(action: model.toggleMeeting) {
+                    HStack(spacing: 10) {
+                        if saving {
+                            Text("Saving").font(tiktok(12.5, "Medium")).foregroundStyle(.white.opacity(0.75))
+                            Spacer(minLength: 0)
+                        } else {
+                            elapsed(meetings, paused: paused)
+                            line(meetings)
+                        }
                     }
-                    .transition(.opacity)
-                } else {
-                    Spacer(minLength: 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                if model.recording {
-                    Image(systemName: "mic.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(accent)
-                        .tip("Dictating into this meeting too")
-                        .transition(.opacity)
+                .buttonStyle(.plain)
+                .tip(model.pane == .meeting ? "Hide meeting" : "Show meeting")
+                if !saving {
+                    IconToggle(symbol: paused ? "play.fill" : "pause.fill", isOn: paused, size: 26, glyph: 11,
+                               tip: paused ? "Resume" : "Pause",
+                               action: { paused ? meetings.resume() : meetings.pause() })
+                    Button("End") { model.toggleMeetingRecording() }
+                        .buttonStyle(GlassButton())
+                        .tip("End meeting")
                 }
-                StripButton(symbol: model.meetingCaptionShown ? "chevron.up" : "chevron.down",
-                            tip: model.meetingCaptionShown ? "Hide captions" : "Show captions") {
-                    model.meetingCaptionShown.toggle()
-                }
-                StripButton(symbol: "stop.fill", tint: accent, tip: "Stop meeting") { model.toggleMeetingRecording() }
             }
-            .padding(.horizontal, 14)
-            .frame(height: AppModel.stripHeight)
-            .background(Rectangle().fill(accent.opacity(0.08)))
-            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
-            .animation(.easeOut(duration: 0.22), value: model.meetingCaptionShown)
-            .animation(.easeOut(duration: 0.22), value: model.recording)
+            .padding(.leading, 10)
+            .padding(.trailing, 11)
+            .frame(width: AppModel.barSize.width, height: AppModel.stripHeight)
+            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
+            .animation(.easeOut(duration: 0.22), value: paused)
+            .animation(.easeOut(duration: 0.22), value: saving)
         }
     }
 
-    private func speakerIsYou(_ meetings: MeetingsModel) -> Bool {
-        meetings.live.transcript.paragraphs.last?.kind == .mic
+    private func elapsed(_ meetings: MeetingsModel, paused: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                Text(formatTimecode(meetings.coordinator.elapsed,
+                                    includeHours: meetings.coordinator.elapsed >= 3600))
+                    .font(tiktok(12.5, "Medium"))
+                    .monospacedDigit()
+                    .foregroundStyle(paused ? .white.opacity(0.75) : accent)
+            }
+            if paused {
+                Text("Paused").font(tiktok(11, "Medium")).foregroundStyle(.white.opacity(0.75))
+            }
+        }
     }
 
-    private func speaker(_ meetings: MeetingsModel) -> String {
-        guard let last = meetings.live.transcript.paragraphs.last else { return "Live" }
+    private func line(_ meetings: MeetingsModel) -> some View {
+        let said = caption(meetings)
+        let body = Text(said)
+            .font(tiktok(12))
+            .foregroundStyle(.white.opacity(said == "Listening" ? 0.6 : 0.88))
+            .lineLimit(1)
+            .contentTransition(.opacity)
+            .fixedSize()
+            .animation(.easeOut(duration: 0.24), value: said)
+        return HStack(spacing: 6) {
+            if let who = speaker(meetings) {
+                Text(who)
+                    .font(tiktok(11, "Medium"))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+            GeometryReader { geometry in
+                ViewThatFits(in: .horizontal) {
+                    body
+                    body.frame(width: geometry.size.width, alignment: .trailing)
+                        .clipped()
+                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0),
+                                                     .init(color: .black, location: 0.22)],
+                                             startPoint: .leading, endPoint: .trailing))
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
+            }
+            .frame(minWidth: 120, maxWidth: .infinity)
+        }
+    }
+
+    private func speaker(_ meetings: MeetingsModel) -> String? {
+        guard let last = meetings.live.transcript.paragraphs.last else { return nil }
         return last.kind == .mic ? "You" : (meetings.live.namedOther ?? otherSideLabel)
     }
 
@@ -106,41 +136,6 @@ struct MeetingStrip: View {
         guard let last = meetings.live.transcript.paragraphs.last else { return "Listening" }
         let said = [last.text, last.pending].filter { !$0.isEmpty }.joined(separator: " ")
         return said.isEmpty ? "Listening" : said
-    }
-}
-
-private struct StripDot: View {
-    @State private var dim = false
-
-    var body: some View {
-        Circle()
-            .fill(accent)
-            .frame(width: 8, height: 8)
-            .opacity(dim ? 0.45 : 1)
-            .onAppear { withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) { dim = true } }
-    }
-}
-
-private struct StripButton: View {
-    let symbol: String
-    var tint: Color? = nil
-    let tip: String
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(tint ?? .white.opacity(hovering ? 0.95 : 0.8))
-                .frame(width: 22, height: 22)
-                .background(Circle().fill((tint ?? .white).opacity(hovering ? 0.16 : 0.08)))
-                .contentShape(Circle())
-        }
-        .buttonStyle(Pressable())
-        .onHover { hovering = $0 }
-        .tip(tip)
-        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 

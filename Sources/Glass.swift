@@ -101,6 +101,8 @@ struct IconToggle: View {
     let isOn: Bool
     var badge = false
     var tint: Color? = nil
+    var size: CGFloat = 32
+    var glyph: CGFloat = 13
     let tip: String
     let action: () -> Void
     @State private var hovering = false
@@ -108,9 +110,9 @@ struct IconToggle: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: glyph, weight: .medium))
                 .foregroundStyle(tint ?? .white.opacity(isOn ? 1 : hovering ? 0.9 : 0.72))
-                .frame(width: 32, height: 32)
+                .frame(width: size, height: size)
                 .background {
                     Circle().fill((tint ?? .white).opacity(isOn ? 0.2 : hovering ? 0.08 : 0))
                         .overlay(Circle().strokeBorder((tint ?? .white).opacity(isOn ? 0.3 : 0)))

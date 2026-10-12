@@ -18,7 +18,7 @@ private struct MeetingPaneBody: View {
     @Bindable var meetings: MeetingsModel
     @State private var followTail = true
 
-    private enum Mode { case idle, live, paused, finishing }
+    private enum Mode { case idle, live, paused }
 
     private var coordinator: RecordingCoordinator { meetings.coordinator }
     private var live: LiveTranscriptModel { meetings.live }
@@ -27,18 +27,19 @@ private struct MeetingPaneBody: View {
         switch coordinator.state {
         case .recording: .live
         case .paused: .paused
-        case .stopping: .finishing
         default: .idle
         }
     }
 
+    private var saving: Bool { coordinator.state == .stopping }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            header
-            switch mode {
-            case .idle: idle
-            case .live, .paused: recording
-            case .finishing: finishing
+            if mode == .idle {
+                header
+                idle
+            } else {
+                recording
             }
         }
         .padding(.horizontal, 14)
@@ -50,50 +51,33 @@ private struct MeetingPaneBody: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            MeetingRecordButton(recording: mode == .live || mode == .paused, busy: mode == .finishing,
-                                action: meetings.toggleRecording)
-                .disabled(mode == .finishing || (mode == .idle && !coordinator.canRecord))
-            if mode == .idle || mode == .finishing {
-                Text("Meeting").font(tiktok(15, "Medium")).foregroundStyle(.white.opacity(0.95))
-            } else {
-                Text(formatTimecode(coordinator.elapsed, includeHours: coordinator.elapsed >= 3600))
-                    .font(tiktok(16, "Medium"))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.95))
-                Text(mode == .paused ? "Paused" : "Recording")
-                    .font(tiktok(11.5, "Medium"))
-                    .foregroundStyle(.white.opacity(0.78))
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("Meeting").font(tiktok(15, "Medium")).foregroundStyle(.white.opacity(0.95))
             Spacer(minLength: 8)
-            if mode == .live || mode == .paused {
-                IconToggle(symbol: mode == .paused ? "play.fill" : "pause.fill", isOn: mode == .paused,
-                           tip: mode == .paused ? "Resume" : "Pause",
-                           action: { mode == .paused ? meetings.resume() : meetings.pause() })
-            } else {
-                Button("All meetings") { model.openMeetings() }.buttonStyle(GlassButton())
-            }
+            Button("All meetings") { model.openMeetings() }.buttonStyle(GlassButton())
+            Button("Start") { meetings.toggleRecording() }
+                .buttonStyle(GlassButton())
+                .disabled(!coordinator.canRecord)
         }
-        .frame(height: 32)
+        .frame(height: 26)
     }
 
     private var idle: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sources
-            Text(engineNote)
-                .font(tiktok(11.5))
-                .foregroundStyle(.white.opacity(0.78))
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 2)
             if let message = notice {
                 Text(message)
                     .font(tiktok(11.5))
-                    .foregroundStyle(accent)
+                    .foregroundStyle(.white.opacity(0.75))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let saved = finished {
+            if let saved = finished, !saving {
                 savedLine(saved)
             }
+            sources
+            Text(engineNote)
+                .font(tiktok(11.5))
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
             recent
             Spacer(minLength: 0)
         }
@@ -139,7 +123,6 @@ private struct MeetingPaneBody: View {
                 .font(tiktok(10.5, "Medium"))
                 .kerning(0.8)
                 .foregroundStyle(.white.opacity(0.78))
-                .padding(.leading, 2)
             if meetings.meetings.isEmpty {
                 Text("No meetings yet.")
                     .font(tiktok(12.5))
@@ -162,67 +145,24 @@ private struct MeetingPaneBody: View {
     private var recording: some View {
         VStack(alignment: .leading, spacing: 10) {
             liveSources
-            if model.recording {
-                dictating
-            }
-            if let message = notice {
-                Text(message)
-                    .font(tiktok(11.5))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            LiveTranscriptView(live: live, status: live.status, following: $followTail)
+            LiveTranscriptView(live: live, status: live.status, note: notice, following: $followTail)
         }
     }
 
     private var liveSources: some View {
         HStack(spacing: 8) {
-            Image(systemName: "mic").font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+            Text("You").font(tiktok(11.5, "Medium")).foregroundStyle(.white.opacity(0.85))
             LevelMeter(level: coordinator.micAvailable ? Double(coordinator.micLevel) : 0,
                        active: coordinator.micAvailable && mode == .live)
-                .frame(width: 40, height: 14)
-            Text("You").font(tiktok(11.5, "Medium")).foregroundStyle(.white.opacity(0.85))
-            Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 14).padding(.horizontal, 2)
-            Image(systemName: "speaker.wave.2").font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: 36, height: 12)
+            Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 12).padding(.horizontal, 4)
+            OtherName(live: live)
             LevelMeter(level: coordinator.systemAvailable ? Double(coordinator.systemLevel) : 0,
                        active: coordinator.systemAvailable && mode == .live)
-                .frame(width: 40, height: 14)
-            TextField(otherSideLabel, text: Bindable(live).otherName)
-                .textFieldStyle(.plain)
-                .font(tiktok(11.5, "Medium"))
-                .foregroundStyle(accent)
-                .frame(width: 72)
+                .frame(width: 36, height: 12)
             Spacer(minLength: 4)
-            Text(EngineFactory.name(for: model.settings.meetingEngine))
-                .font(tiktok(11))
-                .foregroundStyle(.white.opacity(0.78))
         }
         .frame(height: 22)
-    }
-
-    private var dictating: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "mic.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(accent)
-            Text(model.destination.map { "Dictating into \($0). Kept in the meeting." } ?? "Dictating. Kept in the meeting.")
-                .font(tiktok(11.5, "Medium"))
-                .foregroundStyle(.white.opacity(0.88))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(accent.opacity(0.16))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(accent.opacity(0.3))))
-        .transition(.opacity)
-    }
-
-    private var finishing: some View {
-        VStack(spacing: 10) {
-            Spinner().frame(width: 16, height: 16)
-            Text("Finishing").font(tiktok(13)).foregroundStyle(.white.opacity(0.85))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var engineNote: String {
@@ -234,6 +174,7 @@ private struct MeetingPaneBody: View {
 
     private var notice: String? {
         if let error = meetings.lastError { return error }
+        if saving { return "Saving the last meeting." }
         let message = coordinator.statusMessage
         return message.isEmpty ? nil : message
     }
@@ -244,11 +185,21 @@ private struct MeetingPaneBody: View {
     }
 
     private func savedLine(_ meeting: Meeting) -> some View {
-        HStack(spacing: 10) {
-            Text(meeting.state == .running ? "Saved. Transcribing." : "Saved.")
-                .font(tiktok(12.5))
-                .foregroundStyle(.white.opacity(0.85))
-            Spacer(minLength: 0)
+        HStack(spacing: 8) {
+            Text("Saved").font(tiktok(12.5)).foregroundStyle(.white.opacity(0.75))
+            Text(meeting.title)
+                .font(tiktok(12.5, "Medium"))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let progress = meetings.progress[meeting.id] {
+                Text("\(Int(progress * 100))%")
+                    .font(tiktok(11))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.75))
+            } else if meeting.state == .running {
+                Text("Transcribing").font(tiktok(11)).foregroundStyle(.white.opacity(0.75))
+            }
             Button("Open") { model.openMeetings(meeting.id) }.buttonStyle(GlassButton())
         }
         .padding(.horizontal, 11)
@@ -266,58 +217,31 @@ private struct MeetingPaneBody: View {
     }
 }
 
-struct MeetingRecordButton: View {
-    let recording: Bool
-    let busy: Bool
-    let action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle().fill(accent.opacity(recording ? 0.22 : hovering ? 0.14 : 0.08))
-                    .overlay(Circle().strokeBorder(accent.opacity(recording ? 0.42 : 0.22)))
-                    .padding(1)
-                if busy {
-                    Spinner().frame(width: 13, height: 13)
-                } else {
-                    RoundedRectangle(cornerRadius: recording ? 2.5 : 6, style: .continuous)
-                        .fill(accent)
-                        .frame(width: recording ? 11 : 12, height: recording ? 11 : 12)
-                        .shadow(color: accent.opacity(recording ? 0.9 : 0.5), radius: recording ? 6 : 4)
-                }
-            }
-            .frame(width: 32, height: 32)
-            .contentShape(Circle())
-        }
-        .buttonStyle(Pressable())
-        .opacity(isEnabled ? 1 : 0.38)
-        .onHover { hovering = $0 }
-        .tip(recording ? "Stop meeting" : "Record meeting")
-        .animation(.spring(response: 0.3, dampingFraction: 0.65), value: recording)
-        .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-}
-
 struct LiveTranscriptView: View {
     let live: LiveTranscriptModel
     let status: LiveTranscriptModel.Status
+    let note: String?
     @Binding var following: Bool
 
     private static let tail = "tail"
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        VStack(alignment: .leading, spacing: 8) {
+            if let line = statusNote {
+                Text(line)
+                    .font(tiktok(11.5))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        if live.transcript.paragraphs.isEmpty {
+                        if live.transcript.paragraphs.isEmpty && statusNote == nil {
                             empty
                         }
                         ForEach(live.transcript.paragraphs) { paragraph in
                             LiveParagraph(name: paragraph.kind == .mic ? "You" : (live.namedOther ?? otherSideLabel),
-                                          tint: paragraph.kind == .mic ? .white.opacity(0.82) : accent,
                                           text: paragraph.text, pending: paragraph.pending)
                         }
                         Color.clear.frame(height: 1).id(Self.tail)
@@ -351,10 +275,11 @@ struct LiveTranscriptView: View {
                             following = true
                             withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo(Self.tail, anchor: .bottom) }
                         } label: {
-                            HStack(spacing: 6) {
-                                Circle().fill(accent).frame(width: 6, height: 6)
-                                Text("Live").font(tiktok(11.5, "Medium")).foregroundStyle(.white.opacity(0.95))
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.down").font(.system(size: 9, weight: .semibold))
+                                Text("Live").font(tiktok(11.5, "Medium"))
                             }
+                            .foregroundStyle(.white.opacity(0.92))
                             .padding(.horizontal, 10)
                             .frame(height: 24)
                             .background(Capsule().fill(Color(white: 0.16).opacity(0.92))
@@ -375,29 +300,34 @@ struct LiveTranscriptView: View {
         .animation(.easeOut(duration: 0.2), value: following)
     }
 
+    private var statusNote: String? {
+        switch status {
+        case .preparing(let message): message
+        case .unavailable(let message): "\(message) The meeting is still being recorded."
+        default: note
+        }
+    }
+
     private var empty: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(emptyTitle).font(tiktok(13, "Medium")).foregroundStyle(.white.opacity(0.92))
             Text(emptyDetail)
                 .font(tiktok(12.5))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var emptyTitle: String {
         switch status {
-        case .unavailable: "No live transcript"
-        case .preparing: "Starting"
+        case .finishing, .ended: "Nothing was said"
         default: "Listening"
         }
     }
 
     private var emptyDetail: String {
         switch status {
-        case .preparing(let message): message
-        case .unavailable(let message): "\(message) The meeting is still being recorded."
-        case .finishing, .ended: "Nothing was said."
+        case .finishing, .ended: "The recording is still saved."
         default: "What you and \(live.namedOther ?? otherSideLabel) say appears here."
         }
     }
@@ -405,7 +335,6 @@ struct LiveTranscriptView: View {
 
 private struct LiveParagraph: View {
     let name: String
-    let tint: Color
     let text: String
     let pending: String
 
@@ -414,7 +343,7 @@ private struct LiveParagraph: View {
             Text(name)
                 .font(tiktok(10.5, "Medium"))
                 .kerning(0.5)
-                .foregroundStyle(tint)
+                .foregroundStyle(.white.opacity(0.6))
             line
                 .font(tiktok(13))
                 .lineSpacing(4)
@@ -428,8 +357,33 @@ private struct LiveParagraph: View {
     private var line: Text {
         let settled = Text(text).foregroundColor(.white.opacity(0.92))
         let gap = text.isEmpty || pending.isEmpty ? "" : " "
-        let tail = Text(gap + pending).foregroundColor(.white.opacity(0.62))
+        let tail = Text(gap + pending).foregroundColor(.white.opacity(0.6))
         return Text("\(settled)\(tail)")
+    }
+}
+
+private struct OtherName: View {
+    @Bindable var live: LiveTranscriptModel
+    @State private var hovering = false
+
+    var body: some View {
+        Text(live.namedOther ?? otherSideLabel)
+            .font(tiktok(11.5, "Medium"))
+            .lineLimit(1)
+            .hidden()
+            .overlay {
+                TextField(otherSideLabel, text: $live.otherName)
+                    .textFieldStyle(.plain)
+                    .font(tiktok(11.5, "Medium"))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(hovering ? 0.08 : 0)))
+            .padding(.horizontal, -5)
+            .onHover { hovering = $0 }
+            .tip("Rename")
+            .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 
