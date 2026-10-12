@@ -351,8 +351,9 @@ final class NotesTextView: NSTextView {
     }
 
     override func resetCursorRects() {
-        guard isActive else { return }
-        addCursorRect(textArea, cursor: .iBeam)
+        let area = textArea
+        guard isActive, !area.isNull, !area.isEmpty else { return }
+        addCursorRect(area, cursor: .iBeam)
     }
 
     private func pointer(at event: NSEvent) {
