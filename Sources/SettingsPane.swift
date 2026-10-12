@@ -1,3 +1,4 @@
+@preconcurrency import MeetingKit
 import SwiftUI
 
 extension ContainerValues {
@@ -15,6 +16,7 @@ struct SettingsPane: View {
                 VStack(alignment: .leading, spacing: 14) {
                     speech
                     cleanup(proxy)
+                    meetings
                     typing
                     hotkeys
                     chatApps
@@ -140,6 +142,72 @@ struct SettingsPane: View {
             .animation(.easeOut(duration: 0.2), value: model.settings.cleanupCorrections)
             .animation(.easeOut(duration: 0.2), value: model.settings.cleanupFailure)
         }
+    }
+
+    @ViewBuilder
+    private var meetings: some View {
+        let engine = EngineFactory.options.first { $0.id == model.settings.meetingEngine }
+        let engineKey = engine?.key.flatMap { ApiKey.named($0) }
+        let summaryKey = ApiKey.named(model.settings.summaryKey)
+        Section("Meetings") {
+            Row("Engine", detail: engine?.local == true ? "Runs on this Mac" : nil) {
+                GlassMenu(selection: $model.settings.meetingEngine,
+                          options: EngineFactory.options.map { ($0.id, $0.name) })
+                    .frame(width: 190)
+            }
+            if let engineKey {
+                Row("\(engineKey.name) key", detail: keyDetail(engineKey), alert: !held(engineKey), inset: 14) {
+                    KeyControl(key: engineKey, editing: $editingKey)
+                }
+                .transition(.opacity)
+            }
+            Row("Language") {
+                GlassMenu(selection: $model.settings.meetingLanguage, options: Settings.meetingLanguages).frame(width: 150)
+            }
+            Break().containerValue(\.sectionBreak, true)
+            Row("Microphone") {
+                GlassSwitch(isOn: $model.settings.meetingMic)
+            }
+            if model.settings.meetingMic {
+                Row("Input", inset: 14) {
+                    GlassMenu(selection: microphoneChoice, options: microphoneOptions).frame(width: 190)
+                }
+                .transition(.opacity)
+            }
+            Row("System audio", detail: "Records the other side") {
+                GlassSwitch(isOn: $model.settings.meetingSystem)
+            }
+            Break().containerValue(\.sectionBreak, true)
+            Row("Summaries") {
+                Segments(selection: $model.settings.summaryProvider,
+                         options: Settings.summaryProviders.map { ($0.id, $0.name) })
+            }
+            Row("Model", inset: 14) {
+                GlassMenu(selection: $model.settings.summaryModel,
+                          options: model.settings.summaryModels(on: model.settings.summaryProvider)).frame(width: 190)
+            }
+            if let summaryKey {
+                Row("\(summaryKey.name) key", detail: keyDetail(summaryKey), alert: !held(summaryKey), inset: 14) {
+                    KeyControl(key: summaryKey, editing: $editingKey)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.settings.meetingMic)
+        .animation(.easeOut(duration: 0.2), value: model.settings.meetingEngine)
+        .animation(.easeOut(duration: 0.2), value: model.settings.summaryProvider)
+    }
+
+    private func held(_ key: ApiKey) -> Bool { Setup.shared.keys[key.id] == true }
+
+    private func keyDetail(_ key: ApiKey) -> String? { held(key) ? "In the keychain" : "Needed" }
+
+    private var microphoneChoice: Binding<String> {
+        Binding(get: { model.settings.meetingMicrophone ?? "" },
+                set: { model.settings.meetingMicrophone = $0.isEmpty ? nil : $0 })
+    }
+
+    private var microphoneOptions: [(String, String)] {
+        [("", "System default")] + (model.meetings?.inputDevices ?? []).map { ($0.uid, $0.name) }
     }
 
     private var typing: some View {
@@ -333,7 +401,6 @@ struct SettingsPane: View {
 private struct SetupSection: View {
     @Binding var editing: String?
     private let setup = Setup.shared
-    @State private var typed = ""
 
     var body: some View {
         Section("Setup") {
@@ -353,28 +420,16 @@ private struct SetupSection: View {
                     Button("Allow", action: setup.askForAccessibility).buttonStyle(GlassButton())
                 }
             }
+            Row("System audio", detail: setup.systemAudio ? nil : "Lets meetings record the other side.") {
+                if setup.systemAudio {
+                    Figure("Granted")
+                } else {
+                    Button("Allow", action: setup.askForSystemAudio).buttonStyle(GlassButton())
+                }
+            }
             ForEach(ApiKey.all) { key in
                 Row("\(key.name) key", detail: setup.keys[key.id] == true ? "In the keychain" : nil) {
-                    if editing == key.id {
-                        HStack(spacing: 6) {
-                            SecureField(key.site, text: $typed)
-                                .textFieldStyle(.plain)
-                                .font(tiktok(12))
-                                .padding(.horizontal, 9)
-                                .frame(width: 150, height: 24)
-                                .background(Pill(fill: 0.08))
-                                .onSubmit { store(key) }
-                            Button("Save") { store(key) }.buttonStyle(GlassButton())
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            Button(setup.keys[key.id] == true ? "Change" : "Set") { typed = ""; editing = key.id }
-                                .buttonStyle(GlassButton())
-                            if setup.keys[key.id] == true {
-                                Button("Remove") { setup.store(nil, for: key) }.buttonStyle(GlassButton())
-                            }
-                        }
-                    }
+                    KeyControl(key: key, editing: $editing)
                 }
                 .id(key.id)
             }
@@ -397,8 +452,39 @@ private struct SetupSection: View {
         case .notAsked: "Not requested yet."
         }
     }
+}
 
-    private func store(_ key: ApiKey) {
+@MainActor
+private struct KeyControl: View {
+    let key: ApiKey
+    @Binding var editing: String?
+    private let setup = Setup.shared
+    @State private var typed = ""
+
+    var body: some View {
+        if editing == key.id {
+            HStack(spacing: 6) {
+                SecureField(key.site, text: $typed)
+                    .textFieldStyle(.plain)
+                    .font(tiktok(12))
+                    .padding(.horizontal, 9)
+                    .frame(width: 150, height: 24)
+                    .background(Pill(fill: 0.08))
+                    .onSubmit(store)
+                Button("Save", action: store).buttonStyle(GlassButton())
+            }
+        } else {
+            HStack(spacing: 6) {
+                Button(setup.keys[key.id] == true ? "Change" : "Set") { typed = ""; editing = key.id }
+                    .buttonStyle(GlassButton())
+                if setup.keys[key.id] == true {
+                    Button("Remove") { setup.store(nil, for: key) }.buttonStyle(GlassButton())
+                }
+            }
+        }
+    }
+
+    private func store() {
         setup.store(typed, for: key)
         typed = ""
         editing = nil
@@ -742,8 +828,8 @@ private struct HotkeyRow: View {
                     .buttonStyle(Keycap(capturing: capturing))
                     .fixedSize()
                     .tip("Click, then press a key")
-                    InlineMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames)
-                    InlineMenu(selection: $hotkey.action, options: Hotkey.actionNames)
+                    InlineMenu(selection: $hotkey.gesture, options: Hotkey.gestureNames(for: hotkey.action))
+                    InlineMenu(selection: action, options: Hotkey.actionNames)
                 }
                 .opacity(hotkey.enabled ? 1 : 0.45)
                 Spacer(minLength: 0)
@@ -772,6 +858,14 @@ private struct HotkeyRow: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.2), value: conflict || waits)
         .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    private var action: Binding<Hotkey.Action> {
+        Binding(get: { hotkey.action },
+                set: { wanted in
+                    hotkey.action = wanted
+                    if wanted == .meeting, hotkey.gesture == .hold { hotkey.gesture = .press }
+                })
     }
 
     private func note(_ text: String, color: Color) -> some View {

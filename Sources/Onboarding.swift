@@ -87,8 +87,8 @@ private struct OnboardingView: View {
                     Button("Allow", action: setup.askForAccessibility).buttonStyle(PanelButton(prominent: true))
                 }
             }
-            Step(title: "AI cleanup", detail: keysDetail, done: setup.keys.values.contains(true), optional: true) {
-                if !setup.keys.values.contains(true) {
+            Step(title: "AI cleanup", detail: keysDetail, done: hasCleanupKey, optional: true) {
+                if !hasCleanupKey {
                     Button(keysLater ? "Set up now" : "Set up later") {
                         withAnimation(.easeOut(duration: 0.2)) { keysLater.toggle() }
                     }
@@ -97,7 +97,7 @@ private struct OnboardingView: View {
             }
             if !keysLater {
                 VStack(spacing: 0) {
-                    ForEach(ApiKey.all) { key in
+                    ForEach(ApiKey.cleanup) { key in
                         KeyRow(key: key, stored: setup.keys[key.id] == true,
                                editing: Binding(get: { editing == key.id },
                                                 set: { editing = $0 ? key.id : nil }),
@@ -106,6 +106,11 @@ private struct OnboardingView: View {
                 }
                 .padding(.leading, 26)
                 .transition(.opacity)
+            }
+            Step(title: "System audio", detail: systemAudioDetail, done: setup.systemAudio, optional: true) {
+                if !setup.systemAudio {
+                    Button("Allow", action: setup.askForSystemAudio).buttonStyle(PanelButton(prominent: false))
+                }
             }
             Step(title: "Open at login", detail: setup.isBundled ? "Open Iridium Live when you log in."
                                                                  : "Needs the app in /Applications.",
@@ -142,10 +147,16 @@ private struct OnboardingView: View {
     }
 
     private var keysDetail: String {
-        let held = ApiKey.all.filter { setup.keys[$0.id] == true }.map(\.name)
+        let held = ApiKey.cleanup.filter { setup.keys[$0.id] == true }.map(\.name)
         if !held.isEmpty { return "\(held.joined(separator: " and ")) ready." }
         return keysLater ? "Add keys later in Settings, Setup."
                          : "A Groq or OpenRouter key turns on AI cleanup."
+    }
+
+    private var hasCleanupKey: Bool { ApiKey.cleanup.contains { setup.keys[$0.id] == true } }
+
+    private var systemAudioDetail: String {
+        setup.systemAudio ? "Granted." : "Lets meetings record the other side."
     }
 }
 

@@ -20,12 +20,24 @@ struct ControlBar: View {
             IconToggle(symbol: "note.text", isOn: model.notesCapturing, tip: model.notesCapturing ? "Stop notes" : "Notes",
                        action: model.toggleNotes)
                 .padding(.leading, 2)
+            MeetingToggle(model: model)
+                .padding(.leading, 2)
             IconToggle(symbol: "clock.arrow.circlepath", isOn: model.pane == .history, tip: "History", action: model.toggleHistory)
                 .padding(.leading, 2)
             IconToggle(symbol: "gearshape", isOn: model.pane == .settings, tip: "Settings", action: model.toggleSettings)
                 .padding(.leading, 2)
         }
         .frame(width: AppModel.barSize.width, height: AppModel.barSize.height, alignment: .leading)
+    }
+}
+
+struct MeetingToggle: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let live = model.meetingRecording
+        IconToggle(symbol: "person.2.wave.2", isOn: live || model.pane == .meeting, tint: live ? accent : nil,
+                   tip: "Meeting", action: model.toggleMeeting)
     }
 }
 

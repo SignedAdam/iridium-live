@@ -1,7 +1,7 @@
 import AppKit
 
 struct Hotkey: Codable, Equatable, Identifiable {
-    enum Action: String, Codable, CaseIterable { case insert, note }
+    enum Action: String, Codable, CaseIterable { case insert, note, meeting }
     enum Gesture: String, Codable, CaseIterable { case hold, doubleTap, press }
 
     struct Key: Hashable {
@@ -35,8 +35,12 @@ struct Hotkey: Codable, Equatable, Identifiable {
         return symbols + (symbols.isEmpty ? "" : " ") + keyName
     }
 
-    static let actionNames: [(Action, String)] = [(.insert, "Type it"), (.note, "Add to notes")]
+    static let actionNames: [(Action, String)] = [(.insert, "Type it"), (.note, "Add to notes"), (.meeting, "Record meeting")]
     static let gestureNames: [(Gesture, String)] = [(.hold, "Hold"), (.doubleTap, "Double-tap"), (.press, "Toggle")]
+
+    static func gestureNames(for action: Action) -> [(Gesture, String)] {
+        action == .meeting ? gestureNames.filter { $0.0 != .hold } : gestureNames
+    }
 
     static func conflicting(in hotkeys: [Hotkey]) -> Set<UUID> {
         var taken: [Key: Set<Gesture>] = [:]
@@ -101,6 +105,7 @@ final class HotkeyMonitor {
 
     var hotkeys: [Hotkey] = []
     var onStart: (Hotkey.Action) -> Void = { _ in }
+    var onMeeting: () -> Void = {}
     var onStop: () -> Void = {}
     var onCancel: () -> Void = {}
     var isRecording: () -> Bool = { false }
@@ -189,7 +194,11 @@ final class HotkeyMonitor {
 
     private func bindings(for key: Hotkey.Key) -> [Hotkey] {
         let losers = Hotkey.conflicting(in: hotkeys)
-        return hotkeys.filter { $0.enabled && $0.key == key && !losers.contains($0.id) }
+        return hotkeys.filter { $0.enabled && $0.key == key && !losers.contains($0.id) }.map { hotkey in
+            var wanted = hotkey
+            if wanted.action == .meeting, wanted.gesture == .hold { wanted.gesture = .press }
+            return wanted
+        }
     }
 
     private func keyDown(_ key: Hotkey.Key) {
@@ -206,7 +215,11 @@ final class HotkeyMonitor {
            pending.key == key, Date().timeIntervalSince(pending.at) < Self.doubleTapWindow {
             pendingTap = nil
             down?.acted = true
-            isRecording() ? stop() : start(double, provisional: false, latched: true)
+            if double.action == .meeting {
+                onMeeting()
+            } else {
+                isRecording() ? stop() : start(double, provisional: false, latched: true)
+            }
             return
         }
         if let hold = bindings.first(where: { $0.gesture == .hold }) {
@@ -237,7 +250,7 @@ final class HotkeyMonitor {
     private func tapped(_ key: Hotkey.Key, _ bindings: [Hotkey]) {
         let press = bindings.first { $0.gesture == .press }
         guard bindings.contains(where: { $0.gesture == .doubleTap }) else {
-            if let press { toggle(press) }
+            if let press { fire(press) }
             return
         }
         let at = Date()
@@ -246,7 +259,7 @@ final class HotkeyMonitor {
             MainActor.assumeIsolated {
                 guard let self, self.pendingTap?.at == at else { return }
                 self.pendingTap = nil
-                if let press { self.toggle(press) }
+                if let press { self.fire(press) }
             }
         }
     }
@@ -261,7 +274,8 @@ final class HotkeyMonitor {
         }
     }
 
-    private func toggle(_ hotkey: Hotkey) {
+    private func fire(_ hotkey: Hotkey) {
+        if hotkey.action == .meeting { return onMeeting() }
         isRecording() ? stop() : start(hotkey, provisional: false, latched: false)
     }
 

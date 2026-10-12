@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+@preconcurrency import MeetingKit
 import Observation
 
 struct ModelStatus: Equatable {
@@ -16,18 +17,21 @@ struct ScrollMetrics: Equatable {
 
 @MainActor @Observable
 final class AppModel {
-    enum Pane: Int { case notes, history, settings }
+    enum Pane: Int { case notes, meeting, history, settings }
 
-    static let barSize = CGSize(width: 336, height: 56)
+    static let barSize = CGSize(width: 370, height: 56)
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
+    static let meetingHeight: CGFloat = 440
     static let libraryHeight: CGFloat = 340
     static let notesHeader: CGFloat = 34
     static let lineHeight: CGFloat = 14
     static let lineSpacing: CGFloat = 17
     static let seam: CGFloat = 1
-    static let maxGlassSize = CGSize(width: paneWidth, height: barSize.height + seam + settingsHeight + lineHeight + lineSpacing)
+    static let maxGlassSize = CGSize(width: paneWidth,
+                                     height: barSize.height + seam + max(settingsHeight, meetingHeight)
+                                         + lineHeight + lineSpacing)
 
     var recording = false
     var recordingSince = Date()
@@ -128,6 +132,32 @@ final class AppModel {
     var onShowBenchmarks: () -> Void = {}
     var chatApps: ChatApps?
     var onEditChatApps: () -> Void = {}
+    var meetings: MeetingsModel!
+    var onOpenMeetings: (UUID?) -> Void = { _ in }
+
+    var meetingRecording: Bool { meetings?.isRecording == true }
+
+    func toggleMeeting() {
+        toggle(.meeting)
+    }
+
+    func toggleMeetingRecording() {
+        guard let meetings else { return }
+        if !meetings.isRecording, pane != .meeting { go(to: .meeting) }
+        meetings.toggleRecording()
+    }
+
+    func openMeetings(_ id: UUID? = nil) {
+        onOpenMeetings(id)
+    }
+
+    func quit() {
+        guard let meetings, meetings.isRecording else { return NSApp.terminate(nil) }
+        Task {
+            await meetings.stopRecording()
+            NSApp.terminate(nil)
+        }
+    }
 
     var idleUnloadMinutes: Int? { settings.autoUnload && !recording ? settings.autoUnloadMinutes : nil }
     var onOpenRecordings: () -> Void = {}
@@ -139,6 +169,7 @@ final class AppModel {
     var paneHeight: CGFloat {
         switch pane {
         case .notes: (notesView == .library ? Self.libraryHeight : notesHeight + Self.notesHeader) + Self.seam
+        case .meeting: Self.meetingHeight + Self.seam
         case .history: Self.historyHeight + Self.seam
         case .settings: Self.settingsHeight + Self.seam
         case nil: 0

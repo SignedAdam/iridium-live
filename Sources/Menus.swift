@@ -410,11 +410,15 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
         .separator(),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: { model.toggleNotes() }),
         MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: { model.showMyNotes() }),
+        MenuItem(id: "meeting", title: model.meetingRecording ? "Stop meeting" : "Record meeting",
+                 symbol: model.meetingRecording ? "stop.circle" : "person.2.wave.2",
+                 action: { model.toggleMeetingRecording() }),
+        MenuItem(id: "meetings", title: "Meetings", symbol: "rectangle.stack", action: { model.openMeetings() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: { model.toggleSettings() }),
         .separator(),
         MenuItem(id: "hide", title: "Hide control", symbol: "eye.slash", action: { model.hideControl() }),
-        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { NSApp.terminate(nil) }),
+        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { model.quit() }),
     ]
 }
 
@@ -426,18 +430,22 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
         MenuItem(id: "record", title: model.recording ? "Stop recording" : "Start recording",
                  symbol: model.recording ? "stop.circle" : "record.circle", enabled: model.ready || model.recording,
                  action: { model.toggleRecording() }),
+        MenuItem(id: "meeting", title: model.meetingRecording ? "Stop meeting" : "Record meeting",
+                 symbol: model.meetingRecording ? "stop.circle" : "person.2.wave.2",
+                 action: shown { model.toggleMeetingRecording() }),
         .separator(),
         MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
                  action: { hidden ? model.showControl() : model.hideControl() }),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: shown { model.toggleNotes() }),
         MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: shown { model.showMyNotes() }),
+        MenuItem(id: "meetings", title: "Meetings", symbol: "rectangle.stack", action: { model.openMeetings() }),
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: shown { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: shown { model.toggleSettings() }),
         .separator(),
         MenuItem(id: "unload", title: "Unload models", symbol: "eject", enabled: model.speech.state != "unloaded",
                  action: { model.onUnload() }),
         .separator(),
-        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { NSApp.terminate(nil) }),
+        MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { model.quit() }),
     ]
 }
 

@@ -58,6 +58,7 @@ struct IconToggle: View {
     let symbol: String
     let isOn: Bool
     var badge = false
+    var tint: Color? = nil
     let tip: String
     let action: () -> Void
     @State private var hovering = false
@@ -66,11 +67,11 @@ struct IconToggle: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(isOn ? 1 : hovering ? 0.9 : 0.72))
+                .foregroundStyle(tint ?? .white.opacity(isOn ? 1 : hovering ? 0.9 : 0.72))
                 .frame(width: 32, height: 32)
                 .background {
-                    Circle().fill(.white.opacity(isOn ? 0.2 : hovering ? 0.08 : 0))
-                        .overlay(Circle().strokeBorder(.white.opacity(isOn ? 0.3 : 0)))
+                    Circle().fill((tint ?? .white).opacity(isOn ? 0.2 : hovering ? 0.08 : 0))
+                        .overlay(Circle().strokeBorder((tint ?? .white).opacity(isOn ? 0.3 : 0)))
                         .padding(1)
                 }
                 .overlay(alignment: .topTrailing) {

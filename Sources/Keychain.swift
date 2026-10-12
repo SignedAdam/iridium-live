@@ -68,6 +68,18 @@ struct ApiKey: Identifiable, Sendable {
     static let groq = ApiKey(id: "groq", name: "Groq", variable: "GROQ_API_KEY", site: "console.groq.com/keys")
     static let openRouter = ApiKey(id: "openrouter", name: "OpenRouter", variable: "OPENROUTER_API_KEY",
                                    site: "openrouter.ai/keys")
-    static let all = [groq, openRouter]
+    static let elevenLabs = ApiKey(id: "elevenlabs", name: "ElevenLabs", variable: "ELEVENLABS_API_KEY",
+                                   site: "elevenlabs.io/app/settings/api-keys")
+    static let assemblyAI = ApiKey(id: "assemblyai", name: "AssemblyAI", variable: "ASSEMBLYAI_API_KEY",
+                                   site: "assemblyai.com/app/api-keys")
+    static let deepgram = ApiKey(id: "deepgram", name: "Deepgram", variable: "DEEPGRAM_API_KEY",
+                                 site: "console.deepgram.com")
+    static let anthropic = ApiKey(id: "anthropic", name: "Anthropic", variable: "ANTHROPIC_API_KEY",
+                                  site: "console.anthropic.com/settings/keys")
+    static let cleanup = [groq, openRouter]
+    static let meeting = [elevenLabs, assemblyAI, deepgram, anthropic]
+    static let all = cleanup + meeting
+
+    static func named(_ id: String) -> ApiKey? { all.first { $0.id == id } }
 }
 

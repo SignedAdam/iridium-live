@@ -23,7 +23,7 @@ final class StatusItem: NSObject {
     }
 
     private func follow() {
-        withObservationTracking { draw(recording: model.recording) } onChange: { [weak self] in
+        withObservationTracking { draw(recording: model.recording || model.meetingRecording) } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.follow() } }
         }
     }

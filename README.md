@@ -33,6 +33,19 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 
 ![History with timing details, and the AI cleanup settings](docs/panes.png)
 
+## Meetings
+
+Record a meeting with your microphone and the other side of the call, with a live transcript while it runs and a
+full transcript with speakers afterwards. The meeting button is in the bar; the menu bar icon turns red while a
+meeting records. Speakers can be renamed and merged, lines can be edited and played back, and a meeting can be
+exported as Markdown, SRT, VTT or text.
+
+Engines: Apple on this Mac (default), Parakeet on this Mac, or ElevenLabs, AssemblyAI and Deepgram with a key. The
+live transcript uses Apple on device speech. Summaries, action items and chat use OpenRouter or Anthropic.
+
+Meetings live in `~/Library/Application Support/Iridium Live/Meetings`, one folder per meeting with its audio,
+transcript and summary. Meetings from the old Iridium app are copied in once, after first launch.
+
 ## Numbers
 
 M1 Max, 32 GB.
@@ -82,6 +95,7 @@ keychain. The speech model (about 1 GB) downloads on first use.
 | `history.jsonl` | history with timing |
 | `usage.jsonl` | AI model calls: tokens, cost, time |
 | `Recordings/` | saved audio; `Failed/` holds audio whose cleanup failed |
+| `Meetings/` | one folder per meeting: audio, transcript, summary |
 | `chat-apps.json` | chat app settings |
 
 Engine log: `~/Library/Logs/Iridium Live/engine.log`
@@ -98,6 +112,7 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
 | `archive.py` | saves audio |
 | `downloads.py` | downloads the speech model |
 | `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |
+| `Packages/MeetingKit` | Swift package: meeting recording, transcription, summaries |
 
 ## Credits
 
@@ -108,3 +123,5 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
 - [TikTok Sans](https://github.com/tiktok/TikTokSans) (SIL Open Font License, in `fonts/`)
 - [LobeHub icons](https://github.com/lobehub/lobe-icons) (MIT, in `Packages/ModelCatalog/Brands/`): model maker and
   provider logos
+- [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache 2.0): speaker detection and Parakeet for
+  meetings

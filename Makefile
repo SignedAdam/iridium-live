@@ -7,12 +7,22 @@ FONT := fonts/TikTokSans.ttf
 BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
 CERT := Iridium Live Dev
 
+MKDIR := Packages/MeetingKit
+MKSOURCES := $(wildcard $(MKDIR)/Sources/MeetingKit/*/*.swift) $(MKDIR)/Package.swift
+MKLIB := $(MKDIR)/.build/release/libMeetingKit.a
+MKFLAGS := -I $(MKDIR)/.build/release/Modules \
+  -Xcc -fmodule-map-file=$(MKDIR)/.build/checkouts/FluidAudio/Sources/FastClusterWrapper/include/module.modulemap \
+  -Xcc -fmodule-map-file=$(MKDIR)/.build/checkouts/FluidAudio/Sources/MachTaskSelfWrapper/include/module.modulemap \
+  -L $(MKDIR)/.build/release -lMeetingKit -lc++
+
 FOUND := $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(.*\)".*/\1/p' | grep -x "$(CERT)" | sed -n 1p)
 SIGN := $(if $(FOUND),$(FOUND),-)
 
-$(STAMP): $(SOURCES) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS)
+app: $(STAMP)
+
+$(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS)
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
-	swiftc -O -swift-version 6 $(SOURCES) -o "$(BINARY)"
+	swiftc -O -swift-version 6 $(SOURCES) $(MKFLAGS) -o "$(BINARY)"
 	@cp Resources/Info.plist "$(APP)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@cp Resources/AppIcon.icns $(ENGINE) $(FONT) "$(APP)/Contents/Resources/"
@@ -21,7 +31,10 @@ $(STAMP): $(SOURCES) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FON
 	@codesign --force --sign "$(SIGN)" --identifier com.albastov.iridium-live "$(APP)"
 	@touch $@
 
-.PHONY: run check install icon cert clean
+$(MKLIB): $(MKSOURCES)
+	swift build -c release --package-path $(MKDIR) --product MeetingKit
+
+.PHONY: app run check install icon cert clean
 
 run: $(STAMP)
 	"$(BINARY)" $(if $(WAV),--wav "$(WAV)")

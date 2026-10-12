@@ -28,8 +28,12 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Iridium Live records the other side of your meetings.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Iridium Live listens while you dictate, and transcribes your speech on this Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Iridium Live transcribes your meetings on this Mac.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>

@@ -58,12 +58,28 @@ struct Settings: Codable, Equatable {
     var autoUnload = false
     var autoUnloadMinutes = 30
     var controlHidden = false
+    var meetingEngine = "apple.speechanalyzer"
+    var meetingLanguage = "en-US"
+    var meetingMic = true
+    var meetingSystem = true
+    var meetingMicrophone: String?
+    var summaryProvider = "openrouter"
+    var summaryModels: [String: String] = [:]
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", []),
+    ]
+    static let meetingLanguages = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("sv-SE", "Swedish"),
+                                   ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"),
+                                   ("it-IT", "Italian"), ("nl-NL", "Dutch"), ("pt-BR", "Portuguese"),
+                                   ("da-DK", "Danish"), ("nb-NO", "Norwegian"), ("fi-FI", "Finnish"),
+                                   ("pl-PL", "Polish"), ("ja-JP", "Japanese"), ("zh-CN", "Chinese")]
+    static let summaryProviders: [(id: String, name: String, models: [(String, String)])] = [
+        ("openrouter", "OpenRouter", []),
+        ("anthropic", "Anthropic", [("claude-opus-4-8", "Claude Opus 4.8")]),
     ]
     static let captionFonts = ["TikTok Sans", "SF Pro", "SF Pro Rounded", "New York", "Menlo"]
     static let idleChoices = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 h"), (120, "2 h"), (360, "6 h")]
@@ -101,6 +117,26 @@ struct Settings: Codable, Equatable {
         }
         set { cleanupModels[cleanupProvider] = newValue }
     }
+
+    func summaryModels(on provider: String) -> [(String, String)] {
+        guard provider == "openrouter" else { return Self.summaryProviders.first { $0.id == provider }?.models ?? [] }
+        return savedModelsByRecency.map { ($0.id, $0.title) }
+    }
+
+    var summaryModel: String {
+        get {
+            let offered = summaryModels(on: summaryProvider)
+            if let picked = summaryModels[summaryProvider], offered.contains(where: { $0.0 == picked }) { return picked }
+            if summaryProvider == "openrouter" {
+                if let cleanup = cleanupModels["openrouter"], !cleanup.isEmpty { return cleanup }
+                return openRouterRecent.first ?? offered.first?.0 ?? ""
+            }
+            return offered.first?.0 ?? ""
+        }
+        set { summaryModels[summaryProvider] = newValue }
+    }
+
+    var summaryKey: String { summaryProvider == "anthropic" ? "anthropic" : "openrouter" }
 
     var savedModelsByRecency: [SavedModel] {
         let order = Dictionary(uniqueKeysWithValues: openRouterRecent.enumerated().map { ($1, $0) })
@@ -164,6 +200,14 @@ extension Settings {
         autoUnload = value(.autoUnload, fallback.autoUnload)
         autoUnloadMinutes = value(.autoUnloadMinutes, fallback.autoUnloadMinutes)
         controlHidden = value(.controlHidden, fallback.controlHidden)
+        meetingEngine = value(.meetingEngine, fallback.meetingEngine)
+        meetingLanguage = value(.meetingLanguage, fallback.meetingLanguage)
+        meetingMic = value(.meetingMic, fallback.meetingMic)
+        meetingSystem = value(.meetingSystem, fallback.meetingSystem)
+        meetingMicrophone = (try? saved.decodeIfPresent(String.self, forKey: .meetingMicrophone)) ?? nil
+        let summary = value(.summaryProvider, fallback.summaryProvider)
+        summaryProvider = Settings.summaryProviders.contains { $0.id == summary } ? summary : fallback.summaryProvider
+        summaryModels = value(.summaryModels, fallback.summaryModels)
     }
 }
 

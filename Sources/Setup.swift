@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import ApplicationServices
+@preconcurrency import MeetingKit
 import Observation
 import Security
 import ServiceManagement
@@ -15,6 +16,7 @@ final class Setup {
     private(set) var accessibility = false
     private(set) var keys: [String: Bool] = [:]
     private(set) var openAtLogin = false
+    private(set) var systemAudio = UserDefaults.standard.bool(forKey: "systemAudioAllowed")
     private(set) var trouble: String?
 
     private var timer: Timer?
@@ -79,6 +81,12 @@ final class Setup {
         AVCaptureDevice.requestAccess(for: .audio) { _ in
             Task { @MainActor in self.refresh() }
         }
+    }
+
+    func askForSystemAudio() {
+        systemAudio = SystemAudioRecorder.hasSystemAudioPermission()
+        UserDefaults.standard.set(systemAudio, forKey: "systemAudioAllowed")
+        trouble = systemAudio ? nil : "System audio is off. Turn on Iridium Live in System Settings, Privacy, Audio Recording."
     }
 
     func askForAccessibility() {

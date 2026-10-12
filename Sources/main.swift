@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import MeetingKit
 
 signal(SIGPIPE, SIG_IGN)
 MainActor.assumeIsolated {
@@ -22,6 +23,18 @@ MainActor.assumeIsolated {
     let history = HistoryStore(directory: support)
     let usage = UsageLog(directory: support)
     model.history = history.load()
+    let meetings = MeetingsModel(root: support.appendingPathComponent("Meetings")) {
+        MeetingConfig(engineID: model.settings.meetingEngine,
+                      languageHint: model.settings.meetingLanguage,
+                      recordMic: model.settings.meetingMic,
+                      recordSystem: model.settings.meetingSystem,
+                      microphoneUID: model.settings.meetingMicrophone,
+                      summaryProvider: model.settings.summaryProvider,
+                      summaryModel: model.settings.summaryModel,
+                      hasKey: { Keychain.shared.stored().contains($0) },
+                      key: { Keychain.shared.values()[$0] })
+    }
+    model.meetings = meetings
     let notes = NotesEditor(model: model, library: library)
     let captions = Captions(screen: screen, settings: model.settings)
     let typist = Typist(sink: KeyboardSink())
@@ -33,6 +46,20 @@ MainActor.assumeIsolated {
     let statusItem = StatusItem(model: model)
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
+    model.onOpenMeetings = { select in
+        MeetingsWindow.show(on: control.window.screen ?? screen, model: model, meetings: meetings, select: select)
+    }
+    let importedMeetings = "legacyMeetingsImported"
+    if !UserDefaults.standard.bool(forKey: importedMeetings) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            let old = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Iridium")
+            let count = meetings.importLegacy(from: old)
+            UserDefaults.standard.set(true, forKey: importedMeetings)
+            if count > 0 { model.show(notice: "Imported \(count) meetings") }
+        }
+    }
     if Setup.shared.needsOnboarding {
         OnboardingPanel.show(on: screen, tint: model.settings.glassTint, opacity: model.settings.controlOpacity)
     }
@@ -223,10 +250,12 @@ MainActor.assumeIsolated {
     hotkeys.hotkeys = model.settings.hotkeys
     hotkeys.isRecording = { model.recording }
     hotkeys.onStart = { action in
+        if action == .meeting { return model.toggleMeetingRecording() }
         model.startRecording(for: action)
         typist.isEnabled = model.typingNow
     }
     hotkeys.onStop = { model.stopRecording() }
+    hotkeys.onMeeting = { model.toggleMeetingRecording() }
     hotkeys.onCancel = {
         model.cancelRecording()
         typist.isEnabled = model.typingNow
