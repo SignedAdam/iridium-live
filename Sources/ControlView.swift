@@ -11,10 +11,11 @@ struct ControlView: View {
     var body: some View {
         let size = model.glassSize
         let down = model.opensDown
-        let barRegion = AppModel.barSize.height + model.linesHeight
+        let barRegion = AppModel.barSize.height + model.meetingStripHeight + model.linesHeight
         VStack(spacing: 0) {
             if down {
                 bar
+                strip
                 lines
                 seam
                 panes
@@ -22,6 +23,7 @@ struct ControlView: View {
                 panes
                 seam
                 lines
+                strip
                 bar
             }
         }
@@ -39,10 +41,18 @@ struct ControlView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.pane)
         .animation(.easeOut(duration: 0.22), value: model.notesHeight)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
+        .animation(.spring(response: 0.4, dampingFraction: 0.88), value: model.meetingStripShown)
     }
 
     private var bar: some View {
         ControlBar(model: model).onRightClick { barMenuItems(model) }
+    }
+
+    @ViewBuilder
+    private var strip: some View {
+        if model.meetingStripShown {
+            MeetingStrip(model: model).frame(height: AppModel.stripHeight)
+        }
     }
 
     private var panes: some View {

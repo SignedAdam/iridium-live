@@ -1,3 +1,4 @@
+@preconcurrency import MeetingKit
 import SwiftUI
 
 struct ControlBar: View {
@@ -38,6 +39,108 @@ struct MeetingToggle: View {
         let live = model.meetingRecording
         IconToggle(symbol: "person.2.wave.2", isOn: live || model.pane == .meeting, tint: live ? accent : nil,
                    tip: "Meeting", action: model.toggleMeeting)
+    }
+}
+
+struct MeetingStrip: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        if let meetings = model.meetings {
+            HStack(spacing: 8) {
+                StripDot()
+                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                    Text(formatTimecode(meetings.coordinator.elapsed,
+                                        includeHours: meetings.coordinator.elapsed >= 3600))
+                        .font(tiktok(12.5, "Medium"))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+                if model.meetingCaptionShown {
+                    HStack(spacing: 6) {
+                        Text(speaker(meetings))
+                            .font(tiktok(11, "Medium"))
+                            .foregroundStyle(speakerIsYou(meetings) ? .white.opacity(0.82) : accent)
+                            .fixedSize()
+                        Text(caption(meetings))
+                            .font(tiktok(12))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .transition(.opacity)
+                } else {
+                    Spacer(minLength: 4)
+                }
+                if model.recording {
+                    Image(systemName: "mic.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(accent)
+                        .tip("Dictating into this meeting too")
+                        .transition(.opacity)
+                }
+                StripButton(symbol: model.meetingCaptionShown ? "chevron.up" : "chevron.down",
+                            tip: model.meetingCaptionShown ? "Hide captions" : "Show captions") {
+                    model.meetingCaptionShown.toggle()
+                }
+                StripButton(symbol: "stop.fill", tint: accent, tip: "Stop meeting") { model.toggleMeetingRecording() }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: AppModel.stripHeight)
+            .background(Rectangle().fill(accent.opacity(0.08)))
+            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+            .animation(.easeOut(duration: 0.22), value: model.meetingCaptionShown)
+            .animation(.easeOut(duration: 0.22), value: model.recording)
+        }
+    }
+
+    private func speakerIsYou(_ meetings: MeetingsModel) -> Bool {
+        meetings.live.transcript.paragraphs.last?.kind == .mic
+    }
+
+    private func speaker(_ meetings: MeetingsModel) -> String {
+        guard let last = meetings.live.transcript.paragraphs.last else { return "Live" }
+        return last.kind == .mic ? "You" : (meetings.live.namedOther ?? otherSideLabel)
+    }
+
+    private func caption(_ meetings: MeetingsModel) -> String {
+        guard let last = meetings.live.transcript.paragraphs.last else { return "Listening" }
+        let said = [last.text, last.pending].filter { !$0.isEmpty }.joined(separator: " ")
+        return said.isEmpty ? "Listening" : said
+    }
+}
+
+private struct StripDot: View {
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(accent)
+            .frame(width: 8, height: 8)
+            .opacity(dim ? 0.45 : 1)
+            .onAppear { withAnimation(.easeInOut(duration: 1.05).repeatForever(autoreverses: true)) { dim = true } }
+    }
+}
+
+private struct StripButton: View {
+    let symbol: String
+    var tint: Color? = nil
+    let tip: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(tint ?? .white.opacity(hovering ? 0.95 : 0.8))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill((tint ?? .white).opacity(hovering ? 0.16 : 0.08)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(Pressable())
+        .onHover { hovering = $0 }
+        .tip(tip)
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 

@@ -29,8 +29,9 @@ final class AppModel {
     static let lineHeight: CGFloat = 14
     static let lineSpacing: CGFloat = 17
     static let seam: CGFloat = 1
+    static let stripHeight: CGFloat = 32
     static let maxGlassSize = CGSize(width: paneWidth,
-                                     height: barSize.height + seam + max(settingsHeight, meetingHeight)
+                                     height: barSize.height + stripHeight + seam + max(settingsHeight, meetingHeight)
                                          + lineHeight + lineSpacing)
 
     var recording = false
@@ -143,10 +144,14 @@ final class AppModel {
     }
 
     func toggleMeetingRecording() {
-        guard let meetings else { return }
-        if !meetings.isRecording, pane != .meeting { go(to: .meeting) }
-        meetings.toggleRecording()
+        meetings?.toggleRecording()
     }
+
+    var meetingStripShown: Bool { meetingRecording }
+
+    var meetingStripHeight: CGFloat { meetingStripShown ? Self.stripHeight : 0 }
+
+    var meetingCaptionShown = true
 
     func openMeetings(_ id: UUID? = nil) {
         onOpenMeetings(id)
@@ -182,7 +187,8 @@ final class AppModel {
     }
 
     var glassSize: CGSize {
-        CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth, height: Self.barSize.height + paneHeight + linesHeight)
+        CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth,
+               height: Self.barSize.height + meetingStripHeight + paneHeight + linesHeight)
     }
 
     func toggleRecording() {

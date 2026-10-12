@@ -36,12 +36,15 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 ## Meetings
 
 Record a meeting with your microphone and the other side of the call, with a live transcript while it runs and a
-full transcript with speakers afterwards. The meeting button is in the bar; the menu bar icon turns red while a
-meeting records. Speakers can be renamed and merged, lines can be edited and played back, and a meeting can be
-exported as Markdown, SRT, VTT or text.
+full transcript with speakers afterwards. The meeting button in the bar opens the meeting pane, where you start and
+stop it and choose the microphone, system audio and engine. While a meeting records, a strip under the bar shows the
+time, the last thing said and a stop button, even with the pane closed. Dictation keeps working during a meeting.
+Speakers can be renamed and merged, lines can be edited and played back, and a meeting can be exported as Markdown,
+SRT, VTT or text.
 
-Engines: Apple on this Mac (default), Parakeet on this Mac, or ElevenLabs, AssemblyAI and Deepgram with a key. The
-live transcript uses Apple on device speech. Summaries, action items and chat use OpenRouter or Anthropic.
+Engines: Apple on this Mac (default), Parakeet on this Mac, or ElevenLabs, AssemblyAI and Deepgram with a key. Any
+meeting can be transcribed again with another engine. The live transcript uses Apple on device speech. Summaries,
+action items and chat use OpenRouter or Anthropic.
 
 Meetings live in `~/Library/Application Support/Iridium Live/Meetings`, one folder per meeting with its audio,
 transcript and summary. Meetings from the old Iridium app are copied in once, after first launch.
