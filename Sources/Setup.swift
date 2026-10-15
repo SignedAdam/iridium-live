@@ -89,13 +89,12 @@ final class Setup {
         trouble = systemAudio ? nil : "System audio is off. Turn on Iridium Live in System Settings, Privacy, Audio Recording."
     }
 
-    /// Each build is signed on its own, so an Accessibility entry left by an earlier build stays in the list yet never
-    /// applies. It is removed at launch, before anything asks: macOS adds an app back to the list only when it asks
-    /// for access, and asks once per launch.
+    /// An ad-hoc build is a new app to macOS, so an Accessibility entry left by an earlier build stays in the list yet
+    /// never applies. It is removed at launch, before anything checks for access: macOS puts an app in the list on its
+    /// first check of each launch, and only then. A certificate-signed build keeps its entry.
     static func clearStaleAccessibility() {
-        guard Bundle.main.bundleURL.pathExtension == "app", !AXIsProcessTrusted(),
-              let bundleID = Bundle.main.bundleIdentifier, let build,
-              UserDefaults.standard.string(forKey: clearedKey) != build else { return }
+        guard Bundle.main.bundleURL.pathExtension == "app", let bundleID = Bundle.main.bundleIdentifier,
+              let build = adhocBuild, UserDefaults.standard.string(forKey: clearedKey) != build else { return }
         UserDefaults.standard.set(build, forKey: clearedKey)
         let reset = Process()
         reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
@@ -112,14 +111,18 @@ final class Setup {
 
     private static let clearedKey = "accessibilityClearedFor"
 
-    private static let build: String? = {
+    /// This build's hash when it is signed ad hoc, nil when it is signed with a certificate.
+    private static let adhocBuild: String? = {
         var code: SecCode?
         var staticCode: SecStaticCode?
         var info: CFDictionary?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
               SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
               SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
-              let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else { return nil }
+              let info = info as? [String: Any],
+              let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value,
+              flags & SecCodeSignatureFlags.adhoc.rawValue != 0,
+              let hash = info[kSecCodeInfoUnique as String] as? Data else { return nil }
         return hash.map { String(format: "%02x", $0) }.joined()
     }()
 

@@ -10,18 +10,11 @@ protocol KeySink {
 final class Typist {
     private static let reach = 400
 
-    /// The key and click watcher exists only while typing is on: a key watcher makes macOS ask for Accessibility,
-    /// which must not happen before the user asks for it.
     var isEnabled = false {
         didSet {
             typed = ""
             owesSpace = false
             session = ""
-            if isEnabled, watcher == nil { watch() }
-            if !isEnabled, let watcher {
-                NSEvent.removeMonitor(watcher)
-                self.watcher = nil
-            }
         }
     }
     private let sink: KeySink
@@ -38,9 +31,6 @@ final class Typist {
 
     init(sink: KeySink) {
         self.sink = sink
-    }
-
-    private func watch() {
         watcher = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown,
                                                                .otherMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
