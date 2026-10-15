@@ -10,6 +10,7 @@ MainActor.assumeIsolated {
     }
     let wav = arguments.firstIndex(of: "--wav").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
     CTFontManagerRegisterFontsForURL(AppResources.font as CFURL, .process, nil)
+    Setup.clearStaleAccessibility()
 
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

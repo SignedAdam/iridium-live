@@ -89,16 +89,22 @@ final class Setup {
         trouble = systemAudio ? nil : "System audio is off. Turn on Iridium Live in System Settings, Privacy, Audio Recording."
     }
 
+    /// Each build is signed on its own, so an Accessibility entry left by an earlier build stays in the list yet never
+    /// applies. It is removed at launch, before anything asks: macOS adds an app back to the list only when it asks
+    /// for access, and asks once per launch.
+    static func clearStaleAccessibility() {
+        guard Bundle.main.bundleURL.pathExtension == "app", !AXIsProcessTrusted(),
+              let bundleID = Bundle.main.bundleIdentifier, let build,
+              UserDefaults.standard.string(forKey: clearedKey) != build else { return }
+        UserDefaults.standard.set(build, forKey: clearedKey)
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "Accessibility", bundleID]
+        try? reset.run()
+        reset.waitUntilExit()
+    }
+
     func askForAccessibility() {
-        if isBundled, let bundleID = Bundle.main.bundleIdentifier, let build = Self.build,
-           UserDefaults.standard.string(forKey: Self.clearedKey) != build {
-            UserDefaults.standard.set(build, forKey: Self.clearedKey)
-            let reset = Process()
-            reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            reset.arguments = ["reset", "Accessibility", bundleID]
-            try? reset.run()
-            reset.waitUntilExit()
-        }
         let prompted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         accessibility = prompted
         if !prompted { openPane("Privacy_Accessibility") }
