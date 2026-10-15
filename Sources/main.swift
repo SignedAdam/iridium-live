@@ -299,6 +299,7 @@ MainActor.assumeIsolated {
         captions.apply(new)
         if new.controlHidden != old.controlHidden { control.setHidden(new.controlHidden) }
     }
+    model.scheduleReveal()
     let memory = MemoryMonitor { engine.pid }
     memory.onReading = { model.memory = $0 }
 

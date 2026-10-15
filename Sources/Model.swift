@@ -15,24 +15,44 @@ struct ScrollMetrics: Equatable {
     var overflows: Bool { visibleFraction < 0.999 }
 }
 
+@MainActor
+struct ControlMetrics: Equatable {
+    let compact: Bool
+    let barSize: CGSize
+    let stripHeight: CGFloat
+    let lineHeight: CGFloat
+    let lineSpacing: CGFloat
+    let cornerRadius: CGFloat
+    let paneCornerRadius: CGFloat
+
+    static let full = ControlMetrics(compact: false, barSize: CGSize(width: 370, height: 56), stripHeight: 30,
+                                     lineHeight: 14, lineSpacing: 17, cornerRadius: 28, paneCornerRadius: 28)
+    static let compact = ControlMetrics(compact: true, barSize: CGSize(width: 346, height: 26), stripHeight: 22,
+                                        lineHeight: 0, lineSpacing: 0, cornerRadius: 13, paneCornerRadius: 16)
+
+    var maxGlass: CGSize {
+        CGSize(width: AppModel.paneWidth,
+               height: barSize.height + stripHeight + AppModel.seam
+                   + max(AppModel.settingsHeight, AppModel.meetingHeight) + lineHeight + lineSpacing)
+    }
+
+    static var canvas: CGSize {
+        CGSize(width: max(full.maxGlass.width, compact.maxGlass.width),
+               height: max(full.maxGlass.height, compact.maxGlass.height))
+    }
+}
+
 @MainActor @Observable
 final class AppModel {
     enum Pane: Int { case notes, meeting, history, settings }
 
-    static let barSize = CGSize(width: 370, height: 56)
     static let paneWidth: CGFloat = 400
     static let historyHeight: CGFloat = 360
     static let settingsHeight: CGFloat = 400
     static let meetingHeight: CGFloat = 440
     static let libraryHeight: CGFloat = 340
     static let notesHeader: CGFloat = 34
-    static let lineHeight: CGFloat = 14
-    static let lineSpacing: CGFloat = 17
     static let seam: CGFloat = 1
-    static let stripHeight: CGFloat = 30
-    static let maxGlassSize = CGSize(width: paneWidth,
-                                     height: barSize.height + stripHeight + seam + max(settingsHeight, meetingHeight)
-                                         + lineHeight + lineSpacing)
 
     var recording = false
     var recordingSince = Date()
@@ -152,7 +172,9 @@ final class AppModel {
         return meetings.isRecording || meetings.coordinator.state == .stopping
     }
 
-    var meetingStripHeight: CGFloat { meetingStripShown ? Self.stripHeight : 0 }
+    var metrics: ControlMetrics { settings.compactControl ? .compact : .full }
+
+    var meetingStripHeight: CGFloat { meetingStripShown ? metrics.stripHeight : 0 }
 
     func openMeetings(_ id: UUID? = nil) {
         onOpenMeetings(id)
@@ -184,12 +206,12 @@ final class AppModel {
     }
 
     var linesHeight: CGFloat {
-        activity == nil ? 0 : Self.lineHeight
+        metrics.compact || activity == nil ? 0 : metrics.lineHeight
     }
 
     var glassSize: CGSize {
-        CGSize(width: pane == nil ? Self.barSize.width : Self.paneWidth,
-               height: Self.barSize.height + meetingStripHeight + paneHeight + linesHeight)
+        CGSize(width: pane == nil ? metrics.barSize.width : Self.paneWidth,
+               height: metrics.barSize.height + meetingStripHeight + paneHeight + linesHeight)
     }
 
     func toggleRecording() {
@@ -253,13 +275,33 @@ final class AppModel {
 
     var onManageModels: () -> Void = {}
 
-    func hideControl() {
-        settings.controlHidden = true
+    func hideControl(minutes: Int? = nil) {
+        var next = settings
+        next.controlHidden = true
+        next.controlHiddenUntil = minutes.map { Date().addingTimeInterval(TimeInterval($0 * 60)) }
+        settings = next
+        scheduleReveal()
     }
 
     func showControl() {
-        settings.controlHidden = false
+        reveal?.cancel()
+        var next = settings
+        next.controlHidden = false
+        next.controlHiddenUntil = nil
+        settings = next
     }
+
+    func scheduleReveal() {
+        reveal?.cancel()
+        guard settings.controlHidden, let until = settings.controlHiddenUntil else { return }
+        reveal = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, until.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.showControl()
+        }
+    }
+
+    @ObservationIgnored private var reveal: Task<Void, Never>?
 
     func showMyNotes() {
         notesView = .library

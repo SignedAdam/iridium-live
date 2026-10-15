@@ -9,9 +9,11 @@ struct ControlView: View {
     let mover: WindowMover
 
     var body: some View {
+        let metrics = model.metrics
         let size = model.glassSize
         let down = model.opensDown
-        let barRegion = AppModel.barSize.height + model.meetingStripHeight + model.linesHeight
+        let barRegion = metrics.barSize.height + model.meetingStripHeight + model.linesHeight
+        let corner = model.pane == nil ? metrics.cornerRadius : metrics.paneCornerRadius
         VStack(spacing: 0) {
             if down {
                 bar
@@ -28,9 +30,9 @@ struct ControlView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: down ? .top : .bottom)
-        .background(Glass(cornerRadius: AppModel.barSize.height / 2))
-        .clipShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: AppModel.barSize.height / 2, style: .continuous))
+        .background(Glass(cornerRadius: corner))
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .gesture(DragGesture(minimumDistance: 2).onChanged { _ in mover.drag() }.onEnded { _ in mover.end() })
         .overlayPreferenceValue(TipKey.self) { tips in
             TipLayer(tips: tips, bar: down ? 0...barRegion : (size.height - barRegion)...size.height, barOnTop: down)
@@ -42,6 +44,7 @@ struct ControlView: View {
         .animation(.easeOut(duration: 0.22), value: model.notesHeight)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
         .animation(.spring(response: 0.4, dampingFraction: 0.88), value: model.meetingStripShown)
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: metrics)
     }
 
     private var bar: some View {
@@ -51,7 +54,9 @@ struct ControlView: View {
     @ViewBuilder
     private var strip: some View {
         if model.meetingStripShown {
-            MeetingStrip(model: model).frame(height: AppModel.stripHeight)
+            MeetingStrip(model: model)
+                .frame(height: model.metrics.stripHeight)
+                .onRightClick { barMenuItems(model) }
         }
     }
 
@@ -78,8 +83,13 @@ struct ControlView: View {
             .padding(.horizontal, 18)
     }
 
+    @ViewBuilder
     private var lines: some View {
-        StatusLines(model: model).frame(height: model.linesHeight, alignment: model.opensDown ? .bottom : .top)
+        if !model.metrics.compact {
+            StatusLines(model: model)
+                .frame(height: model.linesHeight, alignment: model.opensDown ? .bottom : .top)
+                .onRightClick { barMenuItems(model) }
+        }
     }
 
     private func pane(_ which: AppModel.Pane, @ViewBuilder content: () -> some View) -> some View {
@@ -97,7 +107,7 @@ struct StatusLines: View {
 
     var body: some View {
         let down = model.opensDown
-        VStack(spacing: AppModel.lineSpacing - 15) {
+        VStack(spacing: ControlMetrics.full.lineSpacing - 15) {
             if let activity = model.activity {
                 HStack(spacing: 6) {
                     if model.recording {

@@ -308,6 +308,9 @@ struct SettingsPane: View {
             Row("Opacity") {
                 GlassSlider(value: $model.settings.controlOpacity, range: 0.3...1, step: 0.05) { String(format: "%.0f%%", $0 * 100) }
             }
+            Row("Compact", detail: "One thin line with small controls") {
+                GlassSwitch(isOn: $model.settings.compactControl)
+            }
         }
     }
 

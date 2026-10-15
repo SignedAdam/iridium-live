@@ -58,6 +58,8 @@ struct Settings: Codable, Equatable {
     var autoUnload = false
     var autoUnloadMinutes = 30
     var controlHidden = false
+    var controlHiddenUntil: Date? = nil
+    var compactControl = false
     var meetingEngine = "apple.speechanalyzer"
     var meetingLanguage = "en-US"
     var meetingMic = true
@@ -200,6 +202,8 @@ extension Settings {
         autoUnload = value(.autoUnload, fallback.autoUnload)
         autoUnloadMinutes = value(.autoUnloadMinutes, fallback.autoUnloadMinutes)
         controlHidden = value(.controlHidden, fallback.controlHidden)
+        controlHiddenUntil = value(.controlHiddenUntil, fallback.controlHiddenUntil)
+        compactControl = value(.compactControl, fallback.compactControl)
         meetingEngine = value(.meetingEngine, fallback.meetingEngine)
         meetingLanguage = value(.meetingLanguage, fallback.meetingLanguage)
         meetingMic = value(.meetingMic, fallback.meetingMic)

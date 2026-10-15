@@ -18,15 +18,18 @@ final class ControlWindowController {
     private let model: AppModel
     private let holder: CanvasHolder
     private var shrink: DispatchWorkItem?
+    private var applied: ControlMetrics
 
     private var opacity: CGFloat { Look.shared.opacity }
 
     init(model: AppModel, notes: NotesEditor, screen: NSScreen) {
         self.model = model
-        let center = Self.savedBarCenter() ?? Self.defaultBarCenter(on: screen)
-        model.opensDown = Self.opensDown(barCenter: center)
+        let metrics = model.metrics
+        let center = Self.savedBarCenter(metrics) ?? Self.defaultBarCenter(on: screen, metrics)
+        self.applied = metrics
+        model.opensDown = Self.opensDown(barCenter: center, metrics)
         let size = Self.windowSize(model.glassSize)
-        let target = Self.frame(barCenter: center, size: size, opensDown: model.opensDown)
+        let target = Self.frame(barCenter: center, size: size, opensDown: model.opensDown, metrics)
         window = ControlWindow(contentRect: target, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
@@ -38,7 +41,7 @@ final class ControlWindowController {
         let mover = WindowMover(window)
         let host = FirstClickHostingView(rootView: ControlView(model: model, notes: notes, mover: mover))
         host.sizingOptions = []
-        host.setFrameSize(Self.windowSize(AppModel.maxGlassSize))
+        host.setFrameSize(Self.windowSize(ControlMetrics.canvas))
         holder = CanvasHolder(canvas: host, size: size, pinTop: model.opensDown)
         window.contentView = holder
         mover.onEnd = { [weak self] in self?.settle() }
@@ -106,40 +109,40 @@ final class ControlWindowController {
         NSSize(width: glass.width + 2 * floatingMargin, height: glass.height + 2 * floatingMargin)
     }
 
-    private static func frame(barCenter center: NSPoint, size: NSSize, opensDown: Bool) -> NSRect {
-        let half = AppModel.barSize.height / 2 + floatingMargin
+    private static func frame(barCenter center: NSPoint, size: NSSize, opensDown: Bool, _ metrics: ControlMetrics) -> NSRect {
+        let half = metrics.barSize.height / 2 + floatingMargin
         let y = opensDown ? center.y + half - size.height : center.y - half
         return NSRect(x: (center.x - size.width / 2).rounded(), y: y.rounded(), width: size.width, height: size.height)
     }
 
     private var barCenter: NSPoint {
         let frame = window.frame
-        let half = AppModel.barSize.height / 2 + floatingMargin
+        let half = applied.barSize.height / 2 + floatingMargin
         return NSPoint(x: frame.midX, y: model.opensDown ? frame.maxY - half : frame.minY + half)
     }
 
-    private static func opensDown(barCenter center: NSPoint) -> Bool {
+    private static func opensDown(barCenter center: NSPoint, _ metrics: ControlMetrics) -> Bool {
         guard let area = (NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.main)?.visibleFrame else { return false }
-        let reach = AppModel.maxGlassSize.height - AppModel.barSize.height + floatingMargin
-        let above = area.maxY - (center.y + AppModel.barSize.height / 2)
-        let below = center.y - AppModel.barSize.height / 2 - area.minY
+        let reach = metrics.maxGlass.height - metrics.barSize.height + floatingMargin
+        let above = area.maxY - (center.y + metrics.barSize.height / 2)
+        let below = center.y - metrics.barSize.height / 2 - area.minY
         return above < reach && below > above
     }
 
-    private static func defaultBarCenter(on screen: NSScreen) -> NSPoint {
+    private static func defaultBarCenter(on screen: NSScreen, _ metrics: ControlMetrics) -> NSPoint {
         let area = screen.visibleFrame
-        return NSPoint(x: area.midX, y: area.minY + 28 + AppModel.barSize.height / 2)
+        return NSPoint(x: area.midX, y: area.minY + 28 + metrics.barSize.height / 2)
     }
 
-    private static func savedBarCenter() -> NSPoint? {
+    private static func savedBarCenter(_ metrics: ControlMetrics) -> NSPoint? {
         guard let saved = UserDefaults.standard.array(forKey: positionKey) as? [Double], saved.count == 2 else { return nil }
         let center = NSPoint(x: saved[0], y: saved[1])
-        return onScreen(center) ? center : nil
+        return onScreen(center, metrics) ? center : nil
     }
 
-    private static func onScreen(_ center: NSPoint) -> Bool {
-        let bar = NSRect(x: center.x - AppModel.barSize.width / 2, y: center.y - AppModel.barSize.height / 2,
-                         width: AppModel.barSize.width, height: AppModel.barSize.height)
+    private static func onScreen(_ center: NSPoint, _ metrics: ControlMetrics) -> Bool {
+        let bar = NSRect(x: center.x - metrics.barSize.width / 2, y: center.y - metrics.barSize.height / 2,
+                         width: metrics.barSize.width, height: metrics.barSize.height)
         return NSScreen.screens.contains { $0.visibleFrame.intersects(bar.insetBy(dx: 40, dy: 20)) }
     }
 
@@ -151,16 +154,21 @@ final class ControlWindowController {
 
     private func recover() {
         let center = barCenter
-        place(barCenter: Self.onScreen(center) ? center : Self.defaultBarCenter(on: NSScreen.main ?? window.screen!))
+        let metrics = model.metrics
+        place(barCenter: Self.onScreen(center, metrics) ? center
+                : Self.defaultBarCenter(on: NSScreen.main ?? window.screen!, metrics))
     }
 
     private func place(barCenter center: NSPoint) {
-        let down = Self.opensDown(barCenter: center)
+        let metrics = model.metrics
+        let down = Self.opensDown(barCenter: center, metrics)
         if down != model.opensDown {
             model.opensDown = down
             holder.pinTop = down
         }
-        window.setFrame(Self.frame(barCenter: center, size: window.frame.size, opensDown: down), display: true)
+        let target = Self.frame(barCenter: center, size: window.frame.size, opensDown: down, metrics)
+        applied = metrics
+        window.setFrame(target, display: true)
     }
 
     private func follow() {
@@ -188,7 +196,10 @@ final class ControlWindowController {
     }
 
     private func resize(to size: NSSize) {
-        window.setFrame(Self.frame(barCenter: barCenter, size: size, opensDown: model.opensDown), display: true)
+        let metrics = model.metrics
+        let target = Self.frame(barCenter: barCenter, size: size, opensDown: model.opensDown, metrics)
+        applied = metrics
+        window.setFrame(target, display: true)
     }
 }
 

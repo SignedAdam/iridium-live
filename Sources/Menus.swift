@@ -449,7 +449,12 @@ func barMenuItems(_ model: AppModel) -> [MenuItem] {
         MenuItem(id: "history", title: "History", symbol: "clock.arrow.circlepath", action: { model.toggleHistory() }),
         MenuItem(id: "settings", title: "Settings", symbol: "slider.horizontal.3", action: { model.toggleSettings() }),
         .separator(),
-        MenuItem(id: "hide", title: "Hide control", symbol: "eye.slash", action: { model.hideControl() }),
+        MenuItem(id: "compact", title: "Compact", symbol: "rectangle.compress.vertical",
+                 checked: model.settings.compactControl, action: { model.settings.compactControl.toggle() }),
+        MenuItem(id: "hide.15", title: "Hide for 15 minutes", symbol: "eye.slash", action: { model.hideControl(minutes: 15) }),
+        MenuItem(id: "hide.60", title: "Hide for 1 hour", symbol: "eye.slash", action: { model.hideControl(minutes: 60) }),
+        MenuItem(id: "hide", title: "Hide until shown again", symbol: "eye.slash", action: { model.hideControl() }),
+        .separator(),
         MenuItem(id: "quit", title: "Quit Iridium Live", symbol: "power", action: { model.quit() }),
     ]
 }
@@ -467,6 +472,7 @@ func statusMenuItems(_ model: AppModel) -> [MenuItem] {
                  action: shown { model.toggleMeetingRecording() }),
         .separator(),
         MenuItem(id: "control", title: hidden ? "Show control" : "Hide control", symbol: hidden ? "eye" : "eye.slash",
+                 shortcut: hidden ? model.settings.controlHiddenUntil.map { "Back at " + $0.formatted(date: .omitted, time: .shortened) } : nil,
                  action: { hidden ? model.showControl() : model.hideControl() }),
         MenuItem(id: "notes", title: "Notes", symbol: "square.and.pencil", action: shown { model.toggleNotes() }),
         MenuItem(id: "library", title: "My notes", symbol: "books.vertical", action: shown { model.showMyNotes() }),
