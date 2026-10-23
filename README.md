@@ -73,6 +73,8 @@ English only.
 Requirements: Apple silicon, macOS 26, Xcode command line tools, [uv](https://docs.astral.sh/uv/).
 
 ```sh
+git clone https://github.com/SignedAdam/iridium-live
+cd iridium-live
 make install   # build and copy to /Applications
 make run       # run from the terminal
 make check     # print the paths the app uses
@@ -131,3 +133,7 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
   provider logos
 - [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache 2.0): speaker detection and Parakeet for
   meetings
+
+## License
+
+MIT, see [LICENSE](LICENSE). The font, icons and models above keep their own licenses.

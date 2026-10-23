@@ -94,7 +94,7 @@ public final class OpenRouterProvider: IntelligenceProvider, @unchecked Sendable
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("https://github.com/SignedAdam/iridium", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("https://github.com/SignedAdam/iridium-live", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("Iridium Live", forHTTPHeaderField: "X-Title")
 
         do {
