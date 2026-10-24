@@ -239,16 +239,19 @@ struct MeetingStrip: View {
     }
 }
 
+/// Starts recording the moment it is pressed rather than when let go: the microphone takes a moment to open, and
+/// people start talking as they click. Stopping waits for the release, like any button.
 struct RecordOrb: View {
     let recording: Bool
     let loading: Bool
     var size: CGFloat = 40
     let action: () -> Void
     @State private var hovering = false
+    @State private var startedOnPress = false
 
     var body: some View {
         let scale = size / 40
-        Button(action: action) {
+        Button { if !startedOnPress { action() } } label: {
             TimelineView(.animation(paused: !recording && !loading)) { context in
                 let time = context.date.timeIntervalSinceReferenceDate
                 let pulse = 1 - pow(1 - time.truncatingRemainder(dividingBy: 1.8) / 1.8, 2)
@@ -278,7 +281,10 @@ struct RecordOrb: View {
             .frame(width: size, height: size)
             .contentShape(Circle())
         }
-        .buttonStyle(Pressable())
+        .buttonStyle(Pressable {
+            startedOnPress = !recording
+            if startedOnPress { action() }
+        })
         .onHover { hovering = $0 }
         .tip(recording ? "Stop" : "Record")
         .animation(.spring(response: 0.32, dampingFraction: 0.62), value: recording)

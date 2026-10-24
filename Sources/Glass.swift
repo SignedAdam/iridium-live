@@ -89,10 +89,13 @@ extension View {
 }
 
 struct Pressable: ButtonStyle {
+    var onPress: () -> Void = {}
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.88 : 1)
             .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in if pressed { onPress() } }
     }
 }
 

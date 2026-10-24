@@ -1,7 +1,9 @@
 import AppKit
 
 @MainActor
-protocol KeySink {
+protocol KeySink: AnyObject {
+    /// Called when keys still waiting were thrown away (the app in front changed before they could be sent).
+    var onDropped: () -> Void { get set }
     func backspace(_ count: Int)
     func type(_ text: String)
 }
@@ -38,6 +40,10 @@ final class Typist {
                 self?.disturbed = true
             }
         }
+        sink.onDropped = { [weak self] in
+            self?.typed = ""
+            self?.broken = true
+        }
     }
 
     func startSession() {
@@ -69,58 +75,108 @@ final class Typist {
         }
     }
 
+    /// Replaces what this recording typed with `polished`, from the first character that differs. The space owed to
+    /// the text before the recording stays in front.
     @discardableResult
     func revise(to polished: String) -> Bool {
-        guard isEnabled, !session.isEmpty, !disturbed, !broken, polished != session,
+        let target = session.hasPrefix(" ") && !polished.isEmpty ? " " + polished : polished
+        guard isEnabled, !session.isEmpty, !disturbed, !broken, target != session,
               typedInto == nil || frontmost() == typedInto else { return false }
-        let kept = session.commonPrefix(with: polished).count
+        let kept = session.commonPrefix(with: target).count
         let drop = session.count - kept
-        guard drop <= Self.reach, polished.count - kept <= Self.reach else { return false }
+        guard drop <= Self.reach, target.count - kept <= Self.reach else { return false }
         sink.backspace(drop)
-        sink.type(String(polished.dropFirst(kept)))
-        session = polished
+        sink.type(String(target.dropFirst(kept)))
+        session = target
         typed = ""
         if polished.isEmpty { owesSpace = owedAtStart }
         return true
     }
 }
 
+/// Types by posting key events, one key at a time and a frame apart: a text field drawn by a web page that redraws
+/// after every change loses keys that arrive while it is still busy with the last one. Keys only ever reach the app
+/// that was in front when they were asked for; if another app comes to the front first, the rest are dropped.
 @MainActor
-struct KeyboardSink: KeySink {
+final class KeyboardSink: KeySink {
+    private static let gap = Duration.milliseconds(20)
+    private static let chunk = 20 // UTF-16 units one key event carries
+
+    private enum Key {
+        case backspace
+        case text([UniChar])
+    }
+
+    var onDropped: () -> Void = {}
     private let source = CGEventSource(stateID: .combinedSessionState)
+    private var waiting: [(key: Key, app: pid_t?)] = []
+    private var sending = false
 
     static func requestAccess() -> Bool {
         AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
     func backspace(_ count: Int) {
-        for _ in 0..<max(count, 0) {
-            for down in [true, false] { post(CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down)) }
-        }
+        send(Array(repeating: .backspace, count: max(count, 0)))
     }
 
     func type(_ text: String) {
-        var chunk: [UniChar] = []
+        var keys: [Key] = []
+        var units: [UniChar] = []
         for character in text {
-            let units = Array(String(character).utf16)
-            if chunk.count + units.count > 20 { typeChunk(chunk); chunk = [] }
-            chunk += units
+            let next = Array(String(character).utf16)
+            if units.count + next.count > Self.chunk { keys.append(.text(units)); units = [] }
+            units += next
         }
-        if !chunk.isEmpty { typeChunk(chunk) }
+        if !units.isEmpty { keys.append(.text(units)) }
+        send(keys)
     }
 
-    private func typeChunk(_ units: [UniChar]) {
+    private func send(_ keys: [Key]) {
+        guard !keys.isEmpty else { return }
+        let app = Self.frontmost()
+        waiting += keys.map { ($0, app) }
+        guard !sending else { return }
+        sending = true
+        Task { await drain() }
+    }
+
+    private func drain() async {
+        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Typing")
+        defer {
+            ProcessInfo.processInfo.endActivity(activity)
+            sending = false
+        }
+        while !waiting.isEmpty {
+            let (key, app) = waiting.removeFirst()
+            guard app == nil || Self.frontmost() == app else {
+                waiting.removeAll()
+                onDropped()
+                return
+            }
+            post(key)
+            try? await Task.sleep(for: Self.gap)
+        }
+    }
+
+    private func post(_ key: Key) {
         for down in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
-            event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            post(event)
+            let event: CGEvent?
+            switch key {
+            case .backspace:
+                event = CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down)
+            case .text(let units):
+                event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
+                event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            }
+            event?.flags = []
+            event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
+            event?.post(tap: .cghidEventTap)
         }
     }
 
-    private func post(_ event: CGEvent?) {
-        event?.flags = []
-        event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
-        event?.post(tap: .cghidEventTap)
+    private static func frontmost() -> pid_t? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
     }
 }
 
