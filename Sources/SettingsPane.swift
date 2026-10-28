@@ -213,6 +213,9 @@ struct SettingsPane: View {
             Row("Wait before typing") {
                 GlassSlider(value: $model.settings.typingHold, range: 0.2...3, step: 0.1) { String(format: "%.1f s", $0) }
             }
+            Row("Paste into", detail: "For apps that lose typed keys") {
+                PasteApps(bundleIDs: $model.settings.pasteApps).frame(width: 150)
+            }
         }
     }
 
@@ -814,12 +817,59 @@ private struct GlassMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
     var label: String? = nil
+
+    var body: some View {
+        MenuButton(title: label ?? options.first { $0.0 == selection }?.1 ?? "") {
+            dropdownItems(options, selection: $selection)
+        }
+    }
+}
+
+/// The apps typing pastes into: those listed, ticked, then every other app now open; a click ticks or unticks one.
+private struct PasteApps: View {
+    @Binding var bundleIDs: [String]
+
+    var body: some View {
+        MenuButton(title: bundleIDs.isEmpty ? "None" : bundleIDs.map(Self.name).joined(separator: ", "), items: items)
+    }
+
+    private func items() -> [MenuItem] {
+        let open = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+            .compactMap(\.bundleIdentifier).filter { $0 != Bundle.main.bundleIdentifier && !bundleIDs.contains($0) }
+        let others = Set(open).sorted { Self.name($0).localizedCaseInsensitiveCompare(Self.name($1)) == .orderedAscending }
+        let chosen = $bundleIDs
+        var items: [MenuItem] = []
+        for id in bundleIDs + others {
+            let listed = bundleIDs.contains(id)
+            var icon: (@MainActor () -> AnyView)?
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                let image = NSWorkspace.shared.icon(forFile: url.path)
+                icon = { AnyView(Image(nsImage: image).resizable().frame(width: 15, height: 15)) }
+            }
+            let toggle: @MainActor () -> Void = {
+                if listed { chosen.wrappedValue.removeAll { $0 == id } } else { chosen.wrappedValue.append(id) }
+            }
+            items.append(MenuItem(id: id, title: Self.name(id), icon: icon, checked: listed, action: toggle))
+        }
+        return items
+    }
+
+    private static func name(_ id: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return id }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+}
+
+/// A capsule showing `title` that opens the glass menu of `items` under itself.
+private struct MenuButton: View {
+    let title: String
+    let items: @MainActor () -> [MenuItem]
     @State private var hovering = false
 
     var body: some View {
-        MenuTrigger { dropdownItems(options, selection: $selection) } label: {
+        MenuTrigger(items: items) {
             HStack(spacing: 4) {
-                Text(label ?? options.first { $0.0 == selection }?.1 ?? "").lineLimit(1)
+                Text(title).lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.55)
             }

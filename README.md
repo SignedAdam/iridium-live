@@ -8,8 +8,9 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
 ## Features
 
 - **Captions:** live text at the top or bottom of the screen.
-- **Typing** into the app in front. Keys go out 20 ms apart, so apps drawn by a web page keep up. Misheard words are
-  fixed while you speak. The record button starts the moment it is pressed.
+- **Typing** into the app in front. Misheard words are fixed while you speak. Apps that lose typed keys, such as Tern,
+  get each sentence as one paste instead (Settings, Typing, Paste into); your clipboard comes back right after. The
+  record button starts the moment it is pressed.
 - **Notes:** dictate into a note and edit it like any text. Saved notes are in My notes.
 - **Hotkeys:** hold, double-tap or toggle. Several hotkeys can share a key.
 - **Microphone:** the MacBook's own. While the lid is closed, your default input, such as AirPods or a USB microphone.

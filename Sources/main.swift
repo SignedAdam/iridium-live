@@ -39,7 +39,9 @@ MainActor.assumeIsolated {
     model.meetings = meetings
     let notes = NotesEditor(model: model, library: library)
     let captions = Captions(screen: screen, settings: model.settings)
-    let typist = Typist(sink: KeyboardSink())
+    let keys = KeyboardSink()
+    keys.pasteApps = Set(model.settings.pasteApps)
+    let typist = Typist(sink: keys)
     let control = ControlWindowController(model: model, notes: notes, screen: screen)
     let hotkeys = HotkeyMonitor()
     let idle = IdleUnloader()
@@ -276,6 +278,7 @@ MainActor.assumeIsolated {
     }
     model.onSettingsChange = { new, old in
         if new.typingHold != old.typingHold { engine.send("hold \(new.typingHold)") }
+        if new.pasteApps != old.pasteApps { keys.pasteApps = Set(new.pasteApps) }
         if new.openRouterModels != old.openRouterModels {
             engine.send("compare " + new.openRouterModels.map(\.id).joined(separator: ","))
         }

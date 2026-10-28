@@ -30,6 +30,7 @@ struct Settings: Codable, Equatable {
 
     var speechModel = "phonon-2"
     var typingHold = 0.7
+    var pasteApps = ["so.stencil.tern"] // bundle IDs that get each sentence as one paste instead of typed keys
     var cleanupEnabled = false
     var cleanupProvider = "openrouter"
     var cleanupModels: [String: String] = [:]
@@ -173,6 +174,7 @@ extension Settings {
         func value<T: Decodable>(_ key: CodingKeys, _ current: T) -> T { (try? saved.decodeIfPresent(T.self, forKey: key)) ?? current }
         speechModel = value(.speechModel, fallback.speechModel)
         typingHold = value(.typingHold, fallback.typingHold)
+        pasteApps = value(.pasteApps, fallback.pasteApps)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
         let provider = value(.cleanupProvider, fallback.cleanupProvider)
         cleanupProvider = Settings.cleanupProviders.contains { $0.id == provider } ? provider : fallback.cleanupProvider

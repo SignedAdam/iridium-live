@@ -1,9 +1,12 @@
 import AppKit
+import Synchronization
 
 @MainActor
 protocol KeySink: AnyObject {
     /// Called when keys still waiting were thrown away (the app in front changed before they could be sent).
     var onDropped: () -> Void { get set }
+    /// The app in front takes text as one paste per sentence, rather than typed as it is heard.
+    var pastesHere: Bool { get }
     func backspace(_ count: Int)
     func type(_ text: String)
 }
@@ -58,7 +61,7 @@ final class Typist {
     }
 
     func sync(_ target: String, final: Bool) {
-        guard isEnabled else { return }
+        guard isEnabled, final || !sink.pastesHere else { return }
         let kept = typed.commonPrefix(with: target, options: .caseInsensitive).count
         let added = String(target.dropFirst(kept))
         let space = typed.isEmpty && owesSpace && !added.isEmpty ? " " : ""
@@ -94,33 +97,53 @@ final class Typist {
     }
 }
 
-/// Types by posting key events, one key at a time and a frame apart: a text field drawn by a web page that redraws
-/// after every change loses keys that arrive while it is still busy with the last one. Keys only ever reach the app
-/// that was in front when they were asked for; if another app comes to the front first, the rest are dropped.
+/// Types by posting key events, all at once, so corrections land instantly. Apps in `pasteApps` get text as one paste
+/// instead: a text field drawn by a web page can lose keys that arrive faster than it redraws, but takes a paste whole.
+/// The clipboard holds the text only until the app has read it, then gets its own contents back; whatever was asked
+/// for meanwhile waits its turn, and is dropped if another app comes to the front first.
 @MainActor
 final class KeyboardSink: KeySink {
-    private static let gap = Duration.milliseconds(20)
     private static let chunk = 20 // UTF-16 units one key event carries
+    private static let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType") // kept out of clipboard histories
 
     private enum Key {
         case backspace
         case text([UniChar])
+        case paste
+    }
+
+    private enum Step {
+        case keys([Key])
+        case paste(String)
     }
 
     var onDropped: () -> Void = {}
+    var pasteApps: Set<String> = []
     private let source = CGEventSource(stateID: .combinedSessionState)
-    private var waiting: [(key: Key, app: pid_t?)] = []
-    private var sending = false
+    private let pasteboard: NSPasteboard
+    private var waiting: [(step: Step, app: pid_t?)] = []
+    private var pasting = false
+
+    init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
+    }
 
     static func requestAccess() -> Bool {
         AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
+    var pastesHere: Bool {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier.map(pasteApps.contains) ?? false
+    }
+
     func backspace(_ count: Int) {
-        send(Array(repeating: .backspace, count: max(count, 0)))
+        guard count > 0 else { return }
+        send(.keys(Array(repeating: .backspace, count: count)))
     }
 
     func type(_ text: String) {
+        guard !text.isEmpty else { return }
+        if pastesHere { return send(.paste(text)) }
         var keys: [Key] = []
         var units: [UniChar] = []
         for character in text {
@@ -129,34 +152,63 @@ final class KeyboardSink: KeySink {
             units += next
         }
         if !units.isEmpty { keys.append(.text(units)) }
-        send(keys)
+        send(.keys(keys))
     }
 
-    private func send(_ keys: [Key]) {
-        guard !keys.isEmpty else { return }
-        let app = Self.frontmost()
-        waiting += keys.map { ($0, app) }
-        guard !sending else { return }
-        sending = true
-        Task { await drain() }
+    private func send(_ step: Step) {
+        waiting.append((step, Self.frontmost()))
+        if !pasting { drain() }
     }
 
-    private func drain() async {
-        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Typing")
-        defer {
-            ProcessInfo.processInfo.endActivity(activity)
-            sending = false
-        }
+    private func drain() {
         while !waiting.isEmpty {
-            let (key, app) = waiting.removeFirst()
-            guard app == nil || Self.frontmost() == app else {
-                waiting.removeAll()
-                onDropped()
+            let (step, app) = waiting.removeFirst()
+            guard app == nil || Self.frontmost() == app else { return drop() }
+            switch step {
+            case .keys(let keys):
+                keys.forEach(post)
+            case .paste(let text):
+                pasting = true
+                Task {
+                    let landed = await paste(text)
+                    pasting = false
+                    if landed { drain() } else { drop() }
+                }
                 return
             }
-            post(key)
-            try? await Task.sleep(for: Self.gap)
         }
+    }
+
+    private func drop() {
+        waiting.removeAll()
+        onDropped()
+    }
+
+    /// Puts `text` on the clipboard, presses Command-V and waits for the app to read it; the clipboard gets its own
+    /// contents back either way. False when no app asked for the text.
+    private func paste(_ text: String) async -> Bool {
+        let saved = pasteboard.pasteboardItems?.map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } ?? []
+        let offer = PasteOffer(text)
+        let item = NSPasteboardItem()
+        item.setDataProvider(offer, forTypes: [.string])
+        item.setData(Data(), forType: Self.transient)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+        post(.paste)
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while !offer.taken, clock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        let taken = offer.taken
+        if taken { try? await Task.sleep(for: .milliseconds(150)) } // the app may read after a clipboard history did
+        pasteboard.clearContents()
+        pasteboard.writeObjects(saved.map { contents in
+            let item = NSPasteboardItem()
+            for (type, data) in contents { item.setData(data, forType: type) }
+            return item
+        })
+        return taken
     }
 
     private func post(_ key: Key) {
@@ -165,11 +217,15 @@ final class KeyboardSink: KeySink {
             switch key {
             case .backspace:
                 event = CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down)
+                event?.flags = []
             case .text(let units):
                 event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
                 event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+                event?.flags = []
+            case .paste:
+                event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: down)
+                event?.flags = .maskCommand
             }
-            event?.flags = []
             event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.ownEvents)
             event?.post(tap: .cghidEventTap)
         }
@@ -177,6 +233,23 @@ final class KeyboardSink: KeySink {
 
     private static func frontmost() -> pid_t? {
         NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+}
+
+/// The text of one paste, handed over only when an app reads the clipboard, which is how the paste knows it landed.
+private final class PasteOffer: NSObject, NSPasteboardItemDataProvider, Sendable {
+    private let text: String
+    private let read = Mutex(false)
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var taken: Bool { read.withLock { $0 } }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        item.setString(text, forType: type)
+        read.withLock { $0 = true }
     }
 }
 
