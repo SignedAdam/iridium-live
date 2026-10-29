@@ -6,6 +6,8 @@ ENGINE := live.py segmenter.py asr.py cleanup.py takes.py downloads.py
 FONT := fonts/TikTokSans.ttf
 BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
 CERT := Iridium Live Dev
+# LSMinimumSystemVersion; swiftc's own default follows the kernel and can name a macOS that does not exist yet
+TARGET := arm64-apple-macos26.0
 
 MKDIR := Packages/MeetingKit
 MKSOURCES := $(wildcard $(MKDIR)/Sources/MeetingKit/*/*.swift) $(wildcard $(MKDIR)/Sources/AudioGuard/*.m) \
@@ -23,7 +25,7 @@ app: $(STAMP)
 
 $(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS)
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
-	swiftc -O -swift-version 6 $(SOURCES) $(MKFLAGS) -o "$(BINARY)"
+	swiftc -O -swift-version 6 -target $(TARGET) $(SOURCES) $(MKFLAGS) -o "$(BINARY)"
 	@cp Resources/Info.plist "$(APP)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@cp Resources/AppIcon.icns $(ENGINE) $(FONT) "$(APP)/Contents/Resources/"
