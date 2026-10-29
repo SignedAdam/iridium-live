@@ -25,6 +25,12 @@ struct EngineEvent: Sendable {
     let edit: PhraseEdit?
     let failed: String?
     let cues: [String]
+    let correction: CorrectionRun?
+    let take: String?
+    let late: Bool
+    let said: Bool
+    let at: Double?
+    let kept: Bool
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -54,7 +60,16 @@ struct EngineEvent: Sendable {
         edit = PhraseEdit(engine: object["edit"])
         failed = object["failed"] as? String
         cues = (object["cues"] as? [String] ?? []) + (object["starting_cues"] as? [String] ?? []).map { "\($0) (at the start)" }
+        correction = engineValue(object["correction"])
+        take = object["take"] as? String
+        late = object["late"] as? Bool ?? false
+        said = object["said"] as? Bool ?? false
+        at = object["at"] as? Double
+        kept = object["kept"] as? Bool ?? true
     }
+
+    /// Where a `take` event stands: recording, captured, done, empty, failed or discarded.
+    var takeState: String { status.state }
 }
 
 struct PhraseEdit: Sendable {

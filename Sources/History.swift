@@ -13,6 +13,11 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var session: Int?
     var polish: PolishRun?
     var benchmarks: [BenchmarkRun]?
+    var corrections: [CorrectionRun]?
+    var take: String?
+    var takeFile: String?
+    var state: TakeState?
+    var failure: String?
 }
 
 extension HistoryEntry {
@@ -21,6 +26,12 @@ extension HistoryEntry {
     }
 
     var spend: Double { calls.reduce(0) { $0 + ($1.costUsd ?? 0) } }
+
+    /// A recording that is still being transcribed, or one that never made it.
+    var isPending: Bool { state == .pending }
+    var isFailed: Bool { state == .failed }
+    var spoken: String { text.isEmpty ? raw ?? "" : text }
+    var canRetry: Bool { !isPending && (!spoken.isEmpty || takeFile != nil) }
 }
 
 struct AudioRef: Codable, Equatable, Sendable {
@@ -31,6 +42,12 @@ struct AudioRef: Codable, Equatable, Sendable {
     init?(engine object: [String: Any]) {
         guard let file = object["file"] as? String, let start = object["start_s"] as? Double,
               let end = object["end_s"] as? Double else { return nil }
+        self.file = file
+        self.start = start
+        self.end = end
+    }
+
+    init(file: String, start: Double, end: Double) {
         self.file = file
         self.start = start
         self.end = end
@@ -149,12 +166,13 @@ struct HistoryPane: View {
                             Section {
                                 ForEach(group.entries) { entry in
                                     let audio = PhrasePlayer.availability(entry)
-                                    Row(entry: entry, copied: copied == entry.id, open: open == entry.id,
-                                        retrying: model.retrying.contains(entry.id),
+                                    Row(entry: entry, status: status(of: entry), copied: copied == entry.id,
+                                        open: open == entry.id, retrying: model.retrying.contains(entry.id),
                                         audio: model.settings.saveAudio || audio == .playable ? audio : nil,
                                         playing: player.playing == entry.id,
                                         toggle: { toggle(entry) }, copy: { copy(entry) }, delete: { delete(entry) },
                                         retry: { model.onRetryHistory(entry) }, addToNote: { model.onAddToNote(entry) },
+                                        corrections: { model.openCorrections(entry) },
                                         play: { player.toggle(entry) })
                                 }
                             } header: {
@@ -193,6 +211,12 @@ struct HistoryPane: View {
         }
     }
 
+    /// What a row without text says: where its recording stands, or why it has none.
+    private func status(of entry: HistoryEntry) -> String? {
+        guard entry.isPending else { return entry.failure }
+        return model.recording && entry.id == model.history.last?.id ? "Recording" : "Transcribing"
+    }
+
     private func toggle(_ entry: HistoryEntry) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { open = open == entry.id ? nil : entry.id }
     }
@@ -213,6 +237,7 @@ struct HistoryPane: View {
 
     private struct Row: View {
         let entry: HistoryEntry
+        let status: String?
         let copied: Bool
         let open: Bool
         let retrying: Bool
@@ -223,6 +248,7 @@ struct HistoryPane: View {
         let delete: @MainActor () -> Void
         let retry: @MainActor () -> Void
         let addToNote: @MainActor () -> Void
+        let corrections: @MainActor () -> Void
         let play: @MainActor () -> Void
         @State private var hovering = false
 
@@ -235,10 +261,19 @@ struct HistoryPane: View {
                         .foregroundStyle(.white.opacity(0.78))
                         .frame(width: 52, alignment: .leading)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.text.isEmpty ? (entry.raw ?? "") : entry.text)
-                            .opacity(entry.text.isEmpty ? 0.85 : 1)
-                            .font(tiktok(13))
-                            .multilineTextAlignment(.leading)
+                        if entry.spoken.isEmpty {
+                            Text(status ?? "Failed")
+                                .font(tiktok(13))
+                                .foregroundStyle(entry.isFailed ? accent : .white.opacity(0.7))
+                        } else {
+                            Text(entry.spoken)
+                                .opacity(entry.text.isEmpty ? 0.85 : 1)
+                                .font(tiktok(13))
+                                .multilineTextAlignment(.leading)
+                            if entry.isFailed, let failure = entry.failure {
+                                Text(failure).font(tiktok(10.5)).foregroundStyle(accent)
+                            }
+                        }
                         if let timing = entry.timing { TimingSummary(timing: timing) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -247,11 +282,19 @@ struct HistoryPane: View {
                             RowAction(symbol: playing ? "stop" : "play", tip: playTip(audio), enabled: audio == .playable,
                                       action: play)
                         }
-                        RowAction(symbol: "arrow.clockwise", tip: "Retry", action: retry)
-                            .opacity(retrying ? 0.35 : 1)
-                            .disabled(retrying)
-                        RowAction(symbol: "note.text.badge.plus", tip: "Add to current note", action: addToNote)
-                        RowAction(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy", action: copy)
+                        if entry.canRetry {
+                            RowAction(symbol: "arrow.clockwise", tip: entry.isFailed ? "Retry this recording" : "Retry",
+                                      action: retry)
+                                .opacity(retrying ? 0.35 : 1)
+                                .disabled(retrying)
+                        }
+                        if entry.corrections != nil {
+                            RowAction(symbol: "arrow.triangle.branch", tip: "Corrections", action: corrections)
+                        }
+                        if !entry.spoken.isEmpty {
+                            RowAction(symbol: "note.text.badge.plus", tip: "Add to current note", action: addToNote)
+                            RowAction(symbol: copied ? "checkmark" : "doc.on.doc", tip: "Copy", action: copy)
+                        }
                         RowAction(symbol: "trash", tip: "Delete", action: delete)
                     }
                     .opacity(hovering || copied || retrying || playing ? 1 : 0)
@@ -272,9 +315,12 @@ struct HistoryPane: View {
             .onTapGesture { if entry.timing != nil { toggle() } }
             .onHover { hovering = $0 }
             .onRightClick {
-                playItems + [MenuItem(id: "retry", title: "Retry", symbol: "arrow.clockwise", enabled: !retrying, action: retry),
-                 MenuItem(id: "note", title: "Add to current note", symbol: "note.text.badge.plus", action: addToNote),
-                 MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", action: copy),
+                playItems + correctionItems
+                 + [MenuItem(id: "retry", title: "Retry", symbol: "arrow.clockwise", enabled: !retrying && entry.canRetry,
+                             action: retry),
+                 MenuItem(id: "note", title: "Add to current note", symbol: "note.text.badge.plus",
+                          enabled: !entry.spoken.isEmpty, action: addToNote),
+                 MenuItem(id: "copy", title: "Copy", symbol: "doc.on.doc", enabled: !entry.spoken.isEmpty, action: copy),
                  MenuItem(id: "delete", title: "Delete", symbol: "trash", destructive: true, action: delete)]
             }
             .animation(.easeOut(duration: 0.12), value: hovering)
@@ -285,6 +331,12 @@ struct HistoryPane: View {
             guard let audio else { return [] }
             return [MenuItem(id: "play", title: playing ? "Stop" : "Play", symbol: playing ? "stop" : "play",
                              enabled: audio == .playable, action: play)]
+        }
+
+        private var correctionItems: [MenuItem] {
+            guard entry.corrections != nil else { return [] }
+            return [MenuItem(id: "corrections", title: "Corrections", symbol: "arrow.triangle.branch",
+                             action: corrections)]
         }
 
         private func playTip(_ audio: PhrasePlayer.Availability) -> String {

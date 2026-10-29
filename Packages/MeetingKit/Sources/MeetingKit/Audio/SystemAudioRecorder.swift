@@ -133,7 +133,7 @@ public final class SystemAudioRecorder: StreamRecorder {
     }
 
     private func handle(_ ablPtr: UnsafePointer<AudioBufferList>) {
-        guard let ring else { return }
+        guard let ring, channels > 0 else { return }
         let now = Date()
         if firstSampleTime == nil { firstSampleTime = now }
         lastSampleTime = now
@@ -149,7 +149,8 @@ public final class SystemAudioRecorder: StreamRecorder {
             liveTranscriber?.append(ptr, frames: floatCount / channels, channels: channels, sampleRate: sampleRate)
             emitLevel(ptr, floatCount)
         } else {
-            guard let scratch = interleaveScratch, abl.count >= channels else { return }
+            guard let scratch = interleaveScratch, let base = scratch.baseAddress,
+                  abl.count >= channels else { return }
             let frames = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size
             let maxFrames = scratch.count / channels
             let n = min(frames, maxFrames)
@@ -163,9 +164,9 @@ public final class SystemAudioRecorder: StreamRecorder {
                     f += 1
                 }
             }
-            ring.write(scratch.baseAddress!, count: n * channels)
-            liveTranscriber?.append(scratch.baseAddress!, frames: n, channels: channels, sampleRate: sampleRate)
-            emitLevel(scratch.baseAddress!, n * channels)
+            ring.write(base, count: n * channels)
+            liveTranscriber?.append(base, frames: n, channels: channels, sampleRate: sampleRate)
+            emitLevel(base, n * channels)
         }
     }
 
@@ -189,9 +190,22 @@ public final class SystemAudioRecorder: StreamRecorder {
         lastSampleTime = Date()
     }
 
+    /// Rebuilds the tap and the aggregate device. A failure leaves nothing running, so the next
+    /// watchdog attempt starts from a clean state instead of a half-built device. The writer was
+    /// opened for one format, so a tap that comes back with another one is refused rather than
+    /// written at the wrong speed.
     func restart() throws {
-        teardownCoreAudioOnly()
+        isCapturing = false
+        let wasRate = sampleRate
+        let wasChannels = channels
+        cleanupCoreAudio()
+        sampleRate = 0
+        channels = 0
         try setupCoreAudio()
+        guard wasRate == 0 || (sampleRate == wasRate && channels == wasChannels) else {
+            cleanupCoreAudio()
+            throw AudioError("System audio changed to \(Int(sampleRate)) Hz mid meeting, so it is no longer recorded. The microphone keeps recording.")
+        }
         try startIOProc()
         isCapturing = true
         lastSampleTime = Date()

@@ -55,7 +55,6 @@ struct Settings: Codable, Equatable {
     var controlOpacity = 0.95
     var hotkeys: [Hotkey] = []
     var saveAudio = false
-    var audioSplitSeconds = 2.0
     var autoUnload = false
     var autoUnloadMinutes = 30
     var controlHidden = false
@@ -66,8 +65,11 @@ struct Settings: Codable, Equatable {
     var meetingMic = true
     var meetingSystem = true
     var meetingMicrophone: String?
+    var meetingAutoTranscribe = true
+    var meetingLiveTranscript = true
     var summaryProvider = "openrouter"
     var summaryModels: [String: String] = [:]
+    var notesFiling = true
 
     static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
@@ -162,8 +164,8 @@ struct Settings: Codable, Equatable {
         "rules " + (cleanupQuotes ? ["quotes"] : []).joined(separator: ",")
     }
 
-    func failureCommand(folder: String) -> String {
-        "failure \(cleanupFailure.rawValue) \(cleanupRetries) \(folder)"
+    var failureCommand: String {
+        "failure \(cleanupFailure.rawValue) \(cleanupRetries)"
     }
 }
 
@@ -200,7 +202,6 @@ extension Settings {
         controlOpacity = value(.controlOpacity, fallback.controlOpacity)
         hotkeys = value(.hotkeys, SavedHotkeys(hotkeys: fallback.hotkeys)).hotkeys
         saveAudio = value(.saveAudio, fallback.saveAudio)
-        audioSplitSeconds = value(.audioSplitSeconds, fallback.audioSplitSeconds)
         autoUnload = value(.autoUnload, fallback.autoUnload)
         autoUnloadMinutes = value(.autoUnloadMinutes, fallback.autoUnloadMinutes)
         controlHidden = value(.controlHidden, fallback.controlHidden)
@@ -211,9 +212,12 @@ extension Settings {
         meetingMic = value(.meetingMic, fallback.meetingMic)
         meetingSystem = value(.meetingSystem, fallback.meetingSystem)
         meetingMicrophone = (try? saved.decodeIfPresent(String.self, forKey: .meetingMicrophone)) ?? nil
+        meetingAutoTranscribe = value(.meetingAutoTranscribe, fallback.meetingAutoTranscribe)
+        meetingLiveTranscript = value(.meetingLiveTranscript, fallback.meetingLiveTranscript)
         let summary = value(.summaryProvider, fallback.summaryProvider)
         summaryProvider = Settings.summaryProviders.contains { $0.id == summary } ? summary : fallback.summaryProvider
         summaryModels = value(.summaryModels, fallback.summaryModels)
+        notesFiling = value(.notesFiling, fallback.notesFiling)
     }
 }
 

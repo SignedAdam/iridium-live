@@ -5,6 +5,7 @@ struct NoteLink: Codable, Equatable, Sendable {
     var audio: [AudioRef]?
 }
 
+/// A note on disk: one markdown file plus the tags and dictation links kept in the index.
 struct SavedNote: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     var file: String
@@ -14,6 +15,37 @@ struct SavedNote: Codable, Identifiable, Equatable, Sendable {
     var favorite = false
     var preview = ""
     var links: [NoteLink] = []
+    var tags: [String] = []
+
+    init(id: UUID = UUID(), file: String, name: String, created: Date = Date(), modified: Date = Date(),
+         favorite: Bool = false, preview: String = "", links: [NoteLink] = [], tags: [String] = []) {
+        self.id = id
+        self.file = file
+        self.name = name
+        self.created = created
+        self.modified = modified
+        self.favorite = favorite
+        self.preview = preview
+        self.links = links
+        self.tags = tags
+    }
+
+    init(from decoder: Decoder) throws {
+        let saved = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = SavedNote(file: "", name: "")
+        func value<T: Decodable>(_ key: CodingKeys, _ current: T) -> T {
+            (try? saved.decodeIfPresent(T.self, forKey: key)) ?? current
+        }
+        id = value(.id, fallback.id)
+        file = try saved.decode(String.self, forKey: .file)
+        name = value(.name, String(file.dropLast(3)))
+        created = value(.created, fallback.created)
+        modified = value(.modified, created)
+        favorite = value(.favorite, false)
+        preview = value(.preview, "")
+        links = value(.links, [])
+        tags = value(.tags, [])
+    }
 }
 
 @MainActor @Observable
@@ -70,6 +102,43 @@ final class NotesLibrary {
 
     var sorted: [SavedNote] {
         index.notes.sorted { $0.favorite == $1.favorite ? $0.modified > $1.modified : $0.favorite }
+    }
+
+    /// How My notes is sorted.
+    enum Order: String, CaseIterable, Identifiable {
+        case recent, title, tag
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .recent: "Recent"
+            case .title: "Title"
+            case .tag: "Tag"
+            }
+        }
+    }
+
+    var order = Order.recent
+
+    var tagFilter: String?
+
+    /// The notes My notes shows, filtered by tag and in the chosen order.
+    var listed: [SavedNote] {
+        let kept = tagFilter.map { tag in
+            index.notes.filter { $0.tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
+        } ?? index.notes
+        switch order {
+        case .recent:
+            return kept.sorted { $0.favorite == $1.favorite ? $0.modified > $1.modified : $0.favorite }
+        case .title:
+            return kept.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .tag:
+            return kept.sorted {
+                let left = $0.tags.first?.lowercased() ?? "~"
+                let right = $1.tags.first?.lowercased() ?? "~"
+                return left == right ? $0.modified > $1.modified : left < right
+            }
+        }
     }
 
     var currentNote: SavedNote? { index.current.flatMap { id in index.notes.first { $0.id == id } } }
@@ -160,6 +229,106 @@ final class NotesLibrary {
         guard let position = position(of: id) else { return }
         index.notes[position].favorite.toggle()
         saveIndex()
+    }
+
+    /// Every tag in use, most used first.
+    var allTags: [String] {
+        var counts: [String: (count: Int, name: String)] = [:]
+        for note in index.notes {
+            for tag in note.tags {
+                let key = tag.lowercased()
+                counts[key] = (count: (counts[key]?.count ?? 0) + 1, name: counts[key]?.name ?? tag)
+            }
+        }
+        return counts.values.sorted { $0.count == $1.count ? $0.name < $1.name : $0.count > $1.count }.map(\.name)
+    }
+
+    func setTags(_ tags: [String], for id: UUID) {
+        guard let position = position(of: id) else { return }
+        let cleaned = Self.tidy(tags)
+        guard cleaned != index.notes[position].tags else { return }
+        index.notes[position].tags = cleaned
+        saveIndex()
+    }
+
+    func addTag(_ tag: String, to id: UUID) {
+        guard let note = note(id) else { return }
+        setTags(note.tags + [tag], for: id)
+    }
+
+    func removeTag(_ tag: String, from id: UUID) {
+        guard let note = note(id) else { return }
+        setTags(note.tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }, for: id)
+    }
+
+    func renameTag(_ tag: String, to name: String, on id: UUID) {
+        guard let note = note(id) else { return }
+        setTags(note.tags.map { $0.caseInsensitiveCompare(tag) == .orderedSame ? name : $0 }, for: id)
+    }
+
+    /// Appends filed text to a note, reloading the editor when that note is the open one.
+    @discardableResult
+    func append(_ text: String, to id: UUID) -> Bool {
+        guard let position = position(of: id) else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let existing = self.text(of: index.notes[position]).trimmingCharacters(in: .whitespacesAndNewlines)
+        write(existing.isEmpty ? trimmed : existing + "\n\n" + trimmed, at: position)
+        return true
+    }
+
+    /// Replaces a note's whole text, used when filing is undone.
+    func setText(_ text: String, for id: UUID) {
+        guard let position = position(of: id) else { return }
+        write(text, at: position)
+    }
+
+    /// Creates a filed note with its own title and tags.
+    @discardableResult
+    func create(named proposed: String, text: String, tags: [String]) -> SavedNote {
+        let name = unique(Self.clean(proposed).isEmpty ? nextName() : Self.clean(proposed), excluding: nil)
+        var note = add(name: name, text: text, links: [])
+        note.tags = Self.tidy(tags)
+        if let position = position(of: note.id) { index.notes[position].tags = note.tags }
+        let file = url(of: note)
+        let body = text
+        disk.async { @Sendable in try? body.write(to: file, atomically: true, encoding: .utf8) }
+        saveIndex()
+        return note
+    }
+
+    /// What the filing model is told about the notes it can file into.
+    func digests(limit: Int = 40) -> [NoteDigest] {
+        sorted.prefix(limit).map {
+            NoteDigest(id: $0.id, title: $0.name, tags: $0.tags, gist: String(text(of: $0).prefix(240)))
+        }
+    }
+
+    private func write(_ text: String, at position: Int) {
+        let note = index.notes[position]
+        index.notes[position].modified = Date()
+        index.notes[position].preview = Self.preview(text)
+        let file = url(of: note)
+        if note.id == index.current {
+            store.flush()
+            try? text.write(to: file, atomically: true, encoding: .utf8)
+            let reloaded = store.switchTo(file)
+            onOpen(reloaded)
+        } else {
+            disk.async { @Sendable in try? text.write(to: file, atomically: true, encoding: .utf8) }
+        }
+        saveIndex()
+    }
+
+    private static func tidy(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        var kept: [String] = []
+        for tag in tags {
+            let name = String(tag.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+            guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
+            kept.append(name)
+        }
+        return Array(kept.prefix(6))
     }
 
     func delete(_ id: UUID) {

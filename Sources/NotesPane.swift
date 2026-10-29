@@ -5,11 +5,19 @@ struct NotesPane: View {
     let editor: NotesEditor
 
     var body: some View {
-        if model.notesView == .library {
-            MyNotes(model: model, editor: editor)
-        } else {
-            NoteEditorPane(model: model, editor: editor)
+        Group {
+            if model.notesView == .library {
+                MyNotes(model: model, editor: editor)
+            } else {
+                NoteEditorPane(model: model, editor: editor)
+            }
         }
+        .overlay(alignment: .bottom) {
+            if let notice = editor.filing.notice {
+                FilingNotice(notice: notice, filing: editor.filing).padding(.bottom, 8)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: editor.filing.notice)
     }
 }
 
@@ -79,6 +87,9 @@ struct NoteNameHeader: View {
                 .onSubmit { focused = false }
                 .onExitCommand { cancel() }
                 .onChange(of: focused) { _, now in if !now { commit() } }
+            if let note = library.currentNote {
+                NoteTags(note: note, library: library)
+            }
             Image(systemName: "books.vertical")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white.opacity(buttonHover ? 1 : 0.75))
@@ -178,6 +189,151 @@ struct ScrollIndicator: View {
         .opacity(metrics.overflows ? 1 : 0)
         .animation(.easeOut(duration: 0.2), value: metrics.overflows)
         .allowsHitTesting(false)
+    }
+}
+
+/// The tags of one note as chips, with add, rename and remove.
+struct NoteTags: View {
+    let note: SavedNote
+    let library: NotesLibrary
+    var limit = 3
+    @State private var adding = false
+    @State private var renaming: String?
+    @State private var typed = ""
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(note.tags.prefix(limit)), id: \.self) { tag in
+                if renaming == tag {
+                    field(for: tag)
+                } else {
+                    Chip(tag: tag, onRemove: { library.removeTag(tag, from: note.id) })
+                        .onTapGesture(count: 2) { start(renaming: tag) }
+                }
+            }
+            if note.tags.count > limit {
+                Text("+\(note.tags.count - limit)")
+                    .font(tiktok(10))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            if adding {
+                field(for: nil)
+            } else if hovering || note.tags.isEmpty {
+                Button { start(renaming: nil) } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(.white.opacity(0.1)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .tip("Add a tag")
+            }
+        }
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    private func field(for tag: String?) -> some View {
+        TextField("", text: $typed)
+            .textFieldStyle(.plain)
+            .font(tiktok(10.5, "Medium"))
+            .foregroundStyle(.white.opacity(0.95))
+            .focused($focused)
+            .frame(width: 72)
+            .padding(.horizontal, 7)
+            .frame(height: 17)
+            .background(Capsule().fill(.white.opacity(0.14)).overlay(Capsule().strokeBorder(.white.opacity(0.2))))
+            .onSubmit { commit(tag) }
+            .onExitCommand { stop() }
+            .onChange(of: focused) { _, now in if !now { commit(tag) } }
+            .onAppear { focused = true }
+    }
+
+    private func start(renaming tag: String?) {
+        typed = tag ?? ""
+        renaming = tag
+        adding = tag == nil
+    }
+
+    private func commit(_ tag: String?) {
+        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            if let tag { library.renameTag(tag, to: name, on: note.id) } else { library.addTag(name, to: note.id) }
+        }
+        stop()
+    }
+
+    private func stop() {
+        adding = false
+        renaming = nil
+        typed = ""
+    }
+
+    private struct Chip: View {
+        let tag: String
+        let onRemove: () -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            HStack(spacing: 3) {
+                Text(tag)
+                    .font(tiktok(10.5, "Medium"))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                if hovering {
+                    Button(action: onRemove) {
+                        Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 17)
+            .background(Capsule().fill(.white.opacity(hovering ? 0.16 : 0.1))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.12))))
+            .contentShape(Capsule())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+        }
+    }
+}
+
+/// Says where a note take was filed and offers one undo.
+struct FilingNotice: View {
+    let notice: NoteFiling.Notice
+    let filing: NoteFiling
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+            Text(notice.text)
+                .font(tiktok(11.5, "Medium"))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+            if notice.undoable {
+                Button("Undo") { filing.undo() }
+                    .buttonStyle(.plain)
+                    .font(tiktok(11.5, "Medium"))
+                    .foregroundStyle(accent)
+                Button { filing.dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+        .background(Capsule().fill(.black.opacity(0.82))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.16))))
+        .transition(.opacity)
     }
 }
 

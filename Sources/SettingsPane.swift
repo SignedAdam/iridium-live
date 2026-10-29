@@ -19,6 +19,7 @@ struct SettingsPane: View {
                     meetings
                     typing
                     hotkeys
+                    notes
                     chatApps
                     captions
                     theme
@@ -162,6 +163,14 @@ struct SettingsPane: View {
             Row("Language") {
                 GlassMenu(selection: $model.settings.meetingLanguage, options: Settings.meetingLanguages).frame(width: 150)
             }
+            Row("When it ends", detail: model.settings.meetingAutoTranscribe
+                ? nil : "The recording waits until you press Transcribe") {
+                Segments(selection: $model.settings.meetingAutoTranscribe,
+                         options: [(true, "Transcribe"), (false, "Later")])
+            }
+            Row("Live transcript", detail: "Words while you record, uses this Mac") {
+                GlassSwitch(isOn: $model.settings.meetingLiveTranscript)
+            }
             Break().containerValue(\.sectionBreak, true)
             Row("Microphone") {
                 GlassSwitch(isOn: $model.settings.meetingMic)
@@ -191,6 +200,7 @@ struct SettingsPane: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.settings.meetingMic)
+        .animation(.easeOut(duration: 0.2), value: model.settings.meetingAutoTranscribe)
         .animation(.easeOut(duration: 0.2), value: model.settings.meetingEngine)
         .animation(.easeOut(duration: 0.2), value: model.settings.summaryProvider)
     }
@@ -217,6 +227,21 @@ struct SettingsPane: View {
                 PasteApps(bundleIDs: $model.settings.pasteApps).frame(width: 150)
             }
         }
+    }
+
+    private var notes: some View {
+        Section("Notes") {
+            Row("File takes by topic",
+                detail: model.settings.notesFiling ? filingDetail : nil,
+                alert: model.settings.notesFiling && !held(ApiKey.named(model.settings.cleanupProvider) ?? ApiKey.openRouter)) {
+                GlassSwitch(isOn: $model.settings.notesFiling)
+            }
+        }
+    }
+
+    private var filingDetail: String {
+        let key = ApiKey.named(model.settings.cleanupProvider) ?? ApiKey.openRouter
+        return held(key) ? "Sorts each take into notes and tags it" : "Needs the \(key.name) key"
     }
 
     private var hotkeys: some View {
@@ -319,13 +344,9 @@ struct SettingsPane: View {
 
     private var recordings: some View {
         Section("Recordings") {
-            Row("Save audio") {
+            Row("Keep audio of every recording", detail: "Failed recordings keep theirs either way") {
                 GlassSwitch(isOn: $model.settings.saveAudio)
             }
-            Row("Split at pauses of") {
-                GlassSlider(value: $model.settings.audioSplitSeconds, range: 0.5...10, step: 0.5) { String(format: "%.1f s", $0) }
-            }
-            .dimmed(!model.settings.saveAudio)
             Row("Folder", detail: model.lastRecording.map { "Latest \($0.file), \(Int($0.seconds.rounded())) s" }) {
                 Button("Open", action: model.onOpenRecordings).buttonStyle(GlassButton())
             }

@@ -1,8 +1,14 @@
 import Foundation
 
+/// A capture failure. `retriable` marks the transient ones: a device that is still coming back
+/// after a route change, or an Objective-C exception raised while the audio setup churns.
 struct AudioError: LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    let retriable: Bool
+    init(_ message: String, retriable: Bool = false) {
+        self.message = message
+        self.retriable = retriable
+    }
     var errorDescription: String? { message }
 }
 
@@ -11,6 +17,7 @@ enum StreamEvent {
     case segmentOpened(AudioSegmentInfo)
     case segmentFinalized(AudioSegmentInfo)
     case level(Float)
+    case note(String)
     case failed(String)
 }
 

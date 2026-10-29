@@ -31,6 +31,8 @@ MainActor.assumeIsolated {
                       recordMic: model.settings.meetingMic,
                       recordSystem: model.settings.meetingSystem,
                       microphoneUID: model.settings.meetingMicrophone,
+                      autoTranscribe: model.settings.meetingAutoTranscribe,
+                      liveTranscript: model.settings.meetingLiveTranscript,
                       summaryProvider: model.settings.summaryProvider,
                       summaryModel: model.settings.summaryModel,
                       hasKey: { Keychain.shared.stored().contains($0) },
@@ -38,7 +40,7 @@ MainActor.assumeIsolated {
     }
     model.meetings = meetings
     let notes = NotesEditor(model: model, library: library)
-    let captions = Captions(screen: screen, settings: model.settings)
+    let captions = Captions(settings: model.settings)
     let keys = KeyboardSink()
     keys.pasteApps = Set(model.settings.pasteApps)
     let typist = Typist(sink: keys)
@@ -46,12 +48,19 @@ MainActor.assumeIsolated {
     let hotkeys = HotkeyMonitor()
     let idle = IdleUnloader()
     let recordings = support.appendingPathComponent("Recordings")
+    let intents = TakeIntents()
+    if TakeRecovery.run(journal: TakeJournal(directory: recordings), history: &model.history, store: history) > 0 {
+        model.show(notice: "Some recordings did not finish. They are in History.")
+    }
     let dock = ChatDock(model: model, directory: support)
     let statusItem = StatusItem(model: model)
     model.chatApps = dock.apps
     model.onEditChatApps = { dock.editProfiles(on: control.window.screen ?? screen) }
     model.onOpenMeetings = { select in
         MeetingsWindow.show(on: control.window.screen ?? screen, model: model, meetings: meetings, select: select)
+    }
+    model.onOpenCorrections = { entry in
+        CorrectionsWindow.show(on: control.window.screen ?? screen, model: model, select: entry)
     }
     let importedMeetings = "legacyMeetingsImported"
     if !UserDefaults.standard.bool(forKey: importedMeetings) {
@@ -111,23 +120,50 @@ MainActor.assumeIsolated {
                 }
                 if !dock.hidesCaptions, !event.text.isEmpty { captions.show(event.text) }
                 if event.failed != nil { model.show(notice: "Cleanup failed. Nothing typed.") }
-                let entry = HistoryEntry(time: Date(), text: event.text, raw: event.raw == event.text ? nil : event.raw,
-                                         destination: model.destination, timing: event.timing,
-                                         audio: event.audio.isEmpty ? nil : event.audio, phrase: event.id,
-                                         session: event.session)
-                history.append(entry)
+                let waitingAt = event.take.flatMap { take in
+                    model.history.lastIndex { ($0.take == take || $0.id.uuidString == take) && $0.spoken.isEmpty }
+                }
+                let waiting = waitingAt.map { model.history[$0] }
+                var entry = HistoryEntry(time: waiting?.time ?? Date(), text: event.text,
+                                         raw: event.raw == event.text ? nil : event.raw,
+                                         destination: waiting?.destination ?? model.destination, timing: event.timing,
+                                         audio: event.audio.isEmpty ? waiting?.audio : event.audio, phrase: event.id,
+                                         session: event.session, corrections: event.correction.map { [$0] })
+                entry.take = waiting?.take ?? event.take
+                entry.takeFile = waiting?.takeFile
+                if let cleanupFailed = event.failed {
+                    entry.state = .failed
+                    entry.failure = cleanupFailed.isEmpty ? "Cleanup failed" : cleanupFailed
+                }
+                if let waitingAt, let waiting {
+                    entry.id = waiting.id
+                    model.history[waitingAt] = entry
+                    history.update(entry)
+                } else {
+                    history.append(entry)
+                    model.history.append(entry)
+                }
                 usage.record(entry)
-                model.history.append(entry)
-                if model.notingNow { notes.append(entry) }
+                if event.late, let take = event.take {
+                    if model.typingNow, !control.window.isKeyWindow, intents.mayType(take, frontApp: model.frontApp) {
+                        typist.sync(entry.spoken, final: true)
+                    } else if !entry.spoken.isEmpty {
+                        model.show(notice: "Dictation saved to History")
+                    }
+                }
+                if model.notingNow || event.take.map({ intents.wantsNotes($0) }) == true { notes.append(entry) }
                 if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
             case "session":
                 let polish = PolishRun(text: event.text, heard: event.heard ?? event.text, cleanup: event.cleanup)
                 if let last = event.phrases.last, let at = model.history.lastIndex(where: { $0.phrase == last }) {
                     model.history[at].polish = polish
+                    if let run = event.correction {
+                        model.history[at].corrections = (model.history[at].corrections ?? []) + [run]
+                    }
                     history.update(model.history[at])
                     usage.record(polish: polish, of: model.history[at])
                 }
-                if event.polished, polish.text != polish.heard {
+                if event.polished, polish.text != polish.heard, !event.late {
                     notes.replaceDictated(with: polish.text)
                     if !control.window.isKeyWindow { typist.revise(to: polish.text) }
                 }
@@ -143,6 +179,9 @@ MainActor.assumeIsolated {
                     } else if let at = model.history.firstIndex(where: { $0.id == id }) {
                         model.history[at].raw = model.history[at].raw ?? model.history[at].text
                         model.history[at].text = event.text
+                        if let run = event.correction {
+                            model.history[at].corrections = (model.history[at].corrections ?? []) + [run]
+                        }
                         history.update(model.history[at])
                     }
                 }
@@ -156,8 +195,59 @@ MainActor.assumeIsolated {
             case "type":
                 if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
                 if !control.window.isKeyWindow { typist.sync(event.text, final: event.final) }
-            case "archive":
-                if let file = event.file { model.lastRecording = (URL(fileURLWithPath: file).lastPathComponent, event.seconds ?? 0) }
+            case "take":
+                guard let take = event.take else { break }
+                let at = model.history.lastIndex { $0.take == take }
+                switch event.takeState {
+                case "recording":
+                    intents.began(take, notes: model.notingNow, app: model.frontApp)
+                    var entry = HistoryEntry(time: event.at.map(Date.init(timeIntervalSince1970:)) ?? Date(), text: "")
+                    entry.destination = model.destination
+                    entry.take = take
+                    entry.takeFile = event.file
+                    entry.state = .pending
+                    history.append(entry)
+                    model.history.append(entry)
+                case "captured":
+                    intents.stopped(take)
+                    if let file = event.file {
+                        model.lastRecording = (URL(fileURLWithPath: file).lastPathComponent, event.seconds ?? 0)
+                    }
+                    guard let at, model.history[at].isPending, let file = event.file,
+                          let seconds = event.seconds, seconds > 0 else { break }
+                    model.history[at].takeFile = file
+                    model.history[at].audio = [AudioRef(file: file, start: 0, end: seconds)]
+                    history.update(model.history[at])
+                case "failed":
+                    intents.forget(take)
+                    guard let at, model.history[at].spoken.isEmpty else { break }
+                    model.history[at].state = .failed
+                    model.history[at].failure = event.status.message
+                    model.history[at].takeFile = event.file ?? model.history[at].takeFile
+                    history.update(model.history[at])
+                    model.show(notice: event.status.message)
+                case "empty", "discarded":
+                    intents.forget(take)
+                    guard let at, model.history[at].spoken.isEmpty else { break }
+                    history.delete(model.history[at].id)
+                    model.history.remove(at: at)
+                default:
+                    intents.forget(take)
+                    guard !event.kept else { break }
+                    for index in model.history.indices where model.history[index].take == take {
+                        model.history[index].audio = nil
+                        model.history[index].takeFile = nil
+                        history.update(model.history[index])
+                    }
+                }
+            case "retake":
+                guard let take = event.take, let id = UUID(uuidString: take) else { break }
+                model.retrying.remove(id)
+                if let failure = event.failed {
+                    model.show(notice: "Retry failed: \(failure)")
+                } else if !event.said {
+                    model.show(notice: "Nothing heard in that recording")
+                }
             case "cleanup": model.cleanup = event.status
             case "work":
                 model.finishing = event.pending && !model.recording
@@ -172,10 +262,11 @@ MainActor.assumeIsolated {
         exit(1)
     }
 
-    let archive = { (settings: Settings) in
-        engine.send(settings.saveAudio ? "archive on \(settings.audioSplitSeconds) \(recordings.path)" : "archive off")
+    let takes = { (settings: Settings) in
+        engine.send("takes \(settings.saveAudio ? "keep" : "drop") \(recordings.path)")
     }
     let configure = {
+        takes(model.settings)
         engine.send("hold \(model.settings.typingHold)")
         if model.settings.cleanupEnabled { engine.send(model.settings.cleanupCommand) }
         if !model.settings.cleanupInstructions.isEmpty { engine.send("instructions " + jsonString(model.settings.cleanupInstructions)) }
@@ -184,8 +275,7 @@ MainActor.assumeIsolated {
         engine.send(model.settings.correctionsCommand)
         engine.send(model.settings.rulesCommand)
         engine.send("compare " + model.settings.openRouterModels.map(\.id).joined(separator: ","))
-        engine.send(model.settings.failureCommand(folder: recordings.path))
-        if model.settings.saveAudio { archive(model.settings) }
+        engine.send(model.settings.failureCommand)
     }
     configure()
     engine.onRestart = {
@@ -212,6 +302,11 @@ MainActor.assumeIsolated {
     model.onCancel = { engine.send("cancel") }
     model.onDeleteHistory = { history.delete($0) }
     model.onRetryHistory = { entry in
+        if entry.spoken.isEmpty, let file = entry.takeFile ?? entry.audio?.first?.file {
+            model.retrying.insert(entry.id)
+            engine.send("retake \(entry.id.uuidString) " + jsonString(file))
+            return
+        }
         let heard = entry.raw ?? entry.text
         guard !heard.isEmpty, model.settings.cleanupEnabled else { return model.show(notice: "Turn on AI cleanup to retry") }
         model.retrying.insert(entry.id)
@@ -292,13 +387,11 @@ MainActor.assumeIsolated {
         if new.cleanupBenchmark != old.cleanupBenchmark { engine.send(new.cleanupBenchmark ? "benchmark on" : "benchmark off") }
         if new.correctionsCommand != old.correctionsCommand { engine.send(new.correctionsCommand) }
         if new.rulesCommand != old.rulesCommand { engine.send(new.rulesCommand) }
-        if new.failureCommand(folder: "") != old.failureCommand(folder: "") {
-            engine.send(new.failureCommand(folder: recordings.path))
-        }
+        if new.failureCommand != old.failureCommand { engine.send(new.failureCommand) }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }
-        if new.saveAudio != old.saveAudio || new.audioSplitSeconds != old.audioSplitSeconds { archive(new) }
+        if new.saveAudio != old.saveAudio { takes(new) }
         if new.hotkeys != old.hotkeys { hotkeys.hotkeys = new.hotkeys }
         captions.apply(new)
         if new.controlHidden != old.controlHidden { control.setHidden(new.controlHidden) }

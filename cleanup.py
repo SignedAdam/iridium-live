@@ -111,13 +111,19 @@ def preface() -> str:
     return f"The user's preferences, which win over the rules and the examples above:\n{_instructions}\n\nPhrase:\n"
 
 
-def context_block(context: str) -> str:
+def trimmed_context(context: str) -> str:
+    """The earlier text as the model gets to see it: one line, cut to the last CONTEXT_CHARS on a word boundary."""
     context = " ".join(context.split())
-    if not context:
-        return ""
     if len(context) > CONTEXT_CHARS:
         context = context[-CONTEXT_CHARS:]
         context = context[context.find(" ") + 1:]
+    return context
+
+
+def context_block(context: str) -> str:
+    context = trimmed_context(context)
+    if not context:
+        return ""
     return (f"Text written so far, for context only. Do not repeat it, do not rewrite it, do not answer it. It "
             f"tells you what the phrase continues, and a correction in the phrase may undo something in it:\n"
             f"…{context}\n\nClean up only this phrase and output only it:\n")
@@ -208,6 +214,16 @@ _CUE = re.compile(r"\b(" + "|".join(map(re.escape, CUES)) + r")\b|^\W*(" + "|".j
 
 def may_correct(text: str) -> bool:
     return bool(_CUE.search(text))
+
+
+def cues_found(text: str) -> list[str]:
+    """The correction cues in the phrase, as spoken, in order."""
+    return [match.group(0).strip() for match in _CUE.finditer(text)]
+
+
+def rules_applied(text: str) -> list[str]:
+    """The named rules that have something to do in this phrase."""
+    return [name for name in _rules if RULES[name][1].search(text)]
 
 
 def correcting_block(context: str, reach: int) -> str:
@@ -339,6 +355,17 @@ class Remote:
                                       {"role": "assistant", "content": clean})]
         self.json_format = True
         self.wait_s: float | None = None
+        self.trace: dict = {}
+
+    def _begin(self, kind: str, text: str, context: str, **extra) -> None:
+        """Starts the record of one cleanup call: what went in and what the model was allowed to see."""
+        self.trace = {"kind": kind, "input": text, "context": context, "cues": [], "rules": rules_applied(text),
+                      "instructions": bool(_instructions), "output": text, "accepted": False, "skipped": False,
+                      "note": "", "edit": None, **extra}
+
+    def _end(self, out: str, **fields) -> None:
+        """Closes the record with what came back and whether it was used."""
+        self.trace.update(output=out, note=self.note, **fields)
 
     def rewrite(self, text: str, context: str = "", retries: int = 0) -> tuple[str, Stats]:
         return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True, retries=retries)
@@ -347,39 +374,51 @@ class Remote:
         settings = _corrections or Corrections(5, 2)
         self.note = ""
         self.connect_ms, self.trip_ms = None, 0.0
+        seen = last_sentences(context, settings.context)
+        self._begin("correct", text, seen, cues=cues_found(text), context_sentences=settings.context,
+                    reach=settings.reach)
         if message := missing_key(self.key):
             self.note = message
             self._state(False, message)
+            self._end(text)
             return text, self._stats(error=message), None
         try:
-            out, usage = self._ask_retrying(retries, text, TIMEOUT_S, last_sentences(context, settings.context),
-                                            correcting=settings.reach)
+            out, usage = self._ask_retrying(retries, text, TIMEOUT_S, seen, correcting=settings.reach)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
+            self._end(text)
             return text, self._stats(error=str(exc), failed=True), None
         self._state(True)
         if self.cut:
             self.note = f"{self.model} cut off"
+            self._end(text)
             return text, self._stats(error="answer cut off", **usage), None
         try:
             answer = json.loads(out.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
             cleaned = " ".join(answer["text"].split())
         except Exception:
             self.note = f"{self.model} gave no JSON"
+            self._end(text)
             return text, self._stats(error="malformed answer", **usage), None
         proposed = answer.get("edit")
         edit = check_edit(proposed, text, editable, settings.reach) if proposed else None
         if edit and remainder_plausible(text, cleaned):
             self.note = f"{self.model} edit"
+            self._end(cleaned, accepted=True, edit={**edit._asdict(), "applied": True})
             return cleaned, self._stats(**usage), edit
         if proposed:
             self.note = f"{self.model} unsafe edit"
+            self._end(text, rejected=cleaned, edit={"find": str(proposed.get("find", "")),
+                                                    "replace": str(proposed.get("replace", "")),
+                                                    "at": -1, "applied": False})
             return text, self._stats(error="edit not applied", **usage), None
         if not plausible(text, cleaned):
             self.note = f"{self.model} implausible"
+            self._end(text, rejected=cleaned)
             return text, self._stats(error="implausible rewrite", **usage), None
         self.note = self.model
+        self._end(cleaned, accepted=True)
         return cleaned, self._stats(**usage), None
 
     def whole(self, text: str) -> tuple[str, Stats]:
@@ -389,26 +428,33 @@ class Remote:
              retries: int = 0) -> tuple[str, Stats]:
         self.note = ""
         self.connect_ms, self.trip_ms = None, 0.0
+        self._begin("polish" if whole else "phrase", text, "" if whole else trimmed_context(context))
         if skippable and not needs_cleanup(text):
+            self._end(text, skipped=True)
             return text, self._stats(skipped=True)
         if message := missing_key(self.key):
             self.note = message
             self._state(False, message)
+            self._end(text)
             return text, self._stats(error=message)
         try:
             out, usage = self._ask_retrying(retries, text, deadline, context, whole)
         except Exception as exc:
             self.note = str(exc)
             self._state(False, f"{self.provider.label}: {exc}")
+            self._end(text)
             return text, self._stats(error=str(exc), failed=True)
         self._state(True)
         if self.cut:
             self.note = f"{self.model} cut off"
+            self._end(text, rejected=out)
             return text, self._stats(error="answer cut off", **usage)
         if not plausible(text, out):
             self.note = f"{self.model} implausible"
+            self._end(text, rejected=out)
             return text, self._stats(error="implausible rewrite", **usage)
         self.note = self.model
+        self._end(out, accepted=True)
         return out, self._stats(**usage)
 
     def _stats(self, *, skipped: bool = False, **fields) -> Stats:

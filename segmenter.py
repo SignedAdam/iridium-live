@@ -18,7 +18,7 @@ VAD_SHA256 = "2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f"
 START_P = 0.50
 END_P = 0.30
 ONSET_S = 0.10
-PREROLL_S = 0.30
+PREROLL_S = 0.60
 FIRST_PARTIAL_S = 0.2
 PARTIAL_EVERY_S = 0.12
 SILENCE_CLOSE_S = 0.7
@@ -77,14 +77,15 @@ class Timing(NamedTuple):
 
 class Segmenter:
 
-    def __init__(self, speech, vad: Vad, *, on_partial=None, on_final=None, on_frame=None):
+    def __init__(self, speech, vad: Vad | None = None, *, on_partial=None, on_final=None, on_frame=None):
         self.speech, self.vad = speech, vad
         self.on_partial = on_partial or (lambda text: None)
-        self.on_final = on_final or (lambda text, timing, audio: None)
+        self.on_final = on_final or (lambda text, timing, audio, take: None)
         self.on_frame = on_frame or (lambda frame, speech, at: None)
         self.pending = np.zeros(0, dtype=np.float32)
         self.preroll: deque[np.ndarray] = deque(maxlen=max(1, round(PREROLL_S * SAMPLE_RATE / FRAME)))
-        self.held: list[tuple[np.ndarray, float, float, float]] = []
+        self.held: list[tuple[np.ndarray, float, float, float, str | None]] = []
+        self.take: str | None = None
         self.clock = 0.0
         self._reset_phrase()
 
@@ -103,6 +104,14 @@ class Segmenter:
         block = np.asarray(block, dtype=np.float32).reshape(-1)
         self.clock = at - self.pending.size / SAMPLE_RATE
         self.pending = np.concatenate([self.pending, block])
+        self.catch_up()
+
+    def catch_up(self) -> None:
+        """Turn waiting audio into frames; audio that arrived before the detector was ready waits here."""
+        if self.vad is None:
+            if self.pending.size > HELD_MAX_S * SAMPLE_RATE:
+                self.pending = self.pending[-round(HELD_MAX_S * SAMPLE_RATE):]
+            return
         while self.pending.size >= FRAME:
             frame, self.pending = self.pending[:FRAME], self.pending[FRAME:]
             self._frame(frame)
@@ -154,25 +163,40 @@ class Segmenter:
         keep = min(len(frames), last_speech + round(FINAL_TAIL_S * SAMPLE_RATE / FRAME))
         audio = np.concatenate(frames[:keep])
         if not self.speech.ready:
-            self.held.append((audio, started_at, last_speech_at, closed))
-            while sum(len(held) for held, _, _, _ in self.held) > HELD_MAX_S * SAMPLE_RATE:
+            self.held.append((audio, started_at, last_speech_at, closed, self.take))
+            while sum(len(held) for held, _, _, _, _ in self.held) > HELD_MAX_S * SAMPLE_RATE:
                 self.held.pop(0)
             return
-        self._decode(audio, started_at, last_speech_at, closed)
+        self._decode(audio, started_at, last_speech_at, closed, self.take)
 
-    def _decode(self, audio: np.ndarray, started: float, last_speech: float, closed: float) -> None:
+    def _decode(self, audio: np.ndarray, started: float, last_speech: float, closed: float,
+                take: str | None) -> None:
         decode_at = time.time()
         text, _, _ = self.speech.transcribe_array(audio)
         if text:
             self.on_final(text, Timing(len(audio) / SAMPLE_RATE, started, last_speech, closed, decode_at,
-                                       time.time()), audio)
+                                       time.time()), audio, take)
 
-    def drain(self) -> None:
-        held, self.held = self.held, []
-        for audio, started, last_speech, closed in held:
-            self._decode(audio, started, last_speech, closed)
+    def waiting(self) -> list[str | None]:
+        """The takes that have audio waiting for a speech model, oldest first."""
+        order: list[str | None] = []
+        for _, _, _, _, take in self.held:
+            if take not in order:
+                order.append(take)
+        return order
+
+    def drain(self, take: str | None) -> None:
+        held, self.held = self.held, [item for item in self.held if item[4] != take]
+        for audio, started, last_speech, closed, item in held:
+            if item == take:
+                self._decode(audio, started, last_speech, closed, take)
+
+    def forget(self, take: str | None) -> None:
+        self.held = [item for item in self.held if item[4] != take]
 
     def finish(self) -> None:
+        if self.vad is None:
+            return
         self.pending = np.zeros(0, dtype=np.float32)
         self.preroll.clear()
         if self.open:
@@ -185,5 +209,6 @@ class Segmenter:
         self.preroll.clear()
         self.held.clear()
         self._reset_phrase()
-        self.vad.reset()
+        if self.vad is not None:
+            self.vad.reset()
 

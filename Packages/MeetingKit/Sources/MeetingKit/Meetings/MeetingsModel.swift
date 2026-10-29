@@ -10,6 +10,8 @@ public final class MeetingsModel {
 
     public private(set) var meetings: [Meeting] = []
     public var selectedID: UUID?
+    /// The meeting that was just recorded, shown in the meeting pane's saved line.
+    public var lastSavedID: UUID?
     public private(set) var progress: [UUID: Double] = [:]
     public private(set) var slow: Set<UUID> = []
     public private(set) var summarizing: Set<UUID> = []
@@ -91,12 +93,14 @@ public final class MeetingsModel {
         coordinator.recordSystem = c.recordSystem
         coordinator.microphoneDeviceUID = c.microphoneUID
         guard coordinator.canRecord else { return }
+        lastSavedID = nil
         var kinds: [AudioStreamKind] = []
         if coordinator.recordMic { kinds.append(.mic) }
         if coordinator.recordSystem { kinds.append(.system) }
-        let liveTranscribers = live.begin(kinds: kinds, languageHint: c.languageHint)
+        let liveTranscribers = c.liveTranscript ? live.begin(kinds: kinds, languageHint: c.languageHint) : [:]
+        if !c.liveTranscript { live.disable() }
         await coordinator.start(liveTranscribers: liveTranscribers)
-        if !coordinator.isRecording { live.cancel() }
+        if !coordinator.isRecording, c.liveTranscript { live.cancel() }
     }
 
     public func stopRecording() async {
@@ -113,12 +117,13 @@ public final class MeetingsModel {
         let meeting = Meeting(from: finished)
         live.end(meetingID: meeting.id)
         if let name = live.namedOther { liveOtherNames[meeting.id] = name }
+        lastSavedID = meeting.id
         meetings.append(meeting)
         sort()
         if !store.save(meeting) {
             lastError = "Your audio is saved, but writing the meeting entry failed."
         }
-        transcribe(meeting.id)
+        if config().autoTranscribe { transcribe(meeting.id) }
     }
 
     public func toggleRecording() {
@@ -268,6 +273,7 @@ public final class MeetingsModel {
         transcriptionTasks[id]?.cancel()
         transcriptionTasks[id] = nil
         if selectedID == id { selectedID = nil }
+        if lastSavedID == id { lastSavedID = nil }
         if playerMeetingID == id {
             player.stop()
             player.loadedURL = nil

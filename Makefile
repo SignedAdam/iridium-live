@@ -2,13 +2,14 @@ APP := .build/Iridium Live.app
 BINARY := $(APP)/Contents/MacOS/Iridium Live
 STAMP := .build/.app
 SOURCES := $(wildcard Sources/*.swift) $(wildcard Packages/ModelCatalog/Sources/*/*.swift)
-ENGINE := live.py segmenter.py asr.py cleanup.py archive.py downloads.py
+ENGINE := live.py segmenter.py asr.py cleanup.py takes.py downloads.py
 FONT := fonts/TikTokSans.ttf
 BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
 CERT := Iridium Live Dev
 
 MKDIR := Packages/MeetingKit
-MKSOURCES := $(wildcard $(MKDIR)/Sources/MeetingKit/*/*.swift) $(MKDIR)/Package.swift
+MKSOURCES := $(wildcard $(MKDIR)/Sources/MeetingKit/*/*.swift) $(wildcard $(MKDIR)/Sources/AudioGuard/*.m) \
+  $(wildcard $(MKDIR)/Sources/AudioGuard/include/*.h) $(MKDIR)/Package.swift
 MKLIB := $(MKDIR)/.build/release/libMeetingKit.a
 MKFLAGS := -I $(MKDIR)/.build/release/Modules \
   -Xcc -fmodule-map-file=$(MKDIR)/.build/checkouts/FluidAudio/Sources/FastClusterWrapper/include/module.modulemap \

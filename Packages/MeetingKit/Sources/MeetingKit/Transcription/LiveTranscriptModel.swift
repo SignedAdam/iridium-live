@@ -11,6 +11,7 @@ public final class LiveTranscriptModel {
         case listening
         case finishing
         case ended
+        case off
         case unavailable(String)
     }
 
@@ -55,6 +56,17 @@ public final class LiveTranscriptModel {
         case .preparing, .listening: status = .finishing
         default: break
         }
+    }
+
+    /// Live transcription is switched off for this meeting: record now, transcribe later.
+    func disable() {
+        stopStreams(cancel: true)
+        session = UUID()
+        startedAt = nil
+        meetingID = nil
+        transcript = LiveTranscript()
+        otherName = ""
+        status = .off
     }
 
     func cancel() {

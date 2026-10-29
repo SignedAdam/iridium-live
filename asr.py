@@ -11,7 +11,20 @@ PARAKEET_REPO = "mlx-community/parakeet-tdt-0.6b-v3"
 MODELS = {"phonon-2": "FermionResearch/Phonon-2", "parakeet": PARAKEET_REPO}
 
 
+def _parakeet_module():
+    """mlx_audio's model package imports seventeen speech models (2.4 s); only parakeet is wanted."""
+    import importlib
+    import importlib.util
+    import sys
+
+    package = "mlx_audio.stt.models"
+    if package not in sys.modules:
+        sys.modules[package] = importlib.util.module_from_spec(importlib.util.find_spec(package))
+    return importlib.import_module(package + ".parakeet")
+
+
 def _engine():
+    _parakeet_module()
     from fermion._speech._engine_phonon2 import load as engine_module
 
     lp, fd = engine_module("load_parakeet"), engine_module("fast_decode")
@@ -59,18 +72,33 @@ def _parakeet_dir(local: bool = False) -> Path | None:
         return None
 
 
+def _parakeet_weights(directory: Path, cache_dir: Path):
+    """The hub ships fp32 (2.4 GB); keep a bf16 copy so a load reads half the bytes and casts nothing."""
+    import mlx.core as mx
+
+    cache = cache_dir / f"parakeet-v3-bf16-{directory.name[:16]}.safetensors"
+    if cache.exists():
+        return mx.load(str(cache))
+    weights = {k: v.astype(mx.bfloat16) for k, v in mx.load(str(directory / "model.safetensors")).items()}
+    mx.eval(list(weights.values()))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for stale in cache_dir.glob("parakeet-v3-bf16-*"):
+        stale.unlink()
+    partial = cache.with_suffix(".partial.safetensors")
+    mx.save_safetensors(str(partial), weights)
+    partial.rename(cache)
+    return weights
+
+
 def load(key: str, cache_dir: Path):
     import mlx.core as mx
 
     started = time.perf_counter()
     fd = _engine()
     if key == "parakeet":
-        from mlx_audio.stt.models.parakeet import Model
-
-        directory = _parakeet_dir()
-        model = Model.from_config(json.loads((directory / "config.json").read_text()))
-        weights = mx.load(str(directory / "model.safetensors"))
-        model.load_weights([(k, v.astype(mx.bfloat16)) for k, v in weights.items()], strict=True)
+        directory = _parakeet_dir(local=True) or _parakeet_dir()
+        model = _parakeet_module().Model.from_config(json.loads((directory / "config.json").read_text()))
+        model.load_weights(list(_parakeet_weights(directory, cache_dir).items()), strict=True)
         mx.eval(model.parameters())
         model.eval()
         fd.install_fast_tdt(model, block=16)
@@ -106,9 +134,8 @@ def _load_phonon2(cache_dir: Path, fd, started: float):
 
 def _packed_from_cache(model_dir: Path, cache: Path, fd, pr):
     import mlx.core as mx
-    from mlx_audio.stt.models.parakeet import Model
 
-    model = Model.from_config(json.loads((model_dir / "config.json").read_text()))
+    model = _parakeet_module().Model.from_config(json.loads((model_dir / "config.json").read_text()))
     weights = mx.load(str(cache))
     packed = []
     for i, layer in enumerate(model.encoder.layers):

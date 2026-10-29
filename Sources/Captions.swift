@@ -7,14 +7,13 @@ final class Captions {
     private static let maxLines: CGFloat = 2
     private let panel: NSPanel
     private let caption = CaptionModel()
-    private let screen: NSScreen
+    private var observer: NSObjectProtocol?
     private var settings: Settings
     private var font = NSFont.boldSystemFont(ofSize: 48)
     private var latest = ""
     private var generation = 0
 
-    init(screen: NSScreen, settings: Settings) {
-        self.screen = screen
+    init(settings: Settings) {
         self.settings = settings
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .screenSaver
@@ -28,16 +27,29 @@ final class Captions {
         panel.contentView = host
         apply(settings)
         panel.orderFrontRegardless()
+        observer = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                          object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.layout() }
+        }
+    }
+
+    /// Sizes and places the captions on the screen the pointer is on, so they follow you across displays and stay
+    /// right when one is plugged in or unplugged.
+    private func layout() {
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
+                ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        let area = screen.visibleFrame
+        let width = (area.width * 0.8).rounded()
+        let height = ceil(font.ascender - font.descender + font.leading) * Self.maxLines + 28
+        let y = settings.captionPosition == .top ? area.maxY - height - 16 : area.minY + 110
+        let frame = NSRect(x: area.midX - width / 2, y: y, width: width, height: height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
 
     func apply(_ settings: Settings) {
         self.settings = settings
         font = Self.font(named: settings.captionFont, size: settings.captionSize)
-        let area = screen.visibleFrame
-        let width = (area.width * 0.8).rounded()
-        let height = ceil(font.ascender - font.descender + font.leading) * Self.maxLines + 28
-        let y = settings.captionPosition == .top ? area.maxY - height - 16 : area.minY + 110
-        panel.setFrame(NSRect(x: area.midX - width / 2, y: y, width: width, height: height), display: true)
+        layout()
         caption.font = Font(font)
         caption.stroke = max(1.5, settings.captionSize * 0.065)
         caption.alignment = settings.captionPosition == .top ? .top : .bottom
@@ -49,6 +61,7 @@ final class Captions {
     func show(_ text: String) {
         latest = text
         guard settings.captionsShown else { return }
+        layout()
         caption.text = tail(of: text)
         caption.visible = true
         generation += 1

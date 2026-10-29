@@ -19,6 +19,7 @@ final class MicrophoneRecorder: StreamRecorder {
                                              sampleRate: 48_000, channels: 1, interleaved: false)!
     private var converter: AVAudioConverter?
     private var convertBuffer: AVAudioPCMBuffer?
+    private var tapInstalled = false
 
     private var ring: AudioRingBuffer?
     private var writer: SegmentedAudioWriter?
@@ -26,6 +27,11 @@ final class MicrophoneRecorder: StreamRecorder {
 
     private var configObserver: NSObjectProtocol?
     private var pendingReconfigure: DispatchWorkItem?
+    private var pendingRetry: DispatchWorkItem?
+    private var retryAttempts = 0
+    private let retryDelay: TimeInterval = 1.5
+    private let maxRetryAttempts = 20
+    private var waitingNoticeSent = false
     private var recoveryTimes: [Date] = []
     private let recoveryWindow: TimeInterval = 20
     private let maxRecoveriesInWindow = 4
@@ -47,11 +53,15 @@ final class MicrophoneRecorder: StreamRecorder {
         writer.onEvent = { [weak self] event in self?.onEvent?(.mic, event) }
         self.writer = writer
 
-        try configureAndStart()
+        do {
+            try configureAndStart()
+            isCapturing = true
+        } catch let error as AudioError where error.retriable {
+            scheduleRetry(after: error)
+        }
         onEvent?(.mic, .formatDetermined(sampleRate: outputFormat.sampleRate, channels: 1))
         writer.start()
         observeConfigurationChanges()
-        isCapturing = true
         lastSampleTime = Date()
     }
 
@@ -67,9 +77,17 @@ final class MicrophoneRecorder: StreamRecorder {
         return convertBuffer != nil
     }
 
-    private func installTap(format: AVAudioFormat) {
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            self?.handle(buffer)
+    private func installTap(format: AVAudioFormat) throws {
+        try guardingAudioExceptions("Opening \(deviceLabel)") {
+            let input = engine.inputNode
+            if tapInstalled {
+                input.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                self?.handle(buffer)
+            }
+            tapInstalled = true
         }
     }
 
@@ -87,7 +105,9 @@ final class MicrophoneRecorder: StreamRecorder {
     }
 
     private func convert(_ input: AVAudioPCMBuffer, with converter: AVAudioConverter) -> AVAudioPCMBuffer? {
-        guard let out = convertBuffer else { return nil }
+        guard input.format.sampleRate == converter.inputFormat.sampleRate,
+              input.format.channelCount == converter.inputFormat.channelCount,
+              let out = convertBuffer else { return nil }
         var consumed = false
         var error: NSError?
         let status = converter.convert(to: out, error: &error) { _, inStatus in
@@ -120,7 +140,7 @@ final class MicrophoneRecorder: StreamRecorder {
     }
 
     private func scheduleReconfigure() {
-        guard isCapturing, !isStopping else { return }
+        guard !isStopping else { return }
         pendingReconfigure?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.reconfigureAfterRouteChange() }
         pendingReconfigure = item
@@ -128,106 +148,182 @@ final class MicrophoneRecorder: StreamRecorder {
     }
 
     private func reconfigureAfterRouteChange() {
-        guard isCapturing, !isStopping else { return }
+        guard !isStopping else { return }
 
         let now = Date()
         recoveryTimes = recoveryTimes.filter { now.timeIntervalSince($0) < recoveryWindow }
         guard recoveryTimes.count < maxRecoveriesInWindow else {
             tearDownCapture()
             isCapturing = false
-            onEvent?(.mic, .failed("\(deviceLabel) keeps changing audio routes, so microphone recording was stopped for this session. A wired or built-in microphone avoids this (Bluetooth headsets switch to a low-quality call mode when used as a mic)."))
+            onEvent?(.mic, .failed("\(deviceLabel) keeps changing audio routes, so microphone recording was stopped for this session. The meeting keeps recording the other side. A wired or built-in microphone avoids this (Bluetooth headsets switch to a low-quality call mode when used as a mic)."))
             return
         }
         recoveryTimes.append(now)
+        attemptCapture()
+    }
 
+    /// One recovery attempt: anything transient (no input format yet, an exception from the
+    /// engine while the route settles) schedules another try instead of ending the stream.
+    private func attemptCapture() {
+        guard !isStopping else { return }
         do {
             try reinstallCapture()
+            retryAttempts = 0
+            pendingRetry?.cancel()
             lastSampleTime = Date()
+            if waitingNoticeSent {
+                waitingNoticeSent = false
+                onEvent?(.mic, .note("\(deviceLabel) is recording again."))
+            }
+        } catch let error as AudioError where error.retriable {
+            scheduleRetry(after: error)
         } catch {
             isCapturing = false
-            onEvent?(.mic, .failed("Microphone unavailable after a route change: \(error.localizedDescription)"))
+            onEvent?(.mic, .failed("\(deviceLabel) is unavailable: \(error.localizedDescription) The meeting keeps recording the other side."))
         }
     }
 
+    private func scheduleRetry(after error: AudioError) {
+        isCapturing = false
+        pendingRetry?.cancel()
+        retryAttempts += 1
+        guard retryAttempts <= maxRetryAttempts else {
+            retryAttempts = 0
+            waitingNoticeSent = false
+            onEvent?(.mic, .failed("\(deviceLabel) did not come back after the audio setup changed. The meeting keeps recording the other side."))
+            return
+        }
+        if !waitingNoticeSent {
+            waitingNoticeSent = true
+            onEvent?(.mic, .note("Waiting for \(deviceLabel): \(error.message)"))
+        }
+        let item = DispatchWorkItem { [weak self] in self?.attemptCapture() }
+        pendingRetry = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay, execute: item)
+    }
+
     private func reinstallCapture() throws {
-        engine.inputNode.removeTap(onBus: 0)
-        if engine.isRunning { engine.stop() }
+        tearDownEngine()
         applyPreferredInputDevice()
         try configureAndStart()
         isCapturing = true
     }
 
+    /// Reads the format the input node has *now*, which is the only format a tap may use.
     private func configureAndStart() throws {
-        let hw = try captureFormat()
-        guard makeConverter(from: hw) else {
+        guard let hardware = currentInputFormat() else {
+            throw AudioError("the input reports no channels or sample rate yet.", retriable: true)
+        }
+        guard makeConverter(from: hardware) else {
             throw AudioError("Could not set up microphone audio conversion.")
         }
-        installTap(format: hw)
-        engine.prepare()
-        try engine.start()
+        try installTap(format: hardware)
+        do {
+            try guardingAudioExceptions("Starting \(deviceLabel)") {
+                engine.prepare()
+                try engine.start()
+            }
+        } catch let error as AudioError {
+            throw error
+        } catch {
+            throw AudioError("the audio engine did not start (\(error.localizedDescription))", retriable: true)
+        }
     }
 
     func pause() {
-        isStopping = true
         pendingReconfigure?.cancel()
-        engine.pause()
+        pendingRetry?.cancel()
+        isStopping = true
+        try? guardingAudioExceptions("Pausing \(deviceLabel)") { engine.pause() }
         isCapturing = false
     }
 
     func resume() throws {
         isStopping = false
-        try engine.start()
-        isCapturing = true
-        lastSampleTime = Date()
+        retryAttempts = 0
+        do {
+            try guardingAudioExceptions("Resuming \(deviceLabel)") { try engine.start() }
+            isCapturing = true
+            lastSampleTime = Date()
+        } catch {
+            try reinstallCapture()
+            lastSampleTime = Date()
+        }
     }
 
     func restart() throws {
-        try reinstallCapture()
-        lastSampleTime = Date()
+        retryAttempts = 0
+        do {
+            try reinstallCapture()
+            lastSampleTime = Date()
+        } catch let error as AudioError where error.retriable {
+            scheduleRetry(after: error)
+        }
     }
 
-    private func captureFormat() throws -> AVAudioFormat {
-        let input = engine.inputNode
-        var f = input.outputFormat(forBus: 0)
-        if f.sampleRate <= 0 {
-            engine.prepare()
-            f = input.outputFormat(forBus: 0)
+    /// A format a tap can be installed with: a real sample rate and at least one channel.
+    private func currentInputFormat() -> AVAudioFormat? {
+        var format: AVAudioFormat?
+        try? guardingAudioExceptions("Reading the microphone format") {
+            let input = engine.inputNode
+            var f = input.outputFormat(forBus: 0)
+            if !usable(f) {
+                engine.prepare()
+                f = input.outputFormat(forBus: 0)
+            }
+            if !usable(f) { f = input.inputFormat(forBus: 0) }
+            format = usable(f) ? f : nil
         }
-        if f.sampleRate <= 0 { f = input.inputFormat(forBus: 0) }
-        guard f.sampleRate > 0 else {
-            throw AudioError("Microphone is unavailable (no input format). Check the microphone permission.")
-        }
-        return f
+        return format
+    }
+
+    private func usable(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0
     }
 
     private func applyPreferredInputDevice() {
-        guard let uid = preferredDeviceUID,
-              let deviceID = AudioDeviceEnumerator.deviceID(forUID: uid),
-              let audioUnit = engine.inputNode.audioUnit else { return }
-        var device = deviceID
-        AudioUnitSetProperty(audioUnit,
-                             kAudioOutputUnitProperty_CurrentDevice,
-                             kAudioUnitScope_Global,
-                             0,
-                             &device,
-                             UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard let uid = preferredDeviceUID, let deviceID = AudioDeviceEnumerator.deviceID(forUID: uid) else { return }
+        try? guardingAudioExceptions("Selecting \(deviceLabel)") {
+            guard let audioUnit = engine.inputNode.audioUnit else { return }
+            var device = deviceID
+            let status = AudioUnitSetProperty(audioUnit,
+                                              kAudioOutputUnitProperty_CurrentDevice,
+                                              kAudioUnitScope_Global,
+                                              0,
+                                              &device,
+                                              UInt32(MemoryLayout<AudioDeviceID>.size))
+            if status != noErr {
+                onEvent?(.mic, .note("\(deviceLabel) could not be selected, using the system input."))
+            }
+        }
+    }
+
+    /// Stops the engine and drops the tap, so the next tap is installed on a clean node.
+    private func tearDownEngine() {
+        try? guardingAudioExceptions("Resetting \(deviceLabel)") {
+            if tapInstalled {
+                engine.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            if engine.isRunning { engine.stop() }
+            engine.reset()
+        }
+        converter = nil
     }
 
     private func tearDownCapture() {
         pendingReconfigure?.cancel()
-        engine.inputNode.removeTap(onBus: 0)
-        if engine.isRunning { engine.stop() }
+        pendingRetry?.cancel()
+        tearDownEngine()
     }
 
     func stop(completion: @escaping () -> Void) {
         isStopping = true
-        pendingReconfigure?.cancel()
+        tearDownCapture()
         if let configObserver {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
         isCapturing = false
         if let writer {
             writer.stop { completion() }

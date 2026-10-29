@@ -10,15 +10,18 @@ struct MyNotes: View {
         let library = editor.library
         VStack(spacing: 0) {
             header(library)
-            if library.notes.isEmpty {
-                Text("No saved notes.")
+            if !library.allTags.isEmpty {
+                tags(library)
+            }
+            if library.listed.isEmpty {
+                Text(library.notes.isEmpty ? "No saved notes." : "No notes with this tag.")
                     .font(tiktok(13))
                     .foregroundStyle(.white.opacity(0.75))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(library.sorted) { note in
+                        ForEach(library.listed) { note in
                             Row(note: note, library: library, current: note.id == library.currentNote?.id,
                                 open: { open(note) }, menu: { items(for: note) })
                         }
@@ -37,6 +40,18 @@ struct MyNotes: View {
             Action(symbol: "chevron.left", tip: "Back to the note") { model.notesView = .editor }
             Text("My notes").font(tiktok(13, "Medium"))
             Spacer()
+            MenuTrigger { sortItems(library) } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.up.arrow.down").font(.system(size: 9, weight: .semibold))
+                    Text(library.order.label).font(tiktok(11, "Medium"))
+                }
+                .foregroundStyle(.white.opacity(0.75))
+                .padding(.horizontal, 7)
+                .frame(height: 18)
+                .background(Capsule().fill(.white.opacity(0.1)))
+                .contentShape(Capsule())
+            }
+            .tip("Sort")
             Action(symbol: "square.and.pencil", tip: "New note") {
                 editor.run(.newNote)
                 model.notesView = .editor
@@ -47,6 +62,34 @@ struct MyNotes: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 6)
+    }
+
+    private func tags(_ library: NotesLibrary) -> some View {
+        let chosen = library.tagFilter
+        let ordered = chosen.map { tag in [tag] + library.allTags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame } }
+            ?? library.allTags
+        return ScrollView(.horizontal) {
+            HStack(spacing: 5) {
+                FilterChip(title: "All", on: chosen == nil) { library.tagFilter = nil }
+                ForEach(ordered, id: \.self) { tag in
+                    FilterChip(title: tag, on: chosen?.caseInsensitiveCompare(tag) == .orderedSame) {
+                        library.tagFilter = chosen?.caseInsensitiveCompare(tag) == .orderedSame ? nil : tag
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .scrollIndicators(.never)
+        .frame(height: 24)
+        .padding(.bottom, 4)
+    }
+
+    private func sortItems(_ library: NotesLibrary) -> [MenuItem] {
+        NotesLibrary.Order.allCases.map { order in
+            MenuItem(id: order.rawValue, title: order.label, checked: library.order == order) {
+                library.order = order
+            }
+        }
     }
 
     private func open(_ note: SavedNote) {
@@ -115,6 +158,7 @@ struct MyNotes: View {
                         if note.favorite {
                             Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.white.opacity(0.9))
                         }
+                        NoteTags(note: note, library: library, limit: 2)
                     }
                     Text(note.preview.isEmpty ? "Empty" : note.preview)
                         .font(tiktok(11.5))
@@ -170,6 +214,30 @@ struct MyNotes: View {
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
             .tip(tip)
+        }
+    }
+
+    private struct FilterChip: View {
+        let title: String
+        let on: Bool
+        let action: () -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: action) {
+                Text(title)
+                    .font(tiktok(11, "Medium"))
+                    .foregroundStyle(.white.opacity(on ? 1 : 0.7))
+                    .lineLimit(1)
+                    .padding(.horizontal, 9)
+                    .frame(height: 20)
+                    .background(Capsule().fill(.white.opacity(on ? 0.2 : hovering ? 0.12 : 0.07))
+                        .overlay(Capsule().strokeBorder(.white.opacity(on ? 0.25 : 0.1))))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
         }
     }
 }

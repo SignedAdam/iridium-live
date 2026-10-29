@@ -156,6 +156,7 @@ final class AppModel {
     var onEditChatApps: () -> Void = {}
     var meetings: MeetingsModel!
     var onOpenMeetings: (UUID?) -> Void = { _ in }
+    var onOpenCorrections: (HistoryEntry?) -> Void = { _ in }
 
     var meetingRecording: Bool { meetings?.isRecording == true }
 
@@ -178,6 +179,10 @@ final class AppModel {
 
     func openMeetings(_ id: UUID? = nil) {
         onOpenMeetings(id)
+    }
+
+    func openCorrections(_ entry: HistoryEntry? = nil) {
+        onOpenCorrections(entry)
     }
 
     func quit() {
@@ -218,13 +223,14 @@ final class AppModel {
         if recording { stopRecording() } else { startRecording(for: nil) }
     }
 
+    /// Recording always starts: the audio reaches disk even while a speech model is still loading.
     @discardableResult
     func startRecording(for action: Hotkey.Action?) -> Bool {
-        guard ready else { return false }
         session = action
         recording = true
         recordingSince = Date()
         onRecord(true)
+        if !ready { show(notice: "Saving your recording while the speech model loads") }
         return true
     }
 
@@ -242,6 +248,14 @@ final class AppModel {
     func toggleNotes() {
         notesCapturing = pane != .notes
         go(to: notesCapturing ? .notes : nil)
+    }
+
+    /// Opens the note and starts speaking into it in one press.
+    func startNoteTake() {
+        notesCapturing = true
+        notesView = .editor
+        if pane != .notes { go(to: .notes) }
+        if !recording { startRecording(for: .note) }
     }
 
     func toggleSettings() {

@@ -19,8 +19,14 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     private var block: NSRange?
     private var applying = false
 
+    /// Where the text filed into other notes ends: everything after it is a note take waiting to be filed.
+    private var mark = 0
+
+    private(set) var filing: NoteFiling!
+
     var isActive = false {
         didSet {
+            if !isActive, oldValue { filing.closed() }
             text.isActive = isActive
             if !isActive, text.window?.firstResponder === text { text.window?.makeFirstResponder(nil) }
             hiding?.cancel()
@@ -92,6 +98,10 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
                 MainActor.assumeIsolated { self?.reportEditing() }
             }
         }
+        mark = (library.initialText as NSString).length
+        filing = NoteFiling(library: library, model: model)
+        filing.pending = { [unowned self] in pendingTake }
+        filing.apply = { [unowned self] kept in replaceTake(with: kept) }
         report()
     }
 
@@ -102,6 +112,42 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     func startParagraph() {
         startsParagraph = true
         block = nil
+        if !filing.hasTake { mark = text.textStorage?.length ?? 0 }
+    }
+
+    /// The text of the note take that has not been filed yet.
+    var pendingTake: String {
+        let whole = text.string as NSString
+        guard mark < whole.length else { return "" }
+        return whole.substring(from: mark)
+    }
+
+    /// Leaves only what filing kept in this note and moves the mark past it.
+    func replaceTake(with kept: String) {
+        guard let storage = text.textStorage else { return }
+        let length = storage.length
+        guard mark <= length else {
+            mark = length
+            return
+        }
+        let range = NSRange(location: mark, length: length - mark)
+        let trimmed = kept.trimmingCharacters(in: .whitespacesAndNewlines)
+        var piece = trimmed
+        if !trimmed.isEmpty, mark > 0, !(storage.string as NSString).substring(to: mark).hasSuffix("\n") {
+            piece = "\n" + trimmed
+        }
+        applying = true
+        text.breakUndoCoalescing()
+        text.undoManager?.disableUndoRegistration()
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: piece, attributes: attributes))
+        text.undoManager?.enableUndoRegistration()
+        applying = false
+        block = nil
+        text.setSelectedRange(NSRange(location: storage.length, length: 0))
+        text.didChangeText()
+        mark = storage.length
+        report()
+        followEnd(animated: false)
     }
 
     func append(_ entry: HistoryEntry) {
@@ -126,6 +172,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
         block = NSRange(location: from, length: storage.length - from)
         text.didChangeText()
         if following { followEnd(animated: true) }
+        filing.noted()
     }
 
     @discardableResult
@@ -170,8 +217,14 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
 
     func textStorage(_ storage: NSTextStorage, didProcessEditing edited: NSTextStorageEditActions,
                      range: NSRange, changeInLength delta: Int) {
-        guard edited.contains(.editedCharacters), !applying, let current = block else { return }
+        guard edited.contains(.editedCharacters), !applying else { return }
         let before = NSRange(location: range.location, length: range.length - delta)
+        if NSMaxRange(before) <= mark {
+            mark = max(0, mark + delta)
+        } else if before.location < mark {
+            mark = before.location
+        }
+        guard let current = block else { return }
         if NSMaxRange(before) <= current.location {
             block = NSRange(location: current.location + delta, length: current.length)
         } else if before.location < NSMaxRange(current) {
@@ -182,6 +235,7 @@ final class NotesEditor: NSObject, NSTextViewDelegate, @preconcurrency NSTextSto
     private func show(_ note: String) {
         text.undoManager?.removeAllActions()
         text.textStorage?.setAttributedString(NSAttributedString(string: note, attributes: attributes))
+        mark = (note as NSString).length
         text.typingAttributes = attributes
         text.setSelectedRange(NSRange(location: (note as NSString).length, length: 0))
         block = nil

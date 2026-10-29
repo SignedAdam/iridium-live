@@ -173,6 +173,9 @@ private struct MeetingPaneBody: View {
     private var engineNote: String {
         let option = EngineFactory.options.first { $0.id == model.settings.meetingEngine }
         guard let option else { return "" }
+        guard model.settings.meetingAutoTranscribe else {
+            return "Meetings are saved without a transcript. Transcribe them with \(option.name) when you want."
+        }
         return option.local ? "\(option.name) writes the transcript on this Mac when the meeting ends."
             : "\(option.name) writes the transcript in the cloud when the meeting ends."
     }
@@ -185,13 +188,16 @@ private struct MeetingPaneBody: View {
     }
 
     private var finished: Meeting? {
-        guard !meetings.isRecording, let id = live.meetingID else { return nil }
+        guard !meetings.isRecording, let id = meetings.lastSavedID else { return nil }
         return meetings.meeting(id)
     }
 
     private func savedLine(_ meeting: Meeting) -> some View {
         HStack(spacing: 8) {
-            Text("Saved").font(tiktok(12.5)).foregroundStyle(.white.opacity(0.75))
+            Text(meeting.state == .none ? "Not transcribed" : "Saved")
+                .font(tiktok(12.5))
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize()
             Text(meeting.title)
                 .font(tiktok(12.5, "Medium"))
                 .foregroundStyle(.white.opacity(0.92))
@@ -204,8 +210,10 @@ private struct MeetingPaneBody: View {
                     .foregroundStyle(.white.opacity(0.75))
             } else if meeting.state == .running {
                 Text("Transcribing").font(tiktok(11)).foregroundStyle(.white.opacity(0.75))
+            } else if meeting.state == .none {
+                TranscribeControl(title: "Transcribe", meeting: meeting, meetings: meetings).fixedSize()
             }
-            Button("Open") { model.openMeetings(meeting.id) }.buttonStyle(GlassButton())
+            Button("Open") { model.openMeetings(meeting.id) }.buttonStyle(GlassButton()).fixedSize()
         }
         .padding(.horizontal, 11)
         .frame(height: 34)
@@ -325,6 +333,7 @@ struct LiveTranscriptView: View {
 
     private var emptyTitle: String {
         switch status {
+        case .off: "Live transcript off"
         case .finishing, .ended: "Nothing was said"
         default: "Listening"
         }
@@ -332,6 +341,7 @@ struct LiveTranscriptView: View {
 
     private var emptyDetail: String {
         switch status {
+        case .off: "The meeting is being recorded. Transcribe it when it ends."
         case .finishing, .ended: "The recording is still saved."
         default: "What you and \(live.namedOther ?? otherSideLabel) say appears here."
         }
@@ -440,7 +450,8 @@ private struct RecentRow: View {
         switch meeting.state {
         case .failed: return "Failed"
         case .running: return "Transcribing"
-        default: return formatTimecode(meeting.duration, includeHours: meeting.duration >= 3600)
+        case .none: return "Not transcribed"
+        case .done: return formatTimecode(meeting.duration, includeHours: meeting.duration >= 3600)
         }
     }
 }

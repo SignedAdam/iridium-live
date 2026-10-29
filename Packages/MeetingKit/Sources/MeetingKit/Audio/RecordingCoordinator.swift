@@ -56,6 +56,8 @@ public final class RecordingCoordinator {
     private var elapsedTimer: Timer?
     private var watchdogTimer: Timer?
     private var lastPersist = Date.distantPast
+    private var failureStatus = ""
+    private var noteStatus = ""
 
     private var recoveryAttempts: [AudioStreamKind: Int] = [:]
     private var nextRecoveryTime: [AudioStreamKind: Date] = [:]
@@ -69,6 +71,8 @@ public final class RecordingCoordinator {
         pausedAccumulated = 0
         micLevel = 0
         systemLevel = 0
+        failureStatus = ""
+        noteStatus = ""
         statusMessage = ""
         micAvailable = recordMic
         systemAvailable = recordSystem
@@ -79,7 +83,7 @@ public final class RecordingCoordinator {
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             if !granted {
                 micAvailable = false
-                statusMessage = "Microphone access denied."
+                appendStatus("Microphone access denied.")
             }
         }
 
@@ -102,7 +106,7 @@ public final class RecordingCoordinator {
             } catch {
                 micAvailable = false
                 m.upsertStream(StreamManifest(kind: .mic, sampleRate: 0, channelCount: 0, unavailableReason: error.localizedDescription))
-                statusMessage = error.localizedDescription
+                appendStatus(error.localizedDescription)
             }
         }
 
@@ -225,6 +229,8 @@ public final class RecordingCoordinator {
             persistManifest(force: true)
         case let .level(level):
             if kind == .mic { micLevel = level } else { systemLevel = level }
+        case let .note(message):
+            setStatus(message)
         case let .failed(message):
             if kind == .mic { micAvailable = false } else { systemAvailable = false }
             var s = m.stream(kind) ?? StreamManifest(kind: kind, sampleRate: 0, channelCount: 0)
@@ -283,8 +289,21 @@ public final class RecordingCoordinator {
         }
     }
 
+    /// Lost streams stay on the status line; the recovery note is replaced each time, so a long
+    /// meeting does not pile up old attempts.
     private func appendStatus(_ message: String) {
-        statusMessage = statusMessage.isEmpty ? message : statusMessage + " " + message
+        guard !failureStatus.contains(message) else { return }
+        failureStatus = failureStatus.isEmpty ? message : failureStatus + " " + message
+        composeStatus()
+    }
+
+    private func setStatus(_ message: String) {
+        noteStatus = message
+        composeStatus()
+    }
+
+    private func composeStatus() {
+        statusMessage = [failureStatus, noteStatus].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     private func persistManifest(force: Bool) {
