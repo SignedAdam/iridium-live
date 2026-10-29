@@ -47,24 +47,33 @@ final class Setup {
     func seen() { UserDefaults.standard.set(true, forKey: Self.seenKey) }
 
     func refresh() {
+        poll()
+        let held = Keychain.shared.stored()
+        keys = Dictionary(uniqueKeysWithValues: ApiKey.all.map { ($0.id, held.contains($0.id)) })
+        openAtLogin = isBundled && SMAppService.mainApp.status == .enabled // a blocking call to the login items service
+    }
+
+    /// The two grants that change in System Settings while the app waits. Cheap, and each is set only when it
+    /// changed, so a poll that finds nothing new redraws nothing.
+    private func poll() {
         let heard = microphone == .granted, trusted = accessibility
-        microphone = switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        let mic: Access = switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: .granted
         case .notDetermined: .notAsked
         default: .denied
         }
-        accessibility = AXIsProcessTrusted()
+        if mic != microphone { microphone = mic }
+        let ax = AXIsProcessTrusted()
+        if ax != accessibility { accessibility = ax }
         if inSystemSettings, (microphone == .granted && !heard) || (accessibility && !trusted) { inSystemSettings = false }
-        let held = Keychain.shared.stored()
-        keys = Dictionary(uniqueKeysWithValues: ApiKey.all.map { ($0.id, held.contains($0.id)) })
-        openAtLogin = isBundled && SMAppService.mainApp.status == .enabled
     }
 
     func watch() {
         watchers += 1
         guard timer == nil else { return }
+        refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            MainActor.assumeIsolated { self.refresh() }
+            MainActor.assumeIsolated { self.poll() }
         }
     }
 

@@ -319,18 +319,27 @@ struct LevelMeter: View {
     }
 }
 
+/// Ticks once a second, on the second of the recording, and only while recording: each tick lays out the whole
+/// control window, hidden panes included.
 struct Clock: View {
     let recording: Bool
     let since: Date
     var size: CGFloat = 15
 
     var body: some View {
-        TimelineView(.periodic(from: since, by: 0.25)) { context in
-            let seconds = recording ? max(0, Int(context.date.timeIntervalSince(since))) : 0
-            Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
-                .font(tiktok(size, "Medium"))
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(recording ? 0.92 : 0.78))
+        if recording {
+            TimelineView(.periodic(from: since, by: 1)) { context in
+                label(max(0, Int(context.date.timeIntervalSince(since))))
+            }
+        } else {
+            label(0)
         }
+    }
+
+    private func label(_ seconds: Int) -> some View {
+        Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
+            .font(tiktok(size, "Medium"))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(recording ? 0.92 : 0.78))
     }
 }

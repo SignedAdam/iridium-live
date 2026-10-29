@@ -25,7 +25,7 @@ struct SettingsPane: View {
                     theme
                     recordings
                     memory
-                    SetupSection(editing: $editingKey)
+                    SetupSection(editing: $editingKey, shown: model.pane == .settings)
                 }
                 .padding(12)
             }
@@ -425,7 +425,9 @@ struct SettingsPane: View {
 @MainActor
 private struct SetupSection: View {
     @Binding var editing: String?
+    let shown: Bool // every pane stays in the view tree, so appearing does not mean being on screen
     private let setup = Setup.shared
+    @State private var watching = false
 
     var body: some View {
         Section("Setup") {
@@ -466,8 +468,14 @@ private struct SetupSection: View {
                 Row("Trouble", detail: trouble, alert: true) { EmptyView() }
             }
         }
-        .onAppear { setup.watch() }
-        .onDisappear { setup.unwatch() }
+        .onChange(of: shown, initial: true) { _, now in
+            guard now != watching else { return }
+            watching = now
+            if now { setup.watch() } else { setup.unwatch() }
+        }
+        .onDisappear {
+            if watching { watching = false; setup.unwatch() }
+        }
     }
 
     private var microphone: String? {
