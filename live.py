@@ -836,13 +836,21 @@ def main() -> None:
         said = finish_dictation(take, take != recorder.take or not recorder.recording)
         close_take(take, takes_module.DONE if said else takes_module.EMPTY)
 
+    def settle() -> None:
+        """The main loop is done for now: work is pending only while a stopped take or a retake still waits."""
+        waiting = [take for take in open_takes if not (take == recorder.take and recorder.recording)]
+        work.set(bool(waiting or queued_retakes))
+
     def fail_takes(reason: str) -> None:
         for take in list(open_takes):
             if take == recorder.take and recorder.recording:
                 continue
             session.forget(take)
             close_take(take, takes_module.FAILED, reason)
-        stopped()
+        for take, _ in queued_retakes:
+            events.send({"kind": "retake", "take": take, "failed": reason})
+        queued_retakes.clear()
+        settle()
 
     def deliver_waiting() -> None:
         """Takes whose audio waited for a model are transcribed in the order they were spoken."""
@@ -862,7 +870,7 @@ def main() -> None:
             if take == recorder.take and recorder.recording:
                 continue
             deliver(take)
-        stopped()
+        settle()
 
     def retake(take: str, path: str) -> None:
         """Transcribe a saved take again, under the history entry that asked for it."""
@@ -925,7 +933,7 @@ def main() -> None:
                 deliver_waiting()
                 while queued_retakes and speech.ready:
                     retake(*queued_retakes.pop(0))
-                    stopped()
+                    settle()
             elif block is STOP:
                 session.finish()
                 if stable.typed:
