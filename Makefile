@@ -2,7 +2,7 @@ APP := .build/Iridium Live.app
 BINARY := $(APP)/Contents/MacOS/Iridium Live
 STAMP := .build/.app
 SOURCES := $(wildcard Sources/*.swift) $(wildcard Packages/ModelCatalog/Sources/*/*.swift)
-ENGINE := live.py segmenter.py asr.py cleanup.py takes.py downloads.py
+ENGINE := live.py segmenter.py asr.py cleanup.py takes.py downloads.py vegeta.py
 FONT := fonts/TikTokSans.ttf
 BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
 CERT := Iridium Live Dev
@@ -38,13 +38,16 @@ $(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGI
 $(MKLIB): $(MKSOURCES)
 	swift build -c release --package-path $(MKDIR) --product MeetingKit
 
-.PHONY: app run check install icon cert clean
+.PHONY: app run check install icon cert clean test
 
 run: $(STAMP)
 	"$(BINARY)" $(if $(WAV),--wav "$(WAV)")
 
 check: $(STAMP)
 	@"$(BINARY)" --check
+
+test:
+	uv run --quiet --python 3.12 --with numpy python -m unittest discover -s tests
 
 install: $(STAMP)
 	rm -rf "/Applications/Iridium Live.app"

@@ -76,7 +76,9 @@ struct ApiKey: Identifiable, Sendable {
                                  site: "console.deepgram.com")
     static let anthropic = ApiKey(id: "anthropic", name: "Anthropic", variable: "ANTHROPIC_API_KEY",
                                   site: "console.anthropic.com/settings/keys")
-    static let cleanup = [groq, openRouter]
+    /// Vegeta, through Citadel: speech to text and cleanup on one key.
+    static let citadel = ApiKey(id: "citadel", name: "Albastov", variable: "CITADEL_API_KEY", site: "admin.albastov.com")
+    static let cleanup = [groq, openRouter, citadel]
     static let meeting = [elevenLabs, assemblyAI, deepgram, anthropic]
     static let all = cleanup + meeting
 

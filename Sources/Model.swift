@@ -125,18 +125,18 @@ final class AppModel {
         return finishing ? "Finishing" : nil
     }
 
-    func show(notice text: String) {
+    func show(notice text: String, seconds: Double = 5) {
         notice = text
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(seconds))
             if self?.notice == text { self?.notice = nil }
         }
     }
 
-    var settings = Settings.load() {
+    var settings = SettingsFile.shared.load() {
         didSet {
             guard settings != oldValue else { return }
-            settings.save()
+            SettingsFile.shared.save(settings)
             Look.shared.apply(settings)
             onSettingsChange(settings, oldValue)
         }

@@ -10,6 +10,8 @@ import threading
 import time
 from typing import NamedTuple
 
+import vegeta
+
 MAX_NEW = 160
 CONTEXT_CHARS = 600
 WHOLE_MAX_NEW = 1400
@@ -34,10 +36,11 @@ class Stats(NamedTuple):
 
 class Failed(RuntimeError):
 
-    def __init__(self, message: str, status: int = 0, wait_s: float | None = None):
+    def __init__(self, message: str, status: int = 0, wait_s: float | None = None, code: str = ""):
         super().__init__(message)
         self.status = status
         self.wait_s = wait_s
+        self.code = code
 
     @property
     def retryable(self) -> bool:
@@ -300,8 +303,13 @@ PROVIDERS = {
                      "max_completion_tokens", ({"reasoning_effort": "none", "reasoning_format": "hidden"},
                                                {"reasoning_effort": "low", "reasoning_format": "hidden"}, {}),
                      {}),
+    "vegeta": Provider("Vegeta", "citadel.albastov.com", "/v1/chat/completions", vegeta.KEY_ENV, "max_tokens",
+                       ({"chat_template_kwargs": {"enable_thinking": False}},), {}),
 }
 TIMEOUT_S = 2.5
+_timeout_s = TIMEOUT_S
+WARM_EVERY_S = 60.0
+WARM_TIMEOUT_S = 30.0
 WHOLE_TIMEOUT_S = 15.0
 THINKING = 256
 SAYS = {401: "key rejected", 402: "no credits", 403: "model not allowed", 404: "no such model",
@@ -334,6 +342,12 @@ def missing_key(key: str) -> str:
     return "" if os.environ.get(env) else f"{env} is not set"
 
 
+def set_timeout(seconds: float) -> None:
+    """How long one phrase may take at the provider, from Settings: the cleanup provider's own value."""
+    global _timeout_s
+    _timeout_s = min(max(seconds, 0.5), 30.0)
+
+
 class Remote:
 
     def __init__(self, key: str, notify=None):
@@ -356,6 +370,7 @@ class Remote:
         self.json_format = True
         self.wait_s: float | None = None
         self.trace: dict = {}
+        self.warmed = float("-inf")
 
     def _begin(self, kind: str, text: str, context: str, **extra) -> None:
         """Starts the record of one cleanup call: what went in and what the model was allowed to see."""
@@ -368,7 +383,7 @@ class Remote:
         self.trace.update(output=out, note=self.note, **fields)
 
     def rewrite(self, text: str, context: str = "", retries: int = 0) -> tuple[str, Stats]:
-        return self._run(text, context=context, whole=False, deadline=TIMEOUT_S, skippable=True, retries=retries)
+        return self._run(text, context=context, whole=False, deadline=_timeout_s, skippable=True, retries=retries)
 
     def correct(self, text: str, context: str, editable: str, retries: int = 0) -> tuple[str, Stats, Edit | None]:
         settings = _corrections or Corrections(5, 2)
@@ -383,10 +398,10 @@ class Remote:
             self._end(text)
             return text, self._stats(error=message), None
         try:
-            out, usage = self._ask_retrying(retries, text, TIMEOUT_S, seen, correcting=settings.reach)
+            out, usage = self._ask_retrying(retries, text, _timeout_s, seen, correcting=settings.reach)
         except Exception as exc:
             self.note = str(exc)
-            self._state(False, f"{self.provider.label}: {exc}")
+            self._state(False, self._say(exc))
             self._end(text)
             return text, self._stats(error=str(exc), failed=True), None
         self._state(True)
@@ -441,7 +456,7 @@ class Remote:
             out, usage = self._ask_retrying(retries, text, deadline, context, whole)
         except Exception as exc:
             self.note = str(exc)
-            self._state(False, f"{self.provider.label}: {exc}")
+            self._state(False, self._say(exc))
             self._end(text)
             return text, self._stats(error=str(exc), failed=True)
         self._state(True)
@@ -472,6 +487,45 @@ class Remote:
                 print(f"cleanup retry {attempt + 1}/{retries} in {wait:.1f} s: {exc}", file=sys.stderr, flush=True)
                 time.sleep(wait)
         raise RuntimeError("unreachable")
+
+    def _say(self, exc: BaseException) -> str:
+        """A failed call as the status line shows it."""
+        if self.name != "vegeta":
+            return f"{self.provider.label}: {exc}"
+        if isinstance(exc, Failed) and exc.status:
+            return vegeta.say(exc.status, exc.code)
+        return vegeta.explain(exc)
+
+    def warm(self) -> bool:
+        """Vegeta unloads a model it has not used for a while: one tiny request while the user is still talking
+        brings it back before the first phrase needs it. At most once a minute; nothing waits for the answer."""
+        if self.name != "vegeta" or missing_key(self.key) or time.monotonic() - self.warmed < WARM_EVERY_S:
+            return False
+        self.warmed = time.monotonic()
+        threading.Thread(target=self._warm, daemon=True).start()
+        return True
+
+    def warm_body(self) -> bytes:
+        return json.dumps({"model": self.model_id, "messages": [{"role": "user", "content": "Hi"}],
+                           "temperature": 0, "stream": False, self.provider.budget: 1,
+                           **self.provider.quiet[0]}).encode()
+
+    def _warm(self) -> None:
+        import http.client
+
+        conn = http.client.HTTPSConnection(self.provider.host, timeout=WARM_TIMEOUT_S)
+        try:
+            conn.request("POST", self.provider.path, self.warm_body(), self._headers())
+            status = conn.getresponse().status
+            print(f"warm-up {self.model_id}: {status}", file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"warm-up {self.model_id}: {exc}", file=sys.stderr, flush=True)
+        finally:
+            conn.close()
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {os.environ[self.provider.key_env]}", "Content-Type": "application/json",
+                "X-Title": "Iridium Live", "User-Agent": vegeta.USER_AGENT, "Connection": "keep-alive"}
 
     def close(self) -> None:
         if self.conn is not None:
@@ -504,7 +558,8 @@ class Remote:
                 break
             status, data = send()
         if status != 200:
-            raise Failed(f"{status} {SAYS.get(status) or _message(data)}", status, self.wait_s)
+            raise Failed(f"{status} {SAYS.get(status) or _message(data)}", status, self.wait_s,
+                         vegeta.error_code(data))
         try:
             body = json.loads(data)
             choice = body["choices"][0]
@@ -565,8 +620,7 @@ class Remote:
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
         import http.client
 
-        headers = {"Authorization": f"Bearer {os.environ[self.provider.key_env]}",
-                   "Content-Type": "application/json", "X-Title": "Iridium Live", "Connection": "keep-alive"}
+        headers = self._headers()
         for retry in (True, False):
             left = deadline - time.monotonic()
             if left <= 0:

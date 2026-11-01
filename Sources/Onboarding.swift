@@ -145,9 +145,9 @@ private struct OnboardingView: View {
 
     private var keysDetail: String {
         let held = ApiKey.cleanup.filter { setup.keys[$0.id] == true }.map(\.name)
-        if !held.isEmpty { return "\(held.joined(separator: " and ")) ready." }
+        if !held.isEmpty { return "\(held.formatted(.list(type: .and))) ready." }
         return keysLater ? "Add keys later in Settings, Setup."
-                         : "A Groq or OpenRouter key turns on AI cleanup."
+                         : "A Groq, OpenRouter or Albastov key turns on AI cleanup."
     }
 
     private var hasCleanupKey: Bool { ApiKey.cleanup.contains { setup.keys[$0.id] == true } }

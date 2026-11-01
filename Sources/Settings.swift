@@ -27,8 +27,12 @@ struct SavedModel: Codable, Hashable, Identifiable {
 struct Settings: Codable, Equatable {
     enum CaptionPosition: String, Codable { case top, bottom }
     enum CleanupFailure: String, Codable { case retry, notify, raw }
+    enum VegetaFallback: String, Codable { case local, fail }
 
     var speechModel = "phonon-2"
+    var vegetaSpeechModel = "parakeet"
+    var vegetaSpeechTimeoutS = 8.0
+    var vegetaFallback = VegetaFallback.local
     var typingHold = 0.7
     var pasteApps = ["so.stencil.tern"] // bundle IDs that get each sentence as one paste instead of typed keys
     var cleanupEnabled = false
@@ -43,6 +47,7 @@ struct Settings: Codable, Equatable {
     var cleanupQuotes = false
     var cleanupFailure = CleanupFailure.raw
     var cleanupRetries = 3
+    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "vegeta": 4]
     var openRouterModels = SavedModel.starters
     var openRouterRecent = SavedModel.starters.map(\.id)
     var captionsShown = true
@@ -71,11 +76,12 @@ struct Settings: Codable, Equatable {
     var summaryModels: [String: String] = [:]
     var notesFiling = true
 
-    static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet")]
+    static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet"), ("vegeta", "Vegeta")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", []),
+        ("vegeta", "Vegeta", []),
     ]
     static let meetingLanguages = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("sv-SE", "Swedish"),
                                    ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"),
@@ -88,16 +94,6 @@ struct Settings: Codable, Equatable {
     ]
     static let captionFonts = ["TikTok Sans", "SF Pro", "SF Pro Rounded", "New York", "Menlo"]
     static let idleChoices = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 h"), (120, "2 h"), (360, "6 h")]
-
-    private static let key = "settings"
-
-    static func load() -> Settings {
-        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) } ?? Settings()
-    }
-
-    func save() {
-        if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
-    }
 
     func cleanupModels(on provider: String) -> [(String, String)] {
         guard provider == "openrouter" else { return Self.cleanupProviders.first { $0.id == provider }?.models ?? [] }
@@ -116,6 +112,7 @@ struct Settings: Codable, Equatable {
 
     var cleanupModel: String {
         get {
+            if cleanupProvider == "vegeta" { return cleanupModels["vegeta"] ?? "" } // an id from Citadel's GET /v1/models
             let offered = cleanupModels(on: cleanupProvider)
             if let picked = cleanupModels[cleanupProvider], offered.contains(where: { $0.0 == picked }) { return picked }
             return cleanupProvider == "openrouter" ? (openRouterRecent.first ?? offered.first?.0 ?? "") : offered.first?.0 ?? ""
@@ -167,6 +164,19 @@ struct Settings: Codable, Equatable {
     var failureCommand: String {
         "failure \(cleanupFailure.rawValue) \(cleanupRetries)"
     }
+
+    var cleanupTimeoutCommand: String {
+        "timeout \(cleanupTimeoutS[cleanupProvider] ?? 2.5)"
+    }
+
+    var vegetaCommand: String {
+        let config: [String: Any] = ["model": vegetaSpeechModel, "timeout_s": vegetaSpeechTimeoutS,
+                                     "fallback": vegetaFallback.rawValue]
+        let data = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return "vegeta " + String(decoding: data, as: UTF8.self)
+    }
+
+    static func knows(_ key: String) -> Bool { CodingKeys(stringValue: key) != nil }
 }
 
 extension Settings {
@@ -175,6 +185,9 @@ extension Settings {
         let fallback = Settings()
         func value<T: Decodable>(_ key: CodingKeys, _ current: T) -> T { (try? saved.decodeIfPresent(T.self, forKey: key)) ?? current }
         speechModel = value(.speechModel, fallback.speechModel)
+        vegetaSpeechModel = value(.vegetaSpeechModel, fallback.vegetaSpeechModel)
+        vegetaSpeechTimeoutS = value(.vegetaSpeechTimeoutS, fallback.vegetaSpeechTimeoutS)
+        vegetaFallback = value(.vegetaFallback, fallback.vegetaFallback)
         typingHold = value(.typingHold, fallback.typingHold)
         pasteApps = value(.pasteApps, fallback.pasteApps)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
@@ -190,6 +203,7 @@ extension Settings {
         cleanupQuotes = value(.cleanupQuotes, fallback.cleanupQuotes)
         cleanupFailure = value(.cleanupFailure, fallback.cleanupFailure)
         cleanupRetries = value(.cleanupRetries, fallback.cleanupRetries)
+        cleanupTimeoutS = value(.cleanupTimeoutS, fallback.cleanupTimeoutS)
         openRouterModels = value(.openRouterModels, fallback.openRouterModels)
         openRouterRecent = value(.openRouterRecent, fallback.openRouterRecent)
         captionsShown = value(.captionsShown, fallback.captionsShown)
@@ -218,6 +232,76 @@ extension Settings {
         summaryProvider = Settings.summaryProviders.contains { $0.id == summary } ? summary : fallback.summaryProvider
         summaryModels = value(.summaryModels, fallback.summaryModels)
         notesFiling = value(.notesFiling, fallback.notesFiling)
+    }
+}
+
+/// Settings live in `settings.json`, which may be edited while the app is closed: the app reads it at launch and
+/// writes every change back, pretty-printed with sorted keys. Keys it does not know are kept. A file that does not
+/// parse is left alone: the app runs on the last good settings (`settings.last-good.json`) and saves nothing until
+/// the next launch. The very first launch writes the file from the settings the app kept in UserDefaults.
+@MainActor
+final class SettingsFile {
+    static let shared = SettingsFile(directory: FileManager.default.urls(for: .applicationSupportDirectory,
+                                                                         in: .userDomainMask)[0]
+        .appendingPathComponent("Iridium Live"))
+
+    let url: URL
+    private let lastGood: URL
+    /// Why the file was not used; while set, nothing is written.
+    private(set) var problem: String?
+    private var unknown: [String: Any] = [:]
+
+    init(directory: URL) {
+        url = directory.appendingPathComponent("settings.json")
+        lastGood = directory.appendingPathComponent("settings.last-good.json")
+    }
+
+    func load() -> Settings {
+        guard let data = FileManager.default.contents(atPath: url.path) else {
+            let settings = UserDefaults.standard.data(forKey: "settings")
+                .flatMap { try? JSONDecoder().decode(Settings.self, from: $0) } ?? Settings()
+            save(settings)
+            return settings
+        }
+        do {
+            let settings = try decode(data)
+            try? data.write(to: lastGood, options: .atomic)
+            return settings
+        } catch {
+            problem = "settings.json has an error: using the last good settings"
+            FileHandle.standardError.write(Data("\(url.path) did not parse, nothing is saved until it does: \(error)\n".utf8))
+            return FileManager.default.contents(atPath: lastGood.path).flatMap { try? decode($0) } ?? Settings()
+        }
+    }
+
+    func save(_ settings: Settings) {
+        guard problem == nil else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let encoded = try? encoder.encode(settings),
+              var object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return }
+        object.merge(unknown) { known, _ in known }
+        guard let data = try? JSONSerialization.data(withJSONObject: object,
+                                                      options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            try data.write(to: lastGood, options: .atomic)
+        } catch {
+            FileHandle.standardError.write(Data("could not write \(url.path): \(error)\n".utf8))
+        }
+    }
+
+    private func decode(_ data: Data) throws -> Settings {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CocoaError(.propertyListReadCorrupt)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let settings = try decoder.decode(Settings.self, from: data)
+        unknown = object.filter { !Settings.knows($0.key) }
+        return settings
     }
 }
 

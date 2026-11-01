@@ -43,6 +43,8 @@ struct PhraseTiming: Codable, Equatable, Sendable {
     var endpointMs: Double
     var queueMs: Double
     var decodeMs: Double
+    /// Where the phrase was transcribed when not on this Mac: "vegeta", and `decodeMs` is the round trip.
+    var via: String?
     var cleanup: Cleanup?
     var totalMs: Double
 }
@@ -176,7 +178,8 @@ struct PhraseTimeline: View {
     private var steps: [Step] {
         var steps = [Step(id: "pause", label: "End of speech", ms: timing.endpointMs, shade: 0.22)]
         if timing.queueMs >= 1 { steps.append(Step(id: "wait", label: "Waiting", ms: timing.queueMs, shade: 0.12)) }
-        steps.append(Step(id: "transcribe", label: "Transcribing", ms: timing.decodeMs, shade: 0.5))
+        steps.append(Step(id: "transcribe", label: timing.via == "vegeta" ? "Vegeta round trip" : "Transcribing",
+                          ms: timing.decodeMs, shade: 0.5))
         guard let cleanup = timing.cleanup else { return steps }
         if let error = cleanup.error {
             steps.append(Step(id: "cleanup", label: "\(cleanup.providerName) failed: \(error)", ms: cleanup.ms, shade: 0.85, alert: true))

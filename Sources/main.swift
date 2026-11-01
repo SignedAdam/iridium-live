@@ -16,11 +16,12 @@ MainActor.assumeIsolated {
     app.setActivationPolicy(.accessory)
     installEditMenu(in: app)
     let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main!
-    let model = AppModel()
-    Look.shared.apply(model.settings)
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Iridium Live")
-    Migration.carryOver(to: support)
+    Migration.carryOver(to: support) // before the settings file is written into that folder
+    let model = AppModel()
+    if let problem = SettingsFile.shared.problem { model.show(notice: problem, seconds: 30) }
+    Look.shared.apply(model.settings)
     let library = NotesLibrary(directory: support)
     let history = HistoryStore(directory: support)
     let usage = UsageLog(directory: support)
@@ -220,11 +221,23 @@ MainActor.assumeIsolated {
                     history.update(model.history[at])
                 case "failed":
                     intents.forget(take)
-                    guard let at, model.history[at].spoken.isEmpty else { break }
-                    model.history[at].state = .failed
-                    model.history[at].failure = event.status.message
-                    model.history[at].takeFile = event.file ?? model.history[at].takeFile
-                    history.update(model.history[at])
+                    guard let at else { break }
+                    if model.history[at].spoken.isEmpty {
+                        model.history[at].state = .failed
+                        model.history[at].failure = event.status.message
+                        model.history[at].takeFile = event.file ?? model.history[at].takeFile
+                        history.update(model.history[at])
+                    } else if let file = event.file {
+                        // Part of the recording came through: the rest is a failed row whose Retry redoes all of it.
+                        var entry = HistoryEntry(time: model.history[at].time, text: "")
+                        entry.destination = model.history[at].destination
+                        entry.take = take
+                        entry.takeFile = file
+                        entry.state = .failed
+                        entry.failure = event.status.message
+                        history.append(entry)
+                        model.history.append(entry)
+                    }
                     model.show(notice: event.status.message)
                 case "empty", "discarded":
                     intents.forget(take)
@@ -248,7 +261,11 @@ MainActor.assumeIsolated {
                 } else if !event.said {
                     model.show(notice: "Nothing heard in that recording")
                 }
-            case "cleanup": model.cleanup = event.status
+            case "cleanup":
+                model.cleanup = event.status
+                if event.status.state == "error", event.status.model?.hasPrefix("vegeta:") == true {
+                    model.show(notice: event.status.message)
+                }
             case "work":
                 model.finishing = event.pending && !model.recording
                 if !event.pending { idle.arm(after: model.idleUnloadMinutes) }
@@ -276,6 +293,8 @@ MainActor.assumeIsolated {
         engine.send(model.settings.rulesCommand)
         engine.send("compare " + model.settings.openRouterModels.map(\.id).joined(separator: ","))
         engine.send(model.settings.failureCommand)
+        engine.send(model.settings.cleanupTimeoutCommand)
+        engine.send(model.settings.vegetaCommand)
     }
     configure()
     engine.onRestart = {
@@ -388,6 +407,8 @@ MainActor.assumeIsolated {
         if new.correctionsCommand != old.correctionsCommand { engine.send(new.correctionsCommand) }
         if new.rulesCommand != old.rulesCommand { engine.send(new.rulesCommand) }
         if new.failureCommand != old.failureCommand { engine.send(new.failureCommand) }
+        if new.cleanupTimeoutCommand != old.cleanupTimeoutCommand { engine.send(new.cleanupTimeoutCommand) }
+        if new.vegetaCommand != old.vegetaCommand { engine.send(new.vegetaCommand) }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }

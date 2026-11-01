@@ -17,8 +17,9 @@ Commands arrive as lines on stdin:
     start | stop | cancel        one recording (a take) from the microphone
     takes keep|drop FOLDER       where takes are written and whether their audio is kept
     retake ID "FILE"             transcribe a saved take again under that history id
-    asr NAME | unload            load or release the speech model
-    cleanup off|PROVIDER:MODEL, polish on|off, rules, corrections, benchmark, compare, failure
+    asr NAME | unload            load or release the speech model; `asr vegeta` loads none and asks Vegeta
+    vegeta {"model", "timeout_s", "fallback"}   how Vegeta transcribes, and what a failed take does
+    cleanup off|PROVIDER:MODEL, polish on|off, rules, corrections, benchmark, compare, failure, timeout SECONDS
     hold SECONDS, instructions "TEXT", context "TEXT", rewrite ID "TEXT"
 
 Events leave as one JSON object per line on stdout:
@@ -54,6 +55,7 @@ import asr
 import cleanup as cleanup_model
 import segmenter as seg
 import takes as takes_module
+import vegeta
 
 TYPE_HOLD_S = 0.7
 STALL_S = 90.0
@@ -64,6 +66,7 @@ SILENT_AFTER_S = 1.0
 CACHE_DIR = Path.home() / ".cache" / "iridium-live"
 if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():
     (CACHE_DIR.parent / "phonon-live").rename(CACHE_DIR)
+ENGINES = sorted([*asr.MODELS, vegeta.ENGINE])
 STOP, QUIT, CONTROL, CANCEL, RESTART = "stop", "quit", "control", "cancel", "restart"
 
 
@@ -140,6 +143,23 @@ class TimedSpeech:
     def ready(self) -> bool:
         return self.speech is not None
 
+    @property
+    def deferred(self) -> bool:
+        """Finals are submitted and come back later as `heard` jobs (Vegeta); else they are decoded here."""
+        return getattr(self.speech, "deferred", False)
+
+    def partial(self, audio, phrase) -> str:
+        if not self.deferred:
+            return self.transcribe_array(audio)[0]
+        answer = self.speech.partial(audio, phrase)
+        if answer is None:
+            return ""
+        text, self.audio_s = answer
+        return text
+
+    def submit(self, audio, take, meta) -> None:
+        self.speech.submit(audio, take, meta)
+
 
 def shared_words(a: list[str], b: list[str]) -> int:
     return next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
@@ -198,6 +218,14 @@ class Work:
                 self.pending = pending
                 self.events.send({"kind": "work", "pending": pending})
 
+    def update(self, pending) -> None:
+        """Decide under the lock: the main loop finishing a take between the check and the event cannot be undone."""
+        with self.lock:
+            now = pending()
+            if now != self.pending:
+                self.pending = now
+                self.events.send({"kind": "work", "pending": now})
+
     def done(self) -> None:
         with self.lock:
             self.pending = False
@@ -207,7 +235,8 @@ class Work:
 class ModelSlot:
     """One model the engine may hold. Speech models load on their own thread: the main loop never waits."""
 
-    def __init__(self, kind: str, events: Events, control: queue.Queue, audio: queue.Queue):
+    def __init__(self, kind: str, events: Events, control: queue.Queue, audio: queue.Queue, remote_speech=None):
+        self.remote_speech = remote_speech
         self.kind, self.events, self.control, self.audio = kind, events, control, audio
         self.want: str | None = None
         self.key: str | None = None
@@ -225,10 +254,14 @@ class ModelSlot:
     def model_id(self, key: str | None) -> str | None:
         if self.kind == "cleanup":
             return key
+        if key == vegeta.ENGINE:
+            return key
         return asr.MODELS.get(key) if key else None
 
     def remote(self, key: str | None) -> bool:
-        return self.kind == "cleanup" and cleanup_model.provider(key) is not None
+        if self.kind == "cleanup":
+            return cleanup_model.provider(key) is not None
+        return key == vegeta.ENGINE
 
     def _hand_over(self) -> None:
         self.control.put(self)
@@ -245,9 +278,16 @@ class ModelSlot:
                 self.say("error", key, message="cleanup runs at a provider: use groq:MODEL or openrouter:MODEL")
                 self.want = self.key
                 return
+            if not key.partition(":")[2]:
+                self.say("error", key, message="no model set")
+                self.want = self.key
+                return
             if message := cleanup_model.missing_key(key):
                 self.say("error", key, message=message)
                 self.want = self.key
+            self._hand_over()
+            return
+        if self.remote(key):
             self._hand_over()
             return
         if self.wedged:
@@ -303,7 +343,7 @@ class ModelSlot:
                 self.say("unloaded", self.want)
             return True
         if self.remote(key):
-            self.model = cleanup_model.Remote(key, self.notify)
+            self.model = cleanup_model.Remote(key, self.notify) if self.kind == "cleanup" else self.remote_speech
             self.key = key
             self.say("ready", key)
             return True
@@ -355,6 +395,21 @@ class ModelSlot:
         self.wedged = True
         self.results.put(("failed", key, "the speech model did not load"))
         self._hand_over()
+
+
+def load_fallback():
+    """Phonon-2 for a take Vegeta could not transcribe. Runs on the lane's own thread, which also decodes with it."""
+    asr.ensure("phonon-2", lambda fraction: None)
+    model = asr.load("phonon-2", CACHE_DIR)
+    asr.warm_up(TimedSpeech(model))
+    print("vegeta fallback: Phonon-2 loaded on this Mac", file=sys.stderr, flush=True)
+    return model
+
+
+def release_fallback() -> None:
+    gc.collect()
+    mx.clear_cache()
+    print("vegeta fallback: Phonon-2 released", file=sys.stderr, flush=True)
 
 
 def _throttled(report, every: float = 0.25):
@@ -571,7 +626,7 @@ class Recorder:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wav", help="on start, play this file at real time instead of opening the microphone")
-    parser.add_argument("--asr", choices=sorted(asr.MODELS), default="phonon-2", help="the speech model to load")
+    parser.add_argument("--asr", choices=ENGINES, default="phonon-2", help="the speech model to load")
     parser.add_argument("--takes", help="write recordings to this folder before the app says where they belong")
     args = parser.parse_args()
     faulthandler.enable()
@@ -586,13 +641,23 @@ def main() -> None:
     session: seg.Segmenter | None = None
 
     def stopped() -> None:
-        work.set(audio.qsize() > 1 or working.is_set() or bool(session and session.open))
+        """Right after a stop: work is pending while the main loop still has the take (a busy loop, or Vegeta)."""
+        take = recorder.take
+        work.update(lambda: take in open_takes)
 
     takes = takes_module.Takes(events)
     if args.takes:
         takes.configure(Path(args.takes).expanduser(), True)
     recorder = Recorder(args.wav, audio, events, takes, stopped, discarding.set)
-    speech_slot = ModelSlot("asr", events, control, audio)
+
+    def tell(text: str) -> None:
+        print(text, file=sys.stderr, flush=True)
+        events.send({"kind": "notice", "text": text})
+
+    lane = vegeta.Lane(vegeta.Client(), lambda phrase: audio.put(Job("heard", (phrase,))),
+                       load_local=load_fallback, release_local=release_fallback, notice=tell)
+    vegeta_failed: dict[str, str] = {}
+    speech_slot = ModelSlot("asr", events, control, audio, vegeta.Speech(lane))
     cleanup_slot = ModelSlot("cleanup", events, control, audio)
     speech = TimedSpeech(None)
     stable = StablePrefix(TYPE_HOLD_S)
@@ -646,6 +711,8 @@ def main() -> None:
                 resume()
                 recorder.start(context)
                 context = ""
+                if isinstance(cleaner := cleanup_slot.model, cleanup_model.Remote):
+                    cleaner.warm()
             elif command == "stop":
                 recorder.stop()
             elif command == "cancel":
@@ -670,12 +737,24 @@ def main() -> None:
             elif command == "benchmark":
                 benchmarking = argument == "on"
                 comparing()
-            elif command == "asr" and argument in asr.MODELS:
+            elif command == "asr" and argument in ENGINES:
                 resume()
                 speech_slot.request(argument)
             elif command == "unload":
                 recorder.stop()
                 speech_slot.suspend()
+                lane.release()
+            elif command == "vegeta":
+                try:
+                    config = json.loads(argument)
+                    lane.configure(config.get("model"), config.get("timeout_s"), config.get("fallback"))
+                except Exception as exc:
+                    print(f"vegeta: {exc}", file=sys.stderr, flush=True)
+            elif command == "timeout":
+                try:
+                    cleanup_model.set_timeout(float(argument))
+                except ValueError:
+                    pass
             elif command in ("instructions", "context", "rewrite", "retake"):
                 payload = argument
                 identifier = ""
@@ -740,10 +819,11 @@ def main() -> None:
         if discarding.is_set():
             return
         send({"kind": "partial", "text": text})
-        if cleanup_slot.model is None and not catching_up[0] and (typed := stable.update(text, speech.audio_s)):
+        if (cleanup_slot.model is None and not catching_up[0] and not lane.pending()
+                and (typed := stable.update(text, speech.audio_s))):
             send({"kind": "type", "text": typed, "final": False})
 
-    def on_final(text: str, timing: seg.Timing, samples: np.ndarray, take: str) -> None:
+    def on_final(text: str, timing: seg.Timing, samples: np.ndarray, take: str, via: str | None = None) -> None:
         if discarding.is_set():
             return
         dictation = dictations.get(take)
@@ -793,6 +873,8 @@ def main() -> None:
                            "decode_ms": round((timing.decoded - timing.decode_at) * 1000),
                            "cleanup": cleanup,
                            "total_ms": round((time.time() - timing.last_speech) * 1000)}
+        if via:
+            final["timing"]["via"] = via
         if heard:
             final["audio"] = heard
         send(final)
@@ -846,6 +928,8 @@ def main() -> None:
             if take == recorder.take and recorder.recording:
                 continue
             session.forget(take)
+            lane.forget(take)
+            vegeta_failed.pop(take, None)
             close_take(take, takes_module.FAILED, reason)
         for take, _ in queued_retakes:
             events.send({"kind": "retake", "take": take, "failed": reason})
@@ -869,7 +953,46 @@ def main() -> None:
         for take in list(open_takes):
             if take == recorder.take and recorder.recording:
                 continue
+            conclude(take)
+        settle()
+
+    def conclude(take: str) -> None:
+        """A stopped take whose phrases are all back: delivered, or failed when Vegeta failed it."""
+        if (take == recorder.take and recorder.recording) or lane.pending(take):
+            return
+        reason = vegeta_failed.pop(take, None)
+        lane.close(take)
+        if reason is None:
             deliver(take)
+        else:
+            close_take(take, takes_module.FAILED, reason)
+
+    def heard(phrase: vegeta.Phrase) -> None:
+        """A phrase back from Vegeta (or from this Mac standing in), in the order it was spoken."""
+        take = phrase.take
+        lane.done(phrase)
+        if take not in open_takes:
+            return
+        recording_it = take == recorder.take and recorder.recording
+        if phrase.error:
+            if take not in vegeta_failed:
+                vegeta_failed[take] = phrase.error
+                tell(phrase.error)
+        elif phrase.text and take not in vegeta_failed:
+            started, last_speech, closed = phrase.meta
+            speech.decode_ms = (phrase.answered_at - phrase.sent_at) * 1000
+            speech.audio_s = len(phrase.audio) / seg.SAMPLE_RATE
+            catching_up[0] = not recording_it
+            try:
+                on_final(phrase.text, seg.Timing(speech.audio_s, started, last_speech, closed, phrase.sent_at,
+                                                 phrase.answered_at), phrase.audio, take,
+                         None if phrase.local else vegeta.ENGINE)
+            finally:
+                catching_up[0] = False
+        if stable.typed and not recording_it and not lane.pending(take):
+            send({"kind": "type", "text": " ".join(stable.typed), "final": True})
+            stable.reset()
+        conclude(take)
         settle()
 
     def retake(take: str, path: str) -> None:
@@ -882,7 +1005,8 @@ def main() -> None:
         base = time.time() - len(samples) / seg.SAMPLE_RATE
         replay.update(file=path, at=base)
         dictations[take] = Dictation(numbered())
-        again = seg.Segmenter(speech, seg.Vad(seg.ensure_vad(CACHE_DIR)), on_final=on_final)
+        now = TimedSpeech(vegeta.Speech(lane, deferred=False)) if speech.deferred else speech
+        again = seg.Segmenter(now, seg.Vad(seg.ensure_vad(CACHE_DIR)), on_final=on_final)
         again.take = take
         try:
             catching_up[0] = True
@@ -891,9 +1015,15 @@ def main() -> None:
                 again.feed(chunk, base + (i + len(chunk)) / seg.SAMPLE_RATE)
             again.finish()
             said = finish_dictation(take, True)
+        except vegeta.Unavailable as exc:
+            dictations.pop(take, None)
+            events.send({"kind": "retake", "take": take, "failed": str(exc)})
+            return
         finally:
             catching_up[0] = False
             replay.update(file="", at=0.0)
+            if now is not speech:
+                lane.release()
         events.send({"kind": "retake", "take": take, "said": said})
 
     session = seg.Segmenter(speech, None, on_partial=on_partial, on_final=on_final)
@@ -936,17 +1066,18 @@ def main() -> None:
                     settle()
             elif block is STOP:
                 session.finish()
-                if stable.typed:
+                take = recorder.take
+                if stable.typed and not lane.pending(take):
                     send({"kind": "type", "text": " ".join(stable.typed), "final": True})
                     stable.reset()
-                take = recorder.take
                 if take is None or take not in open_takes:
                     work.done()
                 elif no_detector[0]:
                     fail_takes("The voice detector did not load")
                 elif speech.ready and session.vad is not None:
                     deliver_waiting()
-                    work.done()
+                    if not lane.pending(take):
+                        work.done()
                 elif speech_slot.loading or (session.vad is None and not no_detector[0]):
                     work.set(True)
                 else:
@@ -963,6 +1094,7 @@ def main() -> None:
                     cancelled = open_takes[-1]
                     dictations.pop(cancelled, None)
                     open_takes.remove(cancelled)
+                    lane.forget(cancelled)
                 work.done()
                 discarding.clear()
             elif isinstance(block, Job):
@@ -977,6 +1109,8 @@ def main() -> None:
                     else:
                         queued_retakes.append(block.data)
                         work.set(True)
+                elif block.kind == "heard":
+                    heard(*block.data)
                 else:
                     identifier, text = block.data
                     written, cost, trace = whole(text)

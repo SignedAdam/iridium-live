@@ -14,7 +14,7 @@ struct SettingsPane: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    speech
+                    speech(proxy)
                     cleanup(proxy)
                     meetings
                     typing
@@ -35,18 +35,44 @@ struct SettingsPane: View {
         .foregroundStyle(.white.opacity(0.88))
     }
 
-    private var speech: some View {
+    @ViewBuilder
+    private func speech(_ proxy: ScrollViewProxy) -> some View {
+        let vegeta = model.settings.speechModel == "vegeta"
         Section("Speech") {
-            Row("Model", detail: status(model.speech), alert: model.speech.state == "error") {
+            Row("Model", detail: vegeta ? "On Vegeta, nothing loaded on this Mac" : status(model.speech),
+                alert: model.speech.state == "error") {
                 Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
             }
+            if vegeta {
+                if Setup.shared.keys[ApiKey.citadel.id] != true { missingKey(ApiKey.citadel, proxy) }
+                Row("When Vegeta fails", detail: model.settings.vegetaFallback == .local
+                    ? "Phonon-2 on this Mac takes over that recording" : "The recording waits in History, with Retry",
+                    inset: 14) {
+                    Segments(selection: $model.settings.vegetaFallback, options: [(.local, "This Mac"), (.fail, "Fail")])
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: vegeta)
+    }
+
+    private func missingKey(_ key: ApiKey, _ proxy: ScrollViewProxy) -> some View {
+        Line(inset: 14) {
+            Text("No \(key.name) key").foregroundStyle(accent)
+            Spacer(minLength: 8)
+            Button("Add key") {
+                editingKey = key.id
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(key.id, anchor: .center) }
+            }
+            .buttonStyle(GlassButton())
         }
     }
 
     @ViewBuilder
     private func cleanup(_ proxy: ScrollViewProxy) -> some View {
-        let openRouter = model.settings.cleanupProvider == "openrouter"
-        let key = openRouter ? ApiKey.openRouter : ApiKey.groq
+        let provider = model.settings.cleanupProvider
+        let openRouter = provider == "openrouter"
+        let key = provider == "vegeta" ? ApiKey.citadel : openRouter ? ApiKey.openRouter : ApiKey.groq
         let saved = model.settings.savedModelsByRecency
         let recent = Array(saved.prefix(3))
         let others = Array(saved.dropFirst(3))
@@ -61,17 +87,7 @@ struct SettingsPane: View {
                     Segments(selection: $model.settings.cleanupProvider,
                              options: Settings.cleanupProviders.map { ($0.id, $0.name) })
                 }
-                if Setup.shared.keys[key.id] != true {
-                    Line(inset: 14) {
-                        Text("No \(key.name) key").foregroundStyle(accent)
-                        Spacer(minLength: 8)
-                        Button("Add key") {
-                            editingKey = key.id
-                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(key.id, anchor: .center) }
-                        }
-                        .buttonStyle(GlassButton())
-                    }
-                }
+                if Setup.shared.keys[key.id] != true { missingKey(key, proxy) }
                 if openRouter {
                     ForEach(recent) { item in
                         ModelRow(item: item, chosen: item.id == model.settings.cleanupModel) { choose(item) }
@@ -81,6 +97,24 @@ struct SettingsPane: View {
                         if !others.isEmpty { ModelMenu(others: others, use: choose) }
                         Spacer(minLength: 0)
                         Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
+                    }
+                } else if provider == "vegeta" {
+                    Row("Model", detail: model.settings.cleanupModel.isEmpty ? "Needed" : nil,
+                        alert: model.settings.cleanupModel.isEmpty, inset: 14) {
+                        let ids = CitadelModels.shared.ids
+                        if ids.isEmpty {
+                            ModelField(id: $model.settings.cleanupModel)
+                        } else {
+                            let current = model.settings.cleanupModel
+                            GlassMenu(selection: $model.settings.cleanupModel,
+                                      options: (ids.contains(current) || current.isEmpty ? ids : [current] + ids)
+                                          .map { ($0, $0) },
+                                      label: current.isEmpty ? "Choose" : nil)
+                                .frame(width: 180)
+                        }
+                    }
+                    .task(id: model.pane == .settings && Setup.shared.keys[ApiKey.citadel.id] == true) {
+                        if model.pane == .settings { CitadelModels.shared.load() }
                     }
                 } else {
                     Row("Model", inset: 14) {
@@ -484,6 +518,32 @@ private struct SetupSection: View {
         case .denied: "Off. Turn on in System Settings."
         case .notAsked: "Not requested yet."
         }
+    }
+}
+
+/// A model id typed in, for when Citadel's model list did not come; saved on Return or Save, not on every key.
+@MainActor
+private struct ModelField: View {
+    @Binding var id: String
+    @State private var typed = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("vegeta-fast", text: $typed)
+                .textFieldStyle(.plain)
+                .font(tiktok(12))
+                .padding(.horizontal, 9)
+                .frame(width: 150, height: 24)
+                .background(Pill(fill: 0.08))
+                .onSubmit(store)
+            if typed != id { Button("Save", action: store).buttonStyle(GlassButton()) }
+        }
+        .onAppear { typed = id }
+        .onChange(of: id) { _, now in typed = now }
+    }
+
+    private func store() {
+        id = typed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

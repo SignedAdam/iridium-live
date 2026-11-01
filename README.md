@@ -1,7 +1,7 @@
 # Iridium Live
 
 Dictation app for macOS. Speech recognition runs locally on the GPU with
-[Phonon-2](https://huggingface.co/FermionResearch/Phonon-2).
+[Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), or on Vegeta through the Citadel API.
 
 ![Captions at the top of the screen and a note being dictated](docs/hero.png)
 
@@ -20,8 +20,15 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   If no sound arrives, the status line says so.
 - **WhatsApp and Telegram:** a record button in the chat window. Stream mode types while you speak. Collect mode
   inserts the whole message at the end and can send it.
-- **AI cleanup** (optional, Groq or OpenRouter): removes filler words and formats numbers, dates and links. Custom
-  instructions.
+- **AI cleanup** (optional, Groq, OpenRouter or Vegeta): removes filler words and formats numbers, dates and links.
+  Custom instructions.
+- **Vegeta** (optional, Albastov key): Settings, Speech, Vegeta sends each phrase to Citadel's
+  `/v1/audio/transcriptions` and loads no speech model on this Mac. Phrases come back in the order they were spoken;
+  captions ask at most once a second. When Vegeta is offline, busy past its queue timeout or slower than the speech
+  timeout, the take is finished on this Mac with Phonon-2 (or fails with Retry, `vegetaFallback: "fail"`), and the
+  next take tries Vegeta again. Cleanup can run on Vegeta too, with any model from Citadel's `GET /v1/models`; when a
+  recording starts (at most once a minute) a one-token request goes out, so a model Vegeta unloaded while idle is
+  loaded again while you speak. History shows the round trip where it shows decoding time for this Mac.
 - **Models window:** every OpenRouter model and provider with latency, throughput, price, context and uptime, measured
   per provider. Sort, resize, reorder, show or hide any column. Star a model and provider to save it to My models,
   then pick from the last three in Settings.
@@ -102,8 +109,10 @@ keychain. The speech model (about 1 GB) downloads on first use.
 
 - Audio stays on your Mac. Each recording is written while you speak and deleted once transcribed, unless Keep audio
   is on. Failed recordings keep theirs.
-- With AI cleanup on, text is sent to Groq or OpenRouter: the new text, the earlier text of the same recording, and
-  the end of the current note. Filing notes by topic sends the new note text and the titles and tags of your notes.
+- With AI cleanup on, text is sent to Groq, OpenRouter or Citadel (Vegeta): the new text, the earlier text of the
+  same recording, and the end of the current note. Filing notes by topic sends the new note text and the titles and
+  tags of your notes.
+- With Vegeta as the speech model, the audio of each phrase is sent to Citadel.
 
 ## Files
 
@@ -111,6 +120,7 @@ keychain. The speech model (about 1 GB) downloads on first use.
 
 | | |
 |---|---|
+| `settings.json` | settings, see below |
 | `notes.txt` | unsaved note |
 | `Notes/` | saved notes |
 | `journal.txt` | everything dictated, in order |
@@ -123,6 +133,30 @@ keychain. The speech model (about 1 GB) downloads on first use.
 
 Engine log: `~/Library/Logs/Iridium Live/engine.log`
 
+## Settings file
+
+Settings are in `~/Library/Application Support/Iridium Live/settings.json`, pretty-printed with sorted keys, one key
+per setting. To change one by hand: quit Iridium Live, edit the file, open the app again (the app reads it only at
+launch, and writes it on every change in Settings). Keys the app does not know are kept.
+
+If the file does not parse, the app says so in the status line, runs on the last good settings
+(`settings.last-good.json`) and leaves the file as it is until the next launch; fix it and reopen. The first launch
+with no file writes it from the settings of earlier versions.
+
+For Vegeta:
+
+| Key | Default | |
+|---|---|---|
+| `speechModel` | `"phonon-2"` | `"vegeta"` transcribes on Vegeta; also `"parakeet"` |
+| `vegetaSpeechModel` | `"parakeet"` | Citadel's speech model |
+| `vegetaSpeechTimeoutS` | `8` | longest wait for one phrase before the fallback |
+| `vegetaFallback` | `"local"` | `"local"`: finish the take with Phonon-2 on this Mac; `"fail"`: History shows it failed, with Retry |
+| `cleanupProvider` | `"openrouter"` | `"vegeta"` cleans up on Vegeta |
+| `cleanupModels` | `{}` | per provider; `"vegeta"` takes a model id from Citadel's `GET /v1/models` |
+| `cleanupTimeoutS` | `{"groq": 2.5, "openrouter": 2.5, "vegeta": 4}` | longest cleanup of one phrase, per provider, 0.5 to 30 s |
+
+The Albastov key (`CITADEL_API_KEY`) is in the login keychain like the other keys: Settings, Setup.
+
 ## Code
 
 | | |
@@ -131,7 +165,9 @@ Engine log: `~/Library/Logs/Iridium Live/engine.log`
 | `live.py` | the speech engine (Python, MLX), run by the app as a child process |
 | `segmenter.py` | voice detection; splits speech at pauses |
 | `asr.py` | Phonon-2 and Parakeet |
-| `cleanup.py` | AI cleanup with Groq and OpenRouter |
+| `vegeta.py` | speech to text on Vegeta through Citadel, with Phonon-2 on this Mac as the fallback |
+| `cleanup.py` | AI cleanup with Groq, OpenRouter and Vegeta |
+| `tests/` | Python tests (`make test`) |
 | `takes.py` | saves every recording while you speak |
 | `downloads.py` | downloads the speech model |
 | `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |

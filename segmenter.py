@@ -79,6 +79,7 @@ class Segmenter:
 
     def __init__(self, speech, vad: Vad | None = None, *, on_partial=None, on_final=None, on_frame=None):
         self.speech, self.vad = speech, vad
+        self.partials = on_partial is not None  # a retake has no captions: decoding partials for it is wasted
         self.on_partial = on_partial or (lambda text: None)
         self.on_final = on_final or (lambda text, timing, audio, take: None)
         self.on_frame = on_frame or (lambda frame, speech, at: None)
@@ -146,9 +147,9 @@ class Segmenter:
         quiet = (len(self.frames) - self.last_speech) * FRAME >= SILENCE_CLOSE_S * SAMPLE_RATE
         if quiet or len(self.frames) * FRAME >= MAX_PHRASE_S * SAMPLE_RATE:
             self._finalize(self.clock + FRAME / SAMPLE_RATE)
-        elif (self.speech.ready and len(self.frames) >= self.next_partial
+        elif (self.partials and self.speech.ready and len(self.frames) >= self.next_partial
               and self.speech_frames * FRAME >= MIN_SPEECH_S * SAMPLE_RATE):
-            text, _, _ = self.speech.transcribe_array(np.concatenate(self.frames))
+            text = self.speech.partial(np.concatenate(self.frames), (self.take, self.started_at))
             if text:
                 self.on_partial(text)
             self.next_partial = len(self.frames) + round(PARTIAL_EVERY_S * SAMPLE_RATE / FRAME)
@@ -171,6 +172,9 @@ class Segmenter:
 
     def _decode(self, audio: np.ndarray, started: float, last_speech: float, closed: float,
                 take: str | None) -> None:
+        if self.speech.deferred:
+            self.speech.submit(audio, take, (started, last_speech, closed))
+            return
         decode_at = time.time()
         text, _, _ = self.speech.transcribe_array(audio)
         if text:
