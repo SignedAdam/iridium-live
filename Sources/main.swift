@@ -74,6 +74,21 @@ MainActor.assumeIsolated {
             if count > 0 { model.show(notice: "Imported \(count) meetings") }
         }
     }
+    // keys.json beside settings.json ({"citadel": "…"}, ids from ApiKey): moved into the Keychain at launch, then
+    // deleted, so keys can be set while the app is closed without ever living in a file.
+    let keysFile = SettingsFile.shared.url.deletingLastPathComponent().appendingPathComponent("keys.json")
+    if let data = try? Data(contentsOf: keysFile) {
+        if let keys = try? JSONDecoder().decode([String: String].self, from: data) {
+            let known = keys.filter { ApiKey.named($0.key) != nil }
+            let failed = known.filter { Keychain.shared.set($0.value, for: $0.key) != errSecSuccess }.keys.sorted()
+            if failed.isEmpty { try? FileManager.default.removeItem(at: keysFile) }
+            model.show(notice: failed.isEmpty ? "Saved \(known.count) key(s) from keys.json"
+                                              : "keys.json: the keychain refused \(failed.joined(separator: ", "))")
+            Setup.shared.refresh()
+        } else {
+            model.show(notice: "keys.json has an error: nothing imported")
+        }
+    }
     if Setup.shared.needsOnboarding {
         OnboardingPanel.show(on: screen)
     }

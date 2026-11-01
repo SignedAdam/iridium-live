@@ -157,6 +157,9 @@ For Vegeta:
 
 The Albastov key (`CITADEL_API_KEY`) is in the login keychain like the other keys: Settings, Setup.
 
+
+Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Sources/Keychain.swift`) next to `settings.json` while the app is closed. At launch the app moves them into the Keychain and deletes the file.
+
 ## Code
 
 | | |
