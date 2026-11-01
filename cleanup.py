@@ -11,6 +11,7 @@ import time
 from typing import NamedTuple
 
 import vegeta
+import vegeta_live
 
 MAX_NEW = 160
 CONTEXT_CHARS = 600
@@ -32,6 +33,8 @@ class Stats(NamedTuple):
     cost_usd: float | None = None
     error: str | None = None
     failed: bool = False
+    ttft_ms: int | None = None  # Vegeta Live: the first token, as this Mac saw it
+    stream_ms: dict | None = None  # Vegeta Live: the stream's own timings for the call
 
 
 class Failed(RuntimeError):
@@ -305,7 +308,12 @@ PROVIDERS = {
                      {}),
     "vegeta": Provider("Vegeta", "citadel.albastov.com", "/v1/chat/completions", vegeta.KEY_ENV, "max_tokens",
                        ({"chat_template_kwargs": {"enable_thinking": False}},), {}),
+    # The same Citadel chat, over the live stream; the HTTP path above when the stream is down.
+    "vegeta-live": Provider("Vegeta Live", "citadel.albastov.com", "/v1/chat/completions", vegeta.KEY_ENV,
+                            "max_tokens", ({"chat_template_kwargs": {"enable_thinking": False}},), {}),
 }
+VEGETA = ("vegeta", vegeta_live.ENGINE)
+_stream: vegeta_live.Stream | None = None
 TIMEOUT_S = 2.5
 _timeout_s = TIMEOUT_S
 WARM_EVERY_S = 60.0
@@ -348,6 +356,12 @@ def set_timeout(seconds: float) -> None:
     _timeout_s = min(max(seconds, 0.5), 30.0)
 
 
+def set_stream(stream: vegeta_live.Stream | None) -> None:
+    """The live stream provider vegeta-live talks over."""
+    global _stream
+    _stream = stream
+
+
 class Remote:
 
     def __init__(self, key: str, notify=None):
@@ -364,6 +378,9 @@ class Remote:
         self.note = ""
         self.connect_ms: int | None = None
         self.trip_ms = 0.0
+        self.via = self.name  # where the last call went: vegeta-live falls back to vegeta's HTTP path
+        self.ttft_ms: int | None = None
+        self.stream_ms: dict | None = None
         self.shots = [message for phrase, clean in SHOTS
                       for message in ({"role": "user", "content": phrase},
                                       {"role": "assistant", "content": clean})]
@@ -388,7 +405,7 @@ class Remote:
     def correct(self, text: str, context: str, editable: str, retries: int = 0) -> tuple[str, Stats, Edit | None]:
         settings = _corrections or Corrections(5, 2)
         self.note = ""
-        self.connect_ms, self.trip_ms = None, 0.0
+        self._fresh()
         seen = last_sentences(context, settings.context)
         self._begin("correct", text, seen, cues=cues_found(text), context_sentences=settings.context,
                     reach=settings.reach)
@@ -442,7 +459,7 @@ class Remote:
     def _run(self, text: str, *, context: str, whole: bool, deadline: float, skippable: bool,
              retries: int = 0) -> tuple[str, Stats]:
         self.note = ""
-        self.connect_ms, self.trip_ms = None, 0.0
+        self._fresh()
         self._begin("polish" if whole else "phrase", text, "" if whole else trimmed_context(context))
         if skippable and not needs_cleanup(text):
             self._end(text, skipped=True)
@@ -472,8 +489,12 @@ class Remote:
         self._end(out, accepted=True)
         return out, self._stats(**usage)
 
+    def _fresh(self) -> None:
+        self.connect_ms, self.trip_ms, self.ttft_ms, self.stream_ms, self.via = None, 0.0, None, None, self.name
+
     def _stats(self, *, skipped: bool = False, **fields) -> Stats:
-        return Stats(self.name, self.model, skipped, connect_ms=self.connect_ms, **fields)
+        return Stats(self.via, self.model, skipped, connect_ms=self.connect_ms, ttft_ms=self.ttft_ms,
+                     stream_ms=self.stream_ms, **fields)
 
     def _ask_retrying(self, retries: int, text: str, deadline_s: float, context: str = "", whole: bool = False,
                       correcting: int | None = None) -> tuple[str, dict]:
@@ -490,7 +511,7 @@ class Remote:
 
     def _say(self, exc: BaseException) -> str:
         """A failed call as the status line shows it."""
-        if self.name != "vegeta":
+        if self.name not in VEGETA:
             return f"{self.provider.label}: {exc}"
         if isinstance(exc, Failed) and exc.status:
             return vegeta.say(exc.status, exc.code)
@@ -499,7 +520,7 @@ class Remote:
     def warm(self) -> bool:
         """Vegeta unloads a model it has not used for a while: one tiny request while the user is still talking
         brings it back before the first phrase needs it. At most once a minute; nothing waits for the answer."""
-        if self.name != "vegeta" or missing_key(self.key) or time.monotonic() - self.warmed < WARM_EVERY_S:
+        if self.name not in VEGETA or missing_key(self.key) or time.monotonic() - self.warmed < WARM_EVERY_S:
             return False
         self.warmed = time.monotonic()
         threading.Thread(target=self._warm, daemon=True).start()
@@ -513,6 +534,16 @@ class Remote:
     def _warm(self) -> None:
         import http.client
 
+        if self.name == vegeta_live.ENGINE and _stream is not None:
+            try:
+                _stream.chat(json.loads(self.warm_body()), time.monotonic() + WARM_TIMEOUT_S)
+                print(f"warm-up {self.model_id}: done over the stream", file=sys.stderr, flush=True)
+                return
+            except vegeta.Unavailable:
+                pass  # no live socket: the HTTP way, as the phrases go
+            except Exception as exc:
+                print(f"warm-up {self.model_id}: {exc}", file=sys.stderr, flush=True)
+                return
         conn = http.client.HTTPSConnection(self.provider.host, timeout=WARM_TIMEOUT_S)
         try:
             conn.request("POST", self.provider.path, self.warm_body(), self._headers())
@@ -618,6 +649,14 @@ class Remote:
         }).encode()
 
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
+        if self.name == vegeta_live.ENGINE and _stream is not None:
+            try:
+                return self._streamed(payload, deadline)
+            except vegeta.Unavailable:
+                self.via = "vegeta"  # no live socket for the rest of this take: Citadel over HTTP
+        return self._http_trip(payload, deadline)
+
+    def _http_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
         import http.client
 
         headers = self._headers()
@@ -655,6 +694,22 @@ class Remote:
                 if fresh or not retry:
                     raise
         raise RuntimeError("unreachable")
+
+    def _streamed(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
+        """The same body over the live stream, answered as an HTTP call would be: status and JSON body."""
+        self.via = vegeta_live.ENGINE
+        sent = time.perf_counter()
+        try:
+            chat = _stream.chat(json.loads(payload), deadline)
+        except vegeta_live.Refused as exc:
+            self.trip_ms = (time.perf_counter() - sent) * 1000
+            return exc.status or 500, json.dumps({"error": {"code": exc.code, "message": str(exc)}}).encode()
+        except TimeoutError:
+            raise TimeoutError("timed out") from None
+        self.trip_ms = (time.perf_counter() - sent) * 1000
+        self.ttft_ms, self.stream_ms, self.wait_s = chat.ttft_ms, chat.ms, None
+        return 200, json.dumps({"choices": [{"message": {"content": chat.text}, "finish_reason": chat.finish}],
+                                "usage": chat.usage}).encode()
 
 
 def _message(data: bytes) -> str:

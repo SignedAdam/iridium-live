@@ -5,6 +5,9 @@ handed on in the order they were spoken. Partials, the captions while a phrase i
 time on the audio so far, at most every PARTIAL_EVERY_S, and an answer for a phrase that has closed is dropped.
 A final that fails either moves the rest of its take to Phonon-2 on this Mac (fallback "local") or fails the take
 (fallback "fail"); the next take tries Vegeta again. The take's audio is on disk either way (takes.py).
+
+With a live stream (vegeta_live.py, engine "vegeta-live") finals and captions go over its socket first; a final the
+socket cannot answer gives the stream up for the rest of the take, and that phrase and the rest take the path above.
 """
 from __future__ import annotations
 
@@ -86,14 +89,19 @@ def explain(exc: BaseException) -> str:
     return str(exc)
 
 
+def pcm16(samples: np.ndarray) -> bytes:
+    """16 kHz mono float samples as little-endian 16-bit PCM."""
+    return (np.clip(np.round(np.asarray(samples, dtype=np.float32) * 32767.0), -32768, 32767)
+            .astype("<i2").tobytes())
+
+
 def wav_bytes(samples: np.ndarray) -> bytes:
     out = io.BytesIO()
     with wave.open(out, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(np.clip(np.round(np.asarray(samples, dtype=np.float32) * 32767.0), -32768, 32767)
-                        .astype("<i2").tobytes())
+        wav.writeframes(pcm16(samples))
     return out.getvalue()
 
 
@@ -247,6 +255,9 @@ class Phrase:
         self.text = ""
         self.error = ""
         self.local = False
+        self.live = False
+        self.via: str | None = ENGINE  # who transcribed it: "vegeta", "vegeta-live", or None for this Mac
+        self.stream_ms: dict | None = None  # the live stream's `ms` for it
         self.done = False
         self.dropped = False
         self.sent_at = 0.0
@@ -258,7 +269,7 @@ class Lane:
     """Finals to Vegeta, handed to `emit` in the order they were submitted, whatever order the answers come in."""
 
     def __init__(self, client: Client, emit, *, fallback: str = "local", load_local=None, release_local=None,
-                 notice=None):
+                 notice=None, live=None):
         self.client = client
         self.emit = emit
         self.fallback = fallback
@@ -266,6 +277,7 @@ class Lane:
         self.release_local = release_local or (lambda: None)
         self.notice = notice or (lambda text: None)
         self.partials = Partials(client)
+        self.live = live  # a vegeta_live.Stream, for phrases submitted live
         self.lock = threading.Lock()
         self.order: list[Phrase] = []
         self.outstanding: dict[str | None, int] = {}
@@ -274,16 +286,22 @@ class Lane:
         self.local_jobs: queue.Queue = queue.Queue()
         threading.Thread(target=self._local_work, daemon=True).start()
 
-    def configure(self, model: str | None = None, timeout_s: float | None = None, fallback: str | None = None) -> None:
+    def configure(self, model: str | None = None, timeout_s: float | None = None, fallback: str | None = None,
+                  base: str | None = None) -> None:
         if model:
             self.client.model = model
         if timeout_s:
             self.client.timeout_s = min(max(float(timeout_s), 1.0), 60.0)
         if fallback in ("local", "fail"):
             self.fallback = fallback
+        if base:  # Citadel's origin, for the replay script and tests; the app never sends it
+            self.client.base = base.rstrip("/") + "/v1"
+            if self.live is not None:
+                self.live.base = base.rstrip("/")
 
-    def submit(self, audio: np.ndarray, take: str | None, meta=None) -> Phrase:
+    def submit(self, audio: np.ndarray, take: str | None, meta=None, live: bool = False) -> Phrase:
         phrase = Phrase(take, audio, meta)
+        phrase.live = live and self.live is not None
         with self.lock:
             self.outstanding[take] = self.outstanding.get(take, 0) + 1
             self.order.append(phrase)
@@ -341,8 +359,13 @@ class Lane:
     def release(self) -> None:
         self.local_jobs.put(RELEASE)
 
-    def transcribe_now(self, audio: np.ndarray) -> str:
-        """Blocking, for a retake: Vegeta, else this Mac when the fallback is local."""
+    def transcribe_now(self, audio: np.ndarray, live: bool = False) -> str:
+        """Blocking, for a retake: the live stream when asked, then Vegeta, else this Mac when the fallback is local."""
+        if live and self.live is not None:
+            try:
+                return self.live.transcribe(audio, timeout_s=self.client.timeout_s).text
+            except Exception as exc:
+                self.live.give_up(exc)
         try:
             return self.client.transcribe(audio)
         except Unavailable as exc:
@@ -359,6 +382,16 @@ class Lane:
 
     def _remote(self, phrase: Phrase) -> None:
         phrase.sent_at = time.time()
+        if phrase.live:
+            try:
+                answer = self.live.transcribe(phrase.audio, timeout_s=self.client.timeout_s)
+            except Exception as exc:
+                self.live.give_up(exc)  # this phrase and the rest of the take go the HTTP way
+            else:
+                phrase.text, phrase.stream_ms, phrase.via = answer.text, answer.ms, self.live.ENGINE
+                phrase.answered_at = time.time()
+                self._finish(phrase)
+                return
         try:
             phrase.text = self.client.transcribe(phrase.audio)
         except Exception as exc:
@@ -415,7 +448,7 @@ class Lane:
                 phrase.sent_at = time.time()
                 try:
                     phrase.text, _, _ = model.transcribe_array(phrase.audio)
-                    phrase.local = True
+                    phrase.local, phrase.via = True, None
                 except Exception as exc:
                     phrase.error = f"This Mac could not transcribe: {exc}"
                 phrase.answered_at = time.time()
@@ -444,21 +477,29 @@ class Lane:
 
 
 class Speech:
-    """What the segmenter talks to in vegeta mode. Deferred: finals go to the lane and come back as events."""
+    """What the segmenter talks to in vegeta mode. Deferred: finals go to the lane and come back as events.
+    Live: finals and captions go over the lane's live stream while it holds."""
 
     ready = True
 
-    def __init__(self, lane: Lane, deferred: bool = True):
+    def __init__(self, lane: Lane, deferred: bool = True, live: bool = False):
         self.lane = lane
         self.deferred = deferred
+        self.live = live
 
     def partial(self, audio: np.ndarray, phrase) -> tuple[str, float] | None:
         if self.lane.troubled(phrase[0]):
             return None
+        if self.live and not self.lane.live.down:
+            return self.lane.live.captions.offer(audio, phrase)
         return self.lane.partials.offer(audio, phrase)
 
     def submit(self, audio: np.ndarray, take: str | None, meta) -> None:
-        self.lane.submit(audio, take, meta)
+        self.lane.submit(audio, take, meta, live=self.live)
 
     def transcribe_array(self, audio: np.ndarray):
-        return self.lane.transcribe_now(audio), None, None
+        return self.lane.transcribe_now(audio, self.live), None, None
+
+    def blocking(self) -> Speech:
+        """The same speech for a retake, which waits for each phrase."""
+        return Speech(self.lane, deferred=False, live=self.live)

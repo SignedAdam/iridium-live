@@ -47,7 +47,7 @@ struct Settings: Codable, Equatable {
     var cleanupQuotes = false
     var cleanupFailure = CleanupFailure.raw
     var cleanupRetries = 3
-    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "vegeta": 4]
+    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "vegeta": 4, "vegeta-live": 4]
     var openRouterModels = SavedModel.starters
     var openRouterRecent = SavedModel.starters.map(\.id)
     var captionsShown = true
@@ -76,12 +76,14 @@ struct Settings: Codable, Equatable {
     var summaryModels: [String: String] = [:]
     var notesFiling = true
 
-    static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet"), ("vegeta", "Vegeta")]
+    static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet"), ("vegeta", "Vegeta"),
+                               ("vegeta-live", "Vegeta Live")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", []),
         ("vegeta", "Vegeta", []),
+        ("vegeta-live", "Vegeta Live", []), // Vegeta's chat over the live stream
     ]
     static let meetingLanguages = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("sv-SE", "Swedish"),
                                    ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"),
@@ -112,7 +114,9 @@ struct Settings: Codable, Equatable {
 
     var cleanupModel: String {
         get {
-            if cleanupProvider == "vegeta" { return cleanupModels["vegeta"] ?? "" } // an id from Citadel's GET /v1/models
+            // an id from Citadel's GET /v1/models; Vegeta Live starts from the one chosen for Vegeta
+            if cleanupProvider == "vegeta" { return cleanupModels["vegeta"] ?? "" }
+            if cleanupProvider == "vegeta-live" { return cleanupModels["vegeta-live"] ?? cleanupModels["vegeta"] ?? "" }
             let offered = cleanupModels(on: cleanupProvider)
             if let picked = cleanupModels[cleanupProvider], offered.contains(where: { $0.0 == picked }) { return picked }
             return cleanupProvider == "openrouter" ? (openRouterRecent.first ?? offered.first?.0 ?? "") : offered.first?.0 ?? ""
@@ -166,7 +170,8 @@ struct Settings: Codable, Equatable {
     }
 
     var cleanupTimeoutCommand: String {
-        "timeout \(cleanupTimeoutS[cleanupProvider] ?? 2.5)"
+        let vegeta = cleanupProvider == "vegeta-live" ? cleanupTimeoutS["vegeta"] : nil
+        return "timeout \(cleanupTimeoutS[cleanupProvider] ?? vegeta ?? 2.5)"
     }
 
     var vegetaCommand: String {

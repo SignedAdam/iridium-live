@@ -29,6 +29,16 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   next take tries Vegeta again. Cleanup can run on Vegeta too, with any model from Citadel's `GET /v1/models`; when a
   recording starts (at most once a minute) a one-token request goes out, so a model Vegeta unloaded while idle is
   loaded again while you speak. History shows the round trip where it shows decoding time for this Mac.
+- **Vegeta Live** (optional, Albastov key): the same as Vegeta, over one WebSocket instead of an HTTP call per
+  phrase. Settings, Speech, Vegeta Live: when a recording starts the app opens a session at Citadel
+  (`POST /v1/dictation/sessions`) and the socket it names, keeps it open while you speak and a minute after, and sends
+  each phrase (and the captions, twice a second) as 16 kHz PCM. Cleanup provider Vegeta Live sends the same cleanup,
+  correction, polish and warm-up requests over the same socket and gets the answer streamed. A dropped socket is
+  reopened and what was not answered is sent again. When it cannot be opened, or dies, the rest of that recording goes
+  the Vegeta way (HTTP, then this Mac as `vegetaFallback` says) and the status line says "Vegeta Live dropped: using
+  Vegeta"; the next recording tries the socket again. History shows the Vegeta Live round trip, Vegeta's own timings
+  (queued, inference) and, for cleanup, the time to the first token. `python replay.py take.wav` plays a recording
+  through the engine on Vegeta Live and prints, per phrase, end of speech to corrected text.
 - **Models window:** every OpenRouter model and provider with latency, throughput, price, context and uptime, measured
   per provider. Sort, resize, reorder, show or hide any column. Star a model and provider to save it to My models,
   then pick from the last three in Settings.
@@ -112,7 +122,7 @@ keychain. The speech model (about 1 GB) downloads on first use.
 - With AI cleanup on, text is sent to Groq, OpenRouter or Citadel (Vegeta): the new text, the earlier text of the
   same recording, and the end of the current note. Filing notes by topic sends the new note text and the titles and
   tags of your notes.
-- With Vegeta as the speech model, the audio of each phrase is sent to Citadel.
+- With Vegeta or Vegeta Live as the speech model, the audio of each phrase is sent to Citadel.
 
 ## Files
 
@@ -147,13 +157,15 @@ For Vegeta:
 
 | Key | Default | |
 |---|---|---|
-| `speechModel` | `"phonon-2"` | `"vegeta"` transcribes on Vegeta; also `"parakeet"` |
-| `vegetaSpeechModel` | `"parakeet"` | Citadel's speech model |
-| `vegetaSpeechTimeoutS` | `8` | longest wait for one phrase before the fallback |
+| `speechModel` | `"phonon-2"` | `"vegeta"` transcribes on Vegeta, `"vegeta-live"` on Vegeta over the live stream; also `"parakeet"` |
+| `vegetaSpeechModel` | `"parakeet"` | Citadel's speech model (HTTP path only; the live stream has its own) |
+| `vegetaSpeechTimeoutS` | `8` | longest wait for one phrase before the fallback; on Vegeta Live, before the HTTP path |
 | `vegetaFallback` | `"local"` | `"local"`: finish the take with Phonon-2 on this Mac; `"fail"`: History shows it failed, with Retry |
-| `cleanupProvider` | `"openrouter"` | `"vegeta"` cleans up on Vegeta |
-| `cleanupModels` | `{}` | per provider; `"vegeta"` takes a model id from Citadel's `GET /v1/models` |
-| `cleanupTimeoutS` | `{"groq": 2.5, "openrouter": 2.5, "vegeta": 4}` | longest cleanup of one phrase, per provider, 0.5 to 30 s |
+| `cleanupProvider` | `"openrouter"` | `"vegeta"` cleans up on Vegeta, `"vegeta-live"` the same over the live stream |
+| `cleanupModels` | `{}` | per provider; `"vegeta"` takes a model id from Citadel's `GET /v1/models`, `"vegeta-live"` the same (Vegeta's when unset) |
+| `cleanupTimeoutS` | `{"groq": 2.5, "openrouter": 2.5, "vegeta": 4, "vegeta-live": 4}` | longest cleanup of one phrase, per provider, 0.5 to 30 s |
+
+To undo Vegeta Live: `speechModel` and `cleanupProvider` back to `"vegeta"` (or any other).
 
 The Albastov key (`CITADEL_API_KEY`) is in the login keychain like the other keys: Settings, Setup.
 
@@ -169,8 +181,10 @@ Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Source
 | `segmenter.py` | voice detection; splits speech at pauses |
 | `asr.py` | Phonon-2 and Parakeet |
 | `vegeta.py` | speech to text on Vegeta through Citadel, with Phonon-2 on this Mac as the fallback |
+| `vegeta_live.py` | the Vegeta Live session: one WebSocket for speech to text and cleanup, reopened on a drop |
 | `cleanup.py` | AI cleanup with Groq, OpenRouter and Vegeta |
-| `tests/` | Python tests (`make test`) |
+| `replay.py` | plays a recording through the engine on Vegeta Live and prints the time per phrase |
+| `tests/` | Python tests (`make test`); `tests/stream_stub.py` stands in for Citadel and the stream |
 | `takes.py` | saves every recording while you speak |
 | `downloads.py` | downloads the speech model |
 | `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |

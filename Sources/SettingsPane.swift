@@ -37,7 +37,9 @@ struct SettingsPane: View {
 
     @ViewBuilder
     private func speech(_ proxy: ScrollViewProxy) -> some View {
-        let vegeta = model.settings.speechModel == "vegeta"
+        let live = model.settings.speechModel == "vegeta-live"
+        let vegeta = live || model.settings.speechModel == "vegeta"
+        let fallback = model.settings.vegetaFallback == .local
         Section("Speech") {
             Row("Model", detail: vegeta ? "On Vegeta, nothing loaded on this Mac" : status(model.speech),
                 alert: model.speech.state == "error") {
@@ -45,8 +47,12 @@ struct SettingsPane: View {
             }
             if vegeta {
                 if Setup.shared.keys[ApiKey.citadel.id] != true { missingKey(ApiKey.citadel, proxy) }
-                Row("When Vegeta fails", detail: model.settings.vegetaFallback == .local
-                    ? "Phonon-2 on this Mac takes over that recording" : "The recording waits in History, with Retry",
+                Row(live ? "When Vegeta Live fails" : "When Vegeta fails",
+                    detail: live
+                        ? (fallback ? "Vegeta takes over that recording, then Phonon-2 on this Mac"
+                                    : "Vegeta takes over that recording, else it waits in History, with Retry")
+                        : (fallback ? "Phonon-2 on this Mac takes over that recording"
+                                    : "The recording waits in History, with Retry"),
                     inset: 14) {
                     Segments(selection: $model.settings.vegetaFallback, options: [(.local, "This Mac"), (.fail, "Fail")])
                 }
@@ -72,7 +78,8 @@ struct SettingsPane: View {
     private func cleanup(_ proxy: ScrollViewProxy) -> some View {
         let provider = model.settings.cleanupProvider
         let openRouter = provider == "openrouter"
-        let key = provider == "vegeta" ? ApiKey.citadel : openRouter ? ApiKey.openRouter : ApiKey.groq
+        let citadel = provider == "vegeta" || provider == "vegeta-live"
+        let key = citadel ? ApiKey.citadel : openRouter ? ApiKey.openRouter : ApiKey.groq
         let saved = model.settings.savedModelsByRecency
         let recent = Array(saved.prefix(3))
         let others = Array(saved.dropFirst(3))
@@ -98,7 +105,7 @@ struct SettingsPane: View {
                         Spacer(minLength: 0)
                         Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
                     }
-                } else if provider == "vegeta" {
+                } else if citadel {
                     Row("Model", detail: model.settings.cleanupModel.isEmpty ? "Needed" : nil,
                         alert: model.settings.cleanupModel.isEmpty, inset: 14) {
                         let ids = CitadelModels.shared.ids
