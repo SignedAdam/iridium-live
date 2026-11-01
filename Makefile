@@ -13,7 +13,8 @@ MKDIR := Packages/MeetingKit
 MKSOURCES := $(wildcard $(MKDIR)/Sources/MeetingKit/*/*.swift) $(wildcard $(MKDIR)/Sources/AudioGuard/*.m) \
   $(wildcard $(MKDIR)/Sources/AudioGuard/include/*.h) $(MKDIR)/Package.swift
 MKLIB := $(MKDIR)/.build/release/libMeetingKit.a
-MKFLAGS := -I $(MKDIR)/.build/release/Modules \
+# Modules/ is where SwiftPM's native build system puts them; swiftbuild, the default from Swift 6.4, leaves them in release/
+MKFLAGS := -I $(MKDIR)/.build/release/Modules -I $(MKDIR)/.build/release \
   -Xcc -fmodule-map-file=$(MKDIR)/.build/checkouts/FluidAudio/Sources/FastClusterWrapper/include/module.modulemap \
   -Xcc -fmodule-map-file=$(MKDIR)/.build/checkouts/FluidAudio/Sources/MachTaskSelfWrapper/include/module.modulemap \
   -L $(MKDIR)/.build/release -lMeetingKit -lc++
