@@ -2,7 +2,7 @@
 
 `POST {base}/v1/dictation/sessions` with the Citadel key files the session and answers `{session_id, ticket,
 endpoints}`; the first endpoint that connects (in list order, CONNECT_TIMEOUT_S each) carries it, the ticket sent as
-`Authorization: Bearer`. The socket opens when a recording starts, so it is warm for the first phrase, stays open
+`X-Dictation-Ticket`. The socket opens when a recording starts, so it is warm for the first phrase, stays open
 while it records and KEEP_S after the last use, and opens on demand for a request outside a recording.
 
 Protocol (specs/dictation-stream.md), one socket, JSON control and binary audio:
@@ -305,7 +305,7 @@ class Stream:
             session, reason = self.session, "Vegeta Live did not connect"
             for url in session["endpoints"]:
                 try:
-                    ws = await connect(url, additional_headers={"Authorization": f"Bearer {session['ticket']}"},
+                    ws = await connect(url, additional_headers={"X-Dictation-Ticket": session["ticket"]},
                                        user_agent_header=vegeta.USER_AGENT, open_timeout=CONNECT_TIMEOUT_S,
                                        compression=None, ping_interval=None, close_timeout=1.0, max_size=None,
                                        proxy=None)

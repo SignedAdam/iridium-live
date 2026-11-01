@@ -234,7 +234,7 @@ class StreamStub:
         session = next((item for item in self.sessions if item["id"] == query.get("session", [""])[0]), None)
         if self.refuse_sockets:
             return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE, "busy\n")
-        if (session is None or request.headers.get("Authorization") != f"Bearer {session['ticket']}"
+        if (session is None or request.headers.get("X-Dictation-Ticket") != session["ticket"]
                 or session.get("expired")):
             return connection.respond(HTTPStatus.UNAUTHORIZED, "bad ticket\n")
         with self.lock:
