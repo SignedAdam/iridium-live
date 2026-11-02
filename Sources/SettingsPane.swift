@@ -43,7 +43,7 @@ struct SettingsPane: View {
         Section("Speech") {
             Row("Model", detail: vegeta ? "On Vegeta, nothing loaded on this Mac" : status(model.speech),
                 alert: model.speech.state == "error") {
-                Segments(selection: $model.settings.speechModel, options: Settings.speechModels)
+                GlassMenu(selection: $model.settings.speechModel, options: Settings.speechModels).frame(width: 170)
             }
             if vegeta {
                 if Setup.shared.keys[ApiKey.citadel.id] != true { missingKey(ApiKey.citadel, proxy) }
@@ -91,8 +91,8 @@ struct SettingsPane: View {
             }
             Group {
                 Row("Provider") {
-                    Segments(selection: $model.settings.cleanupProvider,
-                             options: Settings.cleanupProviders.map { ($0.id, $0.name) })
+                    GlassMenu(selection: $model.settings.cleanupProvider,
+                              options: Settings.cleanupProviders.map { ($0.id, $0.name) }).frame(width: 170)
                 }
                 if Setup.shared.keys[key.id] != true { missingKey(key, proxy) }
                 if openRouter {

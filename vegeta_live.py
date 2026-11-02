@@ -332,7 +332,7 @@ class Stream:
         split = urlsplit(self.base)
         kind = http.client.HTTPSConnection if split.scheme == "https" else http.client.HTTPConnection
         conn = kind(split.hostname, split.port, timeout=SESSION_TIMEOUT_S)
-        body = json.dumps({"client": CLIENT, "device": socket.gethostname().split(".")[0]})
+        body = json.dumps({"client": CLIENT})  # `device` names the Vegeta side (Citadel picks it), not this Mac
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                    "User-Agent": vegeta.USER_AGENT}
         try:

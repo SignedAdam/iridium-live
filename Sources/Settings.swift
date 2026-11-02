@@ -76,8 +76,8 @@ struct Settings: Codable, Equatable {
     var summaryModels: [String: String] = [:]
     var notesFiling = true
 
-    static let speechModels = [("phonon-2", "Phonon-2"), ("parakeet", "Parakeet"), ("vegeta", "Vegeta"),
-                               ("vegeta-live", "Vegeta Live")]
+    static let speechModels = [("phonon-2", "Phonon-2 · this Mac"), ("parakeet", "Parakeet · this Mac"),
+                               ("vegeta", "Vegeta"), ("vegeta-live", "Vegeta Live")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
