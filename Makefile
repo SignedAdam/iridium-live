@@ -5,6 +5,7 @@ SOURCES := $(wildcard Sources/*.swift) $(wildcard Packages/ModelCatalog/Sources/
 ENGINE := live.py segmenter.py asr.py cleanup.py takes.py downloads.py vegeta.py vegeta_live.py
 FONT := fonts/TikTokSans.ttf
 BRANDS := $(wildcard Packages/ModelCatalog/Brands/*)
+SOUNDS := $(wildcard Resources/Sounds/*.wav)
 CERT := Iridium Live Dev
 # LSMinimumSystemVersion; swiftc's own default follows the kernel and can name a macOS that does not exist yet
 TARGET := arm64-apple-macos26.0
@@ -24,7 +25,7 @@ SIGN := $(if $(FOUND),$(FOUND),-)
 
 app: $(STAMP)
 
-$(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS)
+$(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGINE) $(FONT) $(BRANDS) $(SOUNDS)
 	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	swiftc -O -swift-version 6 -target $(TARGET) $(SOURCES) $(MKFLAGS) -o "$(BINARY)"
 	@cp Resources/Info.plist "$(APP)/Contents/Info.plist"
@@ -32,6 +33,8 @@ $(STAMP): $(SOURCES) $(MKLIB) Resources/Info.plist Resources/AppIcon.icns $(ENGI
 	@cp Resources/AppIcon.icns $(ENGINE) $(FONT) "$(APP)/Contents/Resources/"
 	@rm -rf "$(APP)/Contents/Resources/Brands"
 	@cp -R Packages/ModelCatalog/Brands "$(APP)/Contents/Resources/Brands"
+	@rm -rf "$(APP)/Contents/Resources/Sounds" && mkdir -p "$(APP)/Contents/Resources/Sounds"
+	@cp $(SOUNDS) "$(APP)/Contents/Resources/Sounds/"
 	@codesign --force --sign "$(SIGN)" --identifier com.albastov.iridium-live "$(APP)"
 	@touch $@
 

@@ -50,6 +50,8 @@ MainActor.assumeIsolated {
     let idle = IdleUnloader()
     let recordings = support.appendingPathComponent("Recordings")
     let intents = TakeIntents()
+    let sounds = Sounds()
+    sounds.set = model.settings.sounds
     if TakeRecovery.run(journal: TakeJournal(directory: recordings), history: &model.history, store: history) > 0 {
         model.show(notice: "Some recordings did not finish. They are in History.")
     }
@@ -172,6 +174,7 @@ MainActor.assumeIsolated {
                         ?? (control.window.isKeyWindow ? "Iridium Live's window is in front" : nil)
                     if let why {
                         EventLog.shared.add("late text not typed: \(why); it is in History", take: take)
+                        intents.refuse(take)
                         model.show(notice: "Not typed, saved to History: \(why)")
                     } else {
                         if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
@@ -239,6 +242,10 @@ MainActor.assumeIsolated {
                 EventLog.shared.add("take \(event.takeState)" + (event.status.message.isEmpty ? "" : ": \(event.status.message)")
                                     + (event.takeState == "recording" ? ", for \(model.destination ?? "History only")" : ""),
                                     take: take)
+                if event.takeState == "done", intents.landed(take), !model.recording,
+                   model.history.contains(where: { $0.take == take && !$0.spoken.isEmpty && $0.state != .failed }) {
+                    sounds.play(.done)
+                }
                 switch event.takeState {
                 case "recording":
                     intents.began(take, notes: model.notingNow, typing: model.typingNow, app: model.frontApp)
@@ -349,6 +356,7 @@ MainActor.assumeIsolated {
     model.onRecord = { recording in
         if recording, model.notingNow { engine.send("context " + jsonString(notes.dictationContext)) }
         engine.send(recording ? "start" : "stop")
+        sounds.play(recording ? .start : .stop)
     }
     model.onUnload = { engine.send("unload") }
     idle.unload = {
@@ -435,6 +443,10 @@ MainActor.assumeIsolated {
     model.onSettingsChange = { new, old in
         if new.typingHold != old.typingHold { engine.send("hold \(new.typingHold)") }
         if new.pasteApps != old.pasteApps { keys.pasteApps = Set(new.pasteApps) }
+        if new.sounds != old.sounds {
+            sounds.set = new.sounds
+            sounds.preview()
+        }
         if new.openRouterModels != old.openRouterModels {
             engine.send("compare " + new.openRouterModels.map(\.id).joined(separator: ","))
         }

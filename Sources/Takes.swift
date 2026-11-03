@@ -64,6 +64,7 @@ final class TakeIntents {
         var typing: Bool
         var app: String?
         var stopped: Date?
+        var refused = false
     }
 
     private var intents: [String: Intent] = [:]
@@ -89,6 +90,17 @@ final class TakeIntents {
 
     func wantsTyping(_ take: String) -> Bool {
         intents[take]?.typing ?? false
+    }
+
+    /// Some of the take's text went to History instead of where the recording was aimed.
+    func refuse(_ take: String) {
+        intents[take]?.refused = true
+    }
+
+    /// Whether the take was aimed somewhere (typing or a note) and none of its text was kept from it.
+    func landed(_ take: String) -> Bool {
+        guard let intent = intents[take] else { return false }
+        return (intent.typing || intent.notes) && !intent.refused
     }
 
     /// Why text that arrives after its recording stopped is not typed, or nil when it is: however late, it is typed
