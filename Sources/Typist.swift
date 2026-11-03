@@ -30,6 +30,8 @@ final class Typist {
     private var disturbed = true
     private var broken = false
     private var typedInto: pid_t?
+    /// The last key pressed or click made in another app, by the user.
+    private(set) var touched: Date?
     private var watcher: Any?
 
     var frontmost: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
@@ -41,6 +43,7 @@ final class Typist {
             MainActor.assumeIsolated {
                 guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != HotkeyMonitor.ownEvents else { return }
                 self?.disturbed = true
+                self?.touched = Date()
             }
         }
         sink.onDropped = { [weak self] in
@@ -79,21 +82,25 @@ final class Typist {
     }
 
     /// Replaces what this recording typed with `polished`, from the first character that differs. The space owed to
-    /// the text before the recording stays in front.
+    /// the text before the recording stays in front. Nil when it did, else why not.
     @discardableResult
-    func revise(to polished: String) -> Bool {
+    func revise(to polished: String) -> String? {
         let target = session.hasPrefix(" ") && !polished.isEmpty ? " " + polished : polished
-        guard isEnabled, !session.isEmpty, !disturbed, !broken, target != session,
-              typedInto == nil || frontmost() == typedInto else { return false }
+        guard isEnabled else { return "typing is off" }
+        guard !session.isEmpty else { return "nothing was typed" }
+        guard target != session else { return "the typed text is already that" }
+        guard !disturbed else { return "you typed or clicked since" }
+        guard !broken else { return "keys were lost when the app in front changed" }
+        guard typedInto == nil || frontmost() == typedInto else { return "another app is in front" }
         let kept = session.commonPrefix(with: target).count
         let drop = session.count - kept
-        guard drop <= Self.reach, target.count - kept <= Self.reach else { return false }
+        guard drop <= Self.reach, target.count - kept <= Self.reach else { return "too much to retype" }
         sink.backspace(drop)
         sink.type(String(target.dropFirst(kept)))
         session = target
         typed = ""
         if polished.isEmpty { owesSpace = owedAtStart }
-        return true
+        return nil
     }
 }
 

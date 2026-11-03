@@ -46,11 +46,16 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   the typed text. Works with correction keywords such as "I mean", "no wait" and "scratch that".
 - **Add quotes** (optional): "quote … end quote" becomes quotation marks.
 - **When cleanup fails:** retry, fail and notify, or insert the raw text. An answer cut off at its length limit, or
-  containing model markers such as `<EOS_TOKEN>`, is never typed; what you said is typed instead.
+  containing model markers such as `<EOS_TOKEN>`, is never typed; what you said is typed instead. Once a phrase has
+  failed, the next ones get one try each until the provider answers again. Turning cleanup off or picking another
+  provider counts from the next phrase, even mid-retry.
 - **History:** every recording, searchable, with timing and cost. A recording is saved to disk while you speak, so
   nothing is lost if the model is slow to load, the engine stops or the app quits: it shows as failed, with Retry.
-  Text that arrives late never types into the app in front; it waits in History. Play what you said, retry the
-  cleanup of any entry or add it to the current note.
+  Text that arrives after its recording stopped is typed only if nothing has moved since: the same app in front, no
+  newer recording, no key pressed or click made. Otherwise it waits in History and the status line says why. Play
+  what you said, retry the cleanup of any entry or add it to the current note.
+- **Event log:** every decision about a recording, one line each: what the app asked the engine, what heard and
+  cleaned each phrase, and why text was or was not typed. Open it from the menu (Event log).
 - **Corrections window:** what the AI cleanup read and changed for each recording: the earlier sentences it used in
   orange, and every change as a word diff, live while you dictate. Open it from the menu or a history row.
 - **Out of the way:** right-click the control to make it compact (one thin line) or hide it for 15 minutes, an hour
@@ -141,7 +146,7 @@ keychain. The speech model (about 1 GB) downloads on first use.
 | `Meetings/` | one folder per meeting: audio, transcript, summary |
 | `chat-apps.json` | chat app settings |
 
-Engine log: `~/Library/Logs/Iridium Live/engine.log`
+Event log: `~/Library/Logs/Iridium Live/events.log` (menu, Event log). Engine log: `~/Library/Logs/Iridium Live/engine.log`
 
 ## Settings file
 

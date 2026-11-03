@@ -147,6 +147,13 @@ final class Engine {
 
     func send(_ command: String) {
         try? commands.fileHandleForWriting.write(contentsOf: Data((command + "\n").utf8))
+        let words = command.split(separator: " ", maxSplits: 2).map(String.init)
+        let said = switch words.first {
+        case "instructions", "context": "\(words[0]) (\(command.count - words[0].count) characters)"
+        case "rewrite", "retake": words.prefix(2).joined(separator: " ")
+        default: command
+        }
+        EventLog.shared.add("→ engine: \(said)")
     }
 
     private static func openLog() -> FileHandle? {

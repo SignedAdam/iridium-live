@@ -61,17 +61,18 @@ struct TakeJournal {
 final class TakeIntents {
     private struct Intent {
         var notes: Bool
+        var typing: Bool
         var app: String?
         var stopped: Date?
     }
 
-    /// How long after a recording stops its text may still be typed into the app that was in front.
-    static let grace: TimeInterval = 5
-
     private var intents: [String: Intent] = [:]
+    /// The newest recording: what the typist typed, and may still revise, is its own.
+    private(set) var latest: String?
 
-    func began(_ take: String, notes: Bool, app: String?) {
-        intents[take] = Intent(notes: notes, app: app)
+    func began(_ take: String, notes: Bool, typing: Bool, app: String?) {
+        intents[take] = Intent(notes: notes, typing: typing, app: app)
+        latest = take
     }
 
     func stopped(_ take: String) {
@@ -86,11 +87,18 @@ final class TakeIntents {
         intents[take]?.notes ?? false
     }
 
-    /// Late text may be typed only while its recording runs, or seconds after it stopped with the same app in front.
-    func mayType(_ take: String, frontApp: String?) -> Bool {
-        guard let intent = intents[take], intent.app == frontApp else { return false }
-        guard let stopped = intent.stopped else { return true }
-        return Date().timeIntervalSince(stopped) <= Self.grace
+    func wantsTyping(_ take: String) -> Bool {
+        intents[take]?.typing ?? false
+    }
+
+    /// Why text that arrives after its recording stopped is not typed, or nil when it is: however late, it is typed
+    /// while nothing has moved since, with the same app in front, no newer recording, and no key or click after the stop.
+    func refusal(_ take: String, frontApp: String?, touched: Date?) -> String? {
+        guard let intent = intents[take], intent.typing else { return "it was not for typing" }
+        if take != latest { return "a newer recording started" }
+        if intent.app != frontApp { return "\(frontApp ?? "another app") is in front, not \(intent.app ?? "the app it was for")" }
+        if let stopped = intent.stopped, let touched, touched > stopped { return "you typed or clicked after it stopped" }
+        return nil
     }
 }
 

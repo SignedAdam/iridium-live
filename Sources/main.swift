@@ -104,7 +104,10 @@ MainActor.assumeIsolated {
             dock.handle(event)
             if ["partial", "final", "work"].contains(event.kind) { model.engineStalled = false }
             switch event.kind {
-            case "stalled": model.engineStalled = true
+            case "stalled":
+                model.engineStalled = true
+                EventLog.shared.add("the engine has not answered for 90 s")
+            case "log": EventLog.shared.add(event.text, take: event.take, from: "engine")
             case "state":
                 if event.recording {
                     model.recording = true
@@ -125,7 +128,10 @@ MainActor.assumeIsolated {
             case "partial": if !dock.hidesCaptions { captions.show(event.text) }
             case "final":
                 if let edit = event.edit {
-                    if !control.window.isKeyWindow { typist.revise(to: edit.text) }
+                    let why = event.take != intents.latest ? "a newer recording started"
+                        : control.window.isKeyWindow ? "Iridium Live's window is in front" : typist.revise(to: edit.text)
+                    EventLog.shared.add(why.map { "correction of earlier phrases not typed: \($0)" }
+                                        ?? "typed the correction of earlier phrases", take: event.take)
                     if model.notingNow { notes.replaceDictated(with: edit.text, keepingBlock: true) }
                     for (id, text) in edit.phrases {
                         guard let at = model.history.lastIndex(where: { $0.phrase == id }) else { continue }
@@ -160,11 +166,17 @@ MainActor.assumeIsolated {
                     model.history.append(entry)
                 }
                 usage.record(entry)
-                if event.late, let take = event.take {
-                    if model.typingNow, !control.window.isKeyWindow, intents.mayType(take, frontApp: model.frontApp) {
+                if event.late, let take = event.take, intents.wantsTyping(take), !entry.spoken.isEmpty {
+                    let why = intents.refusal(take, frontApp: model.frontApp, touched: typist.touched)
+                        ?? (!model.typingNow ? "typing is off" : nil)
+                        ?? (control.window.isKeyWindow ? "Iridium Live's window is in front" : nil)
+                    if let why {
+                        EventLog.shared.add("late text not typed: \(why); it is in History", take: take)
+                        model.show(notice: "Not typed, saved to History: \(why)")
+                    } else {
+                        if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
                         typist.sync(entry.spoken, final: true)
-                    } else if !entry.spoken.isEmpty {
-                        model.show(notice: "Dictation saved to History")
+                        EventLog.shared.add("typed late text (\(entry.spoken.count) characters)", take: take)
                     }
                 }
                 if model.notingNow || event.take.map({ intents.wantsNotes($0) }) == true { notes.append(entry) }
@@ -179,9 +191,15 @@ MainActor.assumeIsolated {
                     history.update(model.history[at])
                     usage.record(polish: polish, of: model.history[at])
                 }
-                if event.polished, polish.text != polish.heard, !event.late {
-                    notes.replaceDictated(with: polish.text)
-                    if !control.window.isKeyWindow { typist.revise(to: polish.text) }
+                if event.polished, polish.text != polish.heard, let take = event.take {
+                    if take == intents.latest { notes.replaceDictated(with: polish.text) }
+                    if intents.wantsTyping(take) {
+                        let why = take != intents.latest ? "a newer recording started"
+                            : control.window.isKeyWindow ? "Iridium Live's window is in front"
+                            : typist.revise(to: polish.text)
+                        EventLog.shared.add(why.map { "polish not typed: \($0)" } ?? "typed the polish over the recording",
+                                            take: take)
+                    }
                 }
             case "rewritten":
                 if event.id == "note" {
@@ -210,13 +228,20 @@ MainActor.assumeIsolated {
                 usage.record(benchmarks: event.results, of: model.history[at])
             case "type":
                 if typist.isEnabled != model.typingNow { typist.isEnabled = model.typingNow }
-                if !control.window.isKeyWindow { typist.sync(event.text, final: event.final) }
+                if !control.window.isKeyWindow {
+                    typist.sync(event.text, final: event.final)
+                } else if event.final, !event.text.isEmpty {
+                    EventLog.shared.add("not typed: Iridium Live's window is in front")
+                }
             case "take":
                 guard let take = event.take else { break }
                 let at = model.history.lastIndex { $0.take == take }
+                EventLog.shared.add("take \(event.takeState)" + (event.status.message.isEmpty ? "" : ": \(event.status.message)")
+                                    + (event.takeState == "recording" ? ", for \(model.destination ?? "History only")" : ""),
+                                    take: take)
                 switch event.takeState {
                 case "recording":
-                    intents.began(take, notes: model.notingNow, app: model.frontApp)
+                    intents.began(take, notes: model.notingNow, typing: model.typingNow, app: model.frontApp)
                     var entry = HistoryEntry(time: event.at.map(Date.init(timeIntervalSince1970:)) ?? Date(), text: "")
                     entry.destination = model.destination
                     entry.take = take
@@ -314,6 +339,7 @@ MainActor.assumeIsolated {
     }
     configure()
     engine.onRestart = {
+        EventLog.shared.add("the engine restarted")
         model.ready = false
         model.engineStalled = false
         model.speech = ModelStatus(state: "loading")

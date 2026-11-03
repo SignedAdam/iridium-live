@@ -29,8 +29,9 @@ Events leave as one JSON object per line on stdout:
     state, level, partial, final, type, session, rewritten, benchmark, work, notice, ready, stalled, restart
     asr | cleanup                model state: loading, downloading, ready, error, unloaded, off
     take                         one recording: recording, captured, done, empty, failed, discarded
-Every final and session event carries the take it came from; `late` marks text that arrives after
-its recording stopped, which the app must not type into whatever is in front now.
+    log                          one decision and why, for the app's event log
+Every final and session event carries the take it came from; `late` marks a final that arrives after its recording
+stopped, which the app types only if nothing has moved since.
 """
 import argparse
 import ctypes
@@ -209,6 +210,10 @@ class Events:
             except BrokenPipeError:
                 os._exit(0)
 
+    def log(self, text: str, take: str | None = None) -> None:
+        """One decision and why, for the app's event log."""
+        self.send({"kind": "log", "text": text, **({"take": take} if take else {})})
+
 
 class Work:
 
@@ -243,6 +248,7 @@ class ModelSlot:
     def __init__(self, kind: str, events: Events, control: queue.Queue, audio: queue.Queue, remote_speech=None):
         self.remote_speech = remote_speech or {}  # engine name: the speech object for the speech engines elsewhere
         self.kind, self.events, self.control, self.audio = kind, events, control, audio
+        self.label = "speech" if kind == "asr" else "cleanup"
         self.want: str | None = None
         self.key: str | None = None
         self.suspended = False
@@ -333,7 +339,7 @@ class ModelSlot:
         """Install what a loader produced, or start loading what is wanted. Never waits for a model."""
         changed = self._collect()
         key = self.target
-        if key == self.key or key == self.loading:
+        if key == self.key or (key is not None and key == self.loading):
             return changed
         if isinstance(self.model, cleanup_model.Remote):
             self.model.close()
@@ -346,13 +352,17 @@ class ModelSlot:
         if key is None:
             if self.suspended and self.want:
                 self.say("unloaded", self.want)
+            self.events.log(f"{self.label}: {'unloaded' if self.suspended else 'off'}")
             return True
         if self.remote(key):
-            self.model = cleanup_model.Remote(key, self.notify) if self.kind == "cleanup" else self.remote_speech[key]
+            self.model = (cleanup_model.Remote(key, self.notify, stale=lambda: self.want != key)
+                          if self.kind == "cleanup" else self.remote_speech[key])
             self.key = key
             self.say("ready", key)
+            self.events.log(f"{self.label}: {key}")
             return True
         self.say("loading", key)
+        self.events.log(f"{self.label}: loading {key}")
         self.loading, self.failure = key, None
         threading.Thread(target=self._load, args=(key,), daemon=True).start()
         threading.Timer(LOAD_TIMEOUT_S, self._too_slow, args=(key,)).start()
@@ -370,6 +380,7 @@ class ModelSlot:
             if state == "ready" and key == self.target:
                 self.model, self.key = payload, key
                 self.say("ready", key)
+                self.events.log(f"{self.label}: {key} ready")
                 changed = True
             elif state == "ready":
                 del payload
@@ -378,6 +389,7 @@ class ModelSlot:
             elif key == self.want:
                 self.failure = payload
                 self.say("error", key, message=payload)
+                self.events.log(f"{self.label}: {key} did not load: {payload}")
                 self.want = self.key
                 changed = True
 
@@ -686,6 +698,7 @@ def main() -> None:
     replay = {"file": "", "at": 0.0}
     catching_up = [False]
     queued_retakes: list[tuple[str, str]] = []
+    cleanup_down = [None]  # the cleanup provider whose last phrase failed: no retries until it answers again
 
     def watch_for_stalls() -> None:
         reported = None
@@ -725,7 +738,7 @@ def main() -> None:
                 if not recorder.recording:
                     stream.end()  # the microphone did not start
                 context = ""
-                if isinstance(cleaner := cleanup_slot.model, cleanup_model.Remote):
+                if isinstance(cleaner := cleanup_slot.model, cleanup_model.Remote) and not cleaner.stale():
                     cleaner.warm()
             elif command == "stop":
                 recorder.stop()
@@ -856,10 +869,14 @@ def main() -> None:
         before = dictation.before()
         final = {"kind": "final", "text": text}
         cleanup = None
+        if cleanup_slot.changing():
+            cleanup_slot.apply()  # a change in Settings counts from this phrase on, however far behind the loop is
+        decided = "no cleanup"
         if cleaner := cleanup_slot.model:
             at = time.perf_counter()
             edited = None
-            retries = failure["retries"] if failure["mode"] == "retry" else 0
+            down = cleanup_down[0] == cleaner.key
+            retries = failure["retries"] if failure["mode"] == "retry" and not down else 0
             if cleanup_model.corrections() and dictation.text() and cleanup_model.may_correct(text):
                 rewritten, stats, edit = cleaner.correct(text, before, dictation.text(), retries)
                 if edit and (changed := dictation.apply(edit)):
@@ -879,6 +896,21 @@ def main() -> None:
             if edited:
                 final["edit"] = edited
             print(f"cleanup {ms:5.0f} ms  {cleaner.note}", file=sys.stderr, flush=True)
+            if stats.failed:
+                cleanup_down[0] = cleaner.key
+                tries = f"{cleaner.tries} {'try' if cleaner.tries == 1 else 'tries'}"
+                decided = (f"cleanup by {stats.provider} failed after {tries} in {ms:.0f} ms: {stats.error}; "
+                           + ("typed as heard" if failure["mode"] == "raw" else "nothing typed, in History with Retry"))
+            elif stats.skipped:
+                decided = "cleanup not needed"
+            else:
+                if cleaner.tries:
+                    cleanup_down[0] = None
+                decided = (f"cleanup by {stats.provider} not used ({stats.error}); typed as heard" if stats.error else
+                           f"cleaned by {stats.provider}:{stats.model} in {ms:.0f} ms"
+                           + ("; it corrected earlier phrases" if edited else ""))
+            if down and failure["mode"] == "retry" and failure["retries"]:
+                decided += f" (no retries: {cleaner.name} failed the phrase before)"
         final["id"] = phrase
         final["session"] = dictation.number
         final["take"] = take
@@ -899,12 +931,18 @@ def main() -> None:
         send(final)
         if not late:
             send({"kind": "type", "text": final["text"], "final": True})
+        by = via or (speech_slot.key if not speech.deferred or replay["file"] else "phonon-2 on this Mac")
+        events.log(f"phrase {phrase}: heard by {by}; {decided}; "
+                   + ("a retake, for History only" if replay["file"] else
+                      "late: it came back after the recording stopped" if late else "sent to type"), take)
         stable.reset()
         dictation.add(phrase, final["text"])
         if cleanup is not None and not cleanup["skipped"] and not cleanup["failed"]:
             bench.submit(phrase, text, before)
 
     def whole(text: str) -> tuple[str, dict | None, dict | None]:
+        if cleanup_slot.changing():
+            cleanup_slot.apply()
         cleaner = cleanup_slot.model
         if cleaner is None:
             return text, None, None
@@ -914,7 +952,7 @@ def main() -> None:
         print(f"whole   {ms:5.0f} ms  {len(text)} chars", file=sys.stderr, flush=True)
         return written, stats._replace(ms=round(ms))._asdict(), dict(cleaner.trace, ms=round(ms))
 
-    def finish_dictation(take: str, late: bool) -> bool:
+    def finish_dictation(take: str) -> bool:
         """Polish what a take said and report it. False when the take said nothing."""
         dictation = dictations.pop(take, None)
         if dictation is None or not dictation.phrases:
@@ -922,8 +960,12 @@ def main() -> None:
         said = dictation.text()
         text, cost, trace = (whole(said) if polishing else (said, None, None))
         events.send({"kind": "session", "session": dictation.number, "take": take, "text": text, "heard": said,
-                     "phrases": [phrase for phrase, _ in dictation.phrases], "late": late,
+                     "phrases": [phrase for phrase, _ in dictation.phrases],
                      "polished": bool(cost) and not cost["error"], "timing": cost, "correction": trace})
+        events.log("polish: " + ("off" if not polishing else "no cleanup" if cost is None else
+                                 f"not used ({cost['error']})" if cost["error"] else
+                                 f"no change in {cost['ms']} ms" if text == said else
+                                 f"rewrote the recording in {cost['ms']} ms"), take)
         return True
 
     def close_take(take: str, state: str, reason: str = "") -> None:
@@ -934,7 +976,7 @@ def main() -> None:
 
     def deliver(take: str) -> None:
         """Everything this take said is decoded: polish it, report it and release its audio."""
-        said = finish_dictation(take, take != recorder.take or not recorder.recording)
+        said = finish_dictation(take)
         close_take(take, takes_module.DONE if said else takes_module.EMPTY)
 
     def settle() -> None:
@@ -1033,7 +1075,7 @@ def main() -> None:
                 chunk = samples[i:i + BLOCK]
                 again.feed(chunk, base + (i + len(chunk)) / seg.SAMPLE_RATE)
             again.finish()
-            said = finish_dictation(take, True)
+            said = finish_dictation(take)
         except vegeta.Unavailable as exc:
             dictations.pop(take, None)
             events.send({"kind": "retake", "take": take, "failed": str(exc)})
@@ -1122,6 +1164,9 @@ def main() -> None:
                     dictations[take] = Dictation(numbered(), spoken_into)
                     open_takes.append(take)
                     session.take = take
+                    heard_by = (speech_slot.key if speech_slot.key == speech_slot.want
+                                else f"{speech_slot.key or 'none'}, switching to {speech_slot.want}")
+                    events.log(f"recording: speech {heard_by}, cleanup {cleanup_slot.want or 'off'}", take)
                 elif block.kind == "retake":
                     if speech.ready:
                         retake(*block.data)

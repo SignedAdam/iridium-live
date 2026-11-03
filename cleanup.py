@@ -50,6 +50,10 @@ class Failed(RuntimeError):
         return self.status in (0, 408, 409, 429) or self.status >= 500
 
 
+class Superseded(RuntimeError):
+    """The cleanup setting changed while a call was retrying: the phrase goes on without this provider."""
+
+
 def backoff(attempt: int, wait_s: float | None) -> float:
     delay = min(8.0, 0.5 * 2 ** attempt) * random.uniform(0.8, 1.2)
     return max(delay, min(wait_s or 0.0, 10.0))
@@ -364,13 +368,15 @@ def set_stream(stream: vegeta_live.Stream | None) -> None:
 
 class Remote:
 
-    def __init__(self, key: str, notify=None):
+    def __init__(self, key: str, notify=None, stale=None):
         self.key = key
         self.name = key.split(":", 1)[0]
         self.provider = provider(key)
         self.model = key.split(":", 1)[1]
         self.model_id, _, self.route = self.model.rpartition("@") if "@" in self.model else (self.model, "", "")
         self.notify = notify or (lambda state, message="": None)
+        self.stale = stale or (lambda: False)  # True once Settings no longer want this provider
+        self.tries = 0
         self.conn = None
         self.failed = False
         self.quiet = 0
@@ -416,6 +422,10 @@ class Remote:
             return text, self._stats(error=message), None
         try:
             out, usage = self._ask_retrying(retries, text, _timeout_s, seen, correcting=settings.reach)
+        except Superseded as exc:
+            self.note = str(exc)
+            self._end(text)
+            return text, self._stats(error=str(exc)), None
         except Exception as exc:
             self.note = str(exc)
             self._state(False, self._say(exc))
@@ -471,6 +481,10 @@ class Remote:
             return text, self._stats(error=message)
         try:
             out, usage = self._ask_retrying(retries, text, deadline, context, whole)
+        except Superseded as exc:
+            self.note = str(exc)
+            self._end(text)
+            return text, self._stats(error=str(exc))
         except Exception as exc:
             self.note = str(exc)
             self._state(False, self._say(exc))
@@ -491,6 +505,7 @@ class Remote:
 
     def _fresh(self) -> None:
         self.connect_ms, self.trip_ms, self.ttft_ms, self.stream_ms, self.via = None, 0.0, None, None, self.name
+        self.tries = 0
 
     def _stats(self, *, skipped: bool = False, **fields) -> Stats:
         return Stats(self.via, self.model, skipped, connect_ms=self.connect_ms, ttft_ms=self.ttft_ms,
@@ -498,15 +513,23 @@ class Remote:
 
     def _ask_retrying(self, retries: int, text: str, deadline_s: float, context: str = "", whole: bool = False,
                       correcting: int | None = None) -> tuple[str, dict]:
+        """Gives up early with Superseded once Settings turn cleanup off or pick another provider."""
         for attempt in range(retries + 1):
+            if self.stale():
+                raise Superseded("cleanup changed in Settings")
+            self.tries = attempt + 1
             try:
                 return self._ask(text, time.monotonic() + deadline_s, context, whole, correcting)
             except (Failed, TimeoutError, OSError) as exc:
+                if self.stale():
+                    raise Superseded("cleanup changed in Settings") from None
                 if attempt == retries or (isinstance(exc, Failed) and not exc.retryable):
                     raise
                 wait = backoff(attempt, exc.wait_s if isinstance(exc, Failed) else None)
                 print(f"cleanup retry {attempt + 1}/{retries} in {wait:.1f} s: {exc}", file=sys.stderr, flush=True)
-                time.sleep(wait)
+                until = time.monotonic() + wait
+                while time.monotonic() < until and not self.stale():
+                    time.sleep(0.05)
         raise RuntimeError("unreachable")
 
     def _say(self, exc: BaseException) -> str:

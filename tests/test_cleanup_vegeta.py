@@ -2,6 +2,8 @@
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -82,6 +84,42 @@ class VegetaCleanupTest(unittest.TestCase):
         self.assertEqual(self.remote._say(TimeoutError("timed out")), "Vegeta did not answer in time")
         self.assertEqual(self.remote._say(ConnectionRefusedError()), "Vegeta is offline")
         self.assertEqual(cleanup.Remote("groq:x")._say(TimeoutError("timed out")), "Groq: timed out")
+
+    def test_turning_cleanup_off_mid_retry_gives_the_phrase_back_as_heard(self):
+        """The engine waited out every retry of a provider that had stopped answering, phrase after phrase, so
+        turning cleanup off or picking another provider took effect only minutes later."""
+        wanted = [True]
+        calls = []
+
+        def ask(*args):
+            calls.append(time.monotonic())
+            wanted[0] = False
+            raise TimeoutError("timed out")
+
+        remote = cleanup.Remote("vegeta:vegeta-fast", stale=lambda: not wanted[0])
+        remote._ask = ask
+        started = time.monotonic()
+        text, stats = remote.rewrite("um so the meeting is at ten", retries=3)
+        self.assertLess(time.monotonic() - started, 0.3)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(text, "um so the meeting is at ten")
+        self.assertFalse(stats.failed, "a phrase cleanup no longer wanted is typed as heard, not failed")
+        self.assertEqual(stats.error, "cleanup changed in Settings")
+        self.assertFalse(remote.failed)
+
+    def test_a_change_during_the_backoff_ends_the_wait(self):
+        changed_at = []
+
+        def ask(*args):
+            threading.Timer(0.2, lambda: changed_at.append(time.monotonic())).start()
+            raise TimeoutError("timed out")
+
+        remote = cleanup.Remote("vegeta:vegeta-fast", stale=lambda: bool(changed_at))
+        remote._ask = ask
+        _, stats, _ = remote.correct("i mean ten", "The meeting is at nine.", "The meeting is at nine.", retries=5)
+        self.assertEqual(stats.error, "cleanup changed in Settings")
+        self.assertLess(time.monotonic() - changed_at[0], 0.2)
+        self.assertEqual(remote.tries, 1)
 
 
 if __name__ == "__main__":

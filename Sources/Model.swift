@@ -127,6 +127,7 @@ final class AppModel {
 
     func show(notice text: String, seconds: Double = 5) {
         notice = text
+        EventLog.shared.add("notice: \(text)")
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if self?.notice == text { self?.notice = nil }
