@@ -51,7 +51,7 @@ MainActor.assumeIsolated {
     let recordings = support.appendingPathComponent("Recordings")
     let intents = TakeIntents()
     let sounds = Sounds()
-    sounds.set = model.settings.sounds
+    sounds.isOn = model.settings.sounds
     if TakeRecovery.run(journal: TakeJournal(directory: recordings), history: &model.history, store: history) > 0 {
         model.show(notice: "Some recordings did not finish. They are in History.")
     }
@@ -444,8 +444,8 @@ MainActor.assumeIsolated {
         if new.typingHold != old.typingHold { engine.send("hold \(new.typingHold)") }
         if new.pasteApps != old.pasteApps { keys.pasteApps = Set(new.pasteApps) }
         if new.sounds != old.sounds {
-            sounds.set = new.sounds
-            sounds.preview()
+            sounds.isOn = new.sounds
+            if new.sounds { sounds.preview() }
         }
         if new.openRouterModels != old.openRouterModels {
             engine.send("compare " + new.openRouterModels.map(\.id).joined(separator: ","))

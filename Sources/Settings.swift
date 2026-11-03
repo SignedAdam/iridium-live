@@ -28,8 +28,6 @@ struct Settings: Codable, Equatable {
     enum CaptionPosition: String, Codable { case top, bottom }
     enum CleanupFailure: String, Codable { case retry, notify, raw }
     enum VegetaFallback: String, Codable { case local, fail }
-    /// The sounds of a dictation: none, or one of the sets in Resources/Sounds.
-    enum Sounds: String, Codable { case off, nib, wood, tape }
 
     var speechModel = "phonon-2"
     var vegetaSpeechModel = "parakeet"
@@ -37,7 +35,7 @@ struct Settings: Codable, Equatable {
     var vegetaFallback = VegetaFallback.local
     var typingHold = 0.7
     var pasteApps = ["so.stencil.tern"] // bundle IDs that get each sentence as one paste instead of typed keys
-    var sounds = Sounds.wood
+    var sounds = true
     var cleanupEnabled = false
     var cleanupProvider = "openrouter"
     var cleanupModels: [String: String] = [:]

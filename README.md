@@ -12,8 +12,7 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   get each sentence as one paste instead (Settings, Typing, Paste into); your clipboard comes back right after. The
   record button starts the moment it is pressed.
 - **Sounds:** a short sound when recording starts, when you release, and when the text is typed (Settings, Typing,
-  Sounds: Nib, Wood or Tape, or Off). Each is a struck object modelled in `Resources/Sounds/synth.py`, in four takes
-  that never play the same one twice in a row.
+  Sounds). Typed plays only when the text reached the app or note it was aimed at.
 - **Notes:** dictate into a note and edit it like any text. Saved notes are in My notes. With a cleanup key, a take
   is filed by topic about 20 s after you stop: each part goes to the note it belongs to or starts a new one, with
   tags, and a notice shows where it went, with Undo. Tags can be edited; My notes filters by tag and sorts by
@@ -195,7 +194,6 @@ Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Source
 | `tests/` | Python tests (`make test`); `tests/stream_stub.py` stands in for Citadel and the stream |
 | `takes.py` | saves every recording while you speak |
 | `downloads.py` | downloads the speech model |
-| `Resources/Sounds/synth.py` | makes the sounds: `python Resources/Sounds/synth.py Resources/Sounds` (numpy, scipy, soundfile) |
 | `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |
 | `Packages/MeetingKit` | Swift package: meeting recording, transcription, summaries |
 
@@ -210,6 +208,9 @@ Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Source
   provider logos
 - [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache 2.0): speaker detection and Parakeet for
   meetings
+- Sounds from Freesound (CC0, in `Resources/Sounds/`): [Recording Start](https://freesound.org/people/AbdrTar/sounds/519985/)
+  by AbdrTar, [hint](https://freesound.org/people/dland/sounds/320181/) by dland,
+  [UI Pause](https://freesound.org/people/Feraly_/sounds/836452/) by Feraly_
 
 ## License
 

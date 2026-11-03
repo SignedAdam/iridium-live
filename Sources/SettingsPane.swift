@@ -267,9 +267,8 @@ struct SettingsPane: View {
             Row("Paste into", detail: "For apps that lose typed keys") {
                 PasteApps(bundleIDs: $model.settings.pasteApps).frame(width: 150)
             }
-            Row("Sounds", detail: "Start, stop, typed") {
-                Segments(selection: $model.settings.sounds,
-                         options: [(Settings.Sounds.off, "Off"), (.nib, "Nib"), (.wood, "Wood"), (.tape, "Tape")])
+            Row("Sounds", detail: "Start, release, typed") {
+                GlassSwitch(isOn: $model.settings.sounds)
             }
         }
     }
