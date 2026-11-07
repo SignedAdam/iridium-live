@@ -76,11 +76,14 @@ struct ApiKey: Identifiable, Sendable {
                                  site: "console.deepgram.com")
     static let anthropic = ApiKey(id: "anthropic", name: "Anthropic", variable: "ANTHROPIC_API_KEY",
                                   site: "console.anthropic.com/settings/keys")
-    /// Vegeta, through Citadel: speech to text and cleanup on one key.
-    static let citadel = ApiKey(id: "citadel", name: "Albastov", variable: "CITADEL_API_KEY", site: "admin.albastov.com")
+    /// Albastar's API: speech to text and cleanup on one key.
+    static let citadel = ApiKey(id: "citadel", name: "Albastar", variable: "CITADEL_API_KEY", site: "admin.albastov.com")
+    /// The key of a custom OpenAI-compatible provider (Settings, Provider).
+    static let custom = ApiKey(id: "custom", name: "Custom API", variable: "CUSTOM_API_KEY", site: "the provider's key")
     static let cleanup = [groq, openRouter, citadel]
+    static let engine = cleanup + [custom]
     static let meeting = [elevenLabs, assemblyAI, deepgram, anthropic]
-    static let all = cleanup + meeting
+    static let all = engine + meeting
 
     static func named(_ id: String) -> ApiKey? { all.first { $0.id == id } }
 }

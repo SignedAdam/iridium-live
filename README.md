@@ -1,7 +1,7 @@
 # Iridium Live
 
 Dictation app for macOS. Speech recognition runs locally on the GPU with
-[Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), or on Vegeta through the Citadel API.
+[Phonon-2](https://huggingface.co/FermionResearch/Phonon-2), or at an API: Albastar's or any OpenAI-compatible one.
 
 ![Captions at the top of the screen and a note being dictated](docs/hero.png)
 
@@ -22,25 +22,32 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   If no sound arrives, the status line says so.
 - **WhatsApp and Telegram:** a record button in the chat window. Stream mode types while you speak. Collect mode
   inserts the whole message at the end and can send it.
-- **AI cleanup** (optional, Groq, OpenRouter or Vegeta): removes filler words and formats numbers, dates and links.
+- **AI cleanup** (optional, Groq, OpenRouter or the API): removes filler words and formats numbers, dates and links.
   Custom instructions.
-- **Vegeta** (optional, Albastov key): Settings, Speech, Vegeta sends each phrase to Citadel's
-  `/v1/audio/transcriptions` and loads no speech model on this Mac. Phrases come back in the order they were spoken;
-  captions ask at most once a second. When Vegeta is offline, busy past its queue timeout or slower than the speech
-  timeout, the take is finished on this Mac with Phonon-2 (or fails with Retry, `vegetaFallback: "fail"`), and the
-  next take tries Vegeta again. Cleanup can run on Vegeta too, with any model from Citadel's `GET /v1/models`; when a
-  recording starts (at most once a minute) a one-token request goes out, so a model Vegeta unloaded while idle is
-  loaded again while you speak. History shows the round trip where it shows decoding time for this Mac.
-- **Vegeta Live** (optional, Albastov key): the same as Vegeta, over one WebSocket instead of an HTTP call per
-  phrase. Settings, Speech, Vegeta Live: when a recording starts the app opens a session at Citadel
+- **API** (optional): Settings, Provider is Albastar (`https://api.albastov.com/v1`, the Albastar key) or Custom
+  (any OpenAI-compatible base URL, with its own key); nothing else differs between them. Settings, Speech, API
+  transcribes there and loads no speech model on this Mac, in one of two ways. **Live**: a realtime transcription
+  socket (`GET {base}/realtime?intent=transcription`, OpenAI's events, `turn_detection: null`) is open while you
+  speak; each phrase's audio goes out as it is spoken and the app's own pause detection commits it; captions are the
+  server's `.delta` events when it sends them. **After stop**: the phrases of a recording wait, and when it stops they
+  all go out at once to `POST {base}/audio/transcriptions`. Phrases come back in the order they were spoken. When the
+  socket cannot open or a phrase fails there, the rest of that recording goes over HTTP; when the API is offline or
+  slower than the speech timeout, the take is finished on this Mac with Phonon-2 (or fails with Retry,
+  `apiFallback: "fail"`), and the next take tries the API again. Cleanup provider API sends `POST {base}/chat/completions`
+  (streamed) with a model from the API's `GET {base}/models`, or Auto (`model: "auto"`, `requirements: {"reasoning":
+  "off"}`) when the API offers it: the API picks the model. The status line, History and the event log show which
+  model answered.
+- **Vegeta Live** (optional, Albastar key): speech to text and cleanup on Vegeta over one WebSocket per session.
+  Settings, Speech, Vegeta Live: when a recording starts the app opens a session at Citadel
   (`POST /v1/dictation/sessions`) and the socket it names, keeps it open while you speak and a minute after, and sends
   each phrase (and the captions, twice a second) as 16 kHz PCM. Cleanup provider Vegeta Live sends the same cleanup,
   correction, polish and warm-up requests over the same socket and gets the answer streamed. A dropped socket is
   reopened and what was not answered is sent again. When it cannot be opened, or dies, the rest of that recording goes
-  the Vegeta way (HTTP, then this Mac as `vegetaFallback` says) and the status line says "Vegeta Live dropped: using
-  Vegeta"; the next recording tries the socket again. History shows the Vegeta Live round trip, Vegeta's own timings
-  (queued, inference) and, for cleanup, the time to the first token. `python replay.py take.wav` plays a recording
-  through the engine on Vegeta Live and prints, per phrase, end of speech to corrected text.
+  the HTTP way (`POST /v1/audio/transcriptions` at the API, then this Mac as `apiFallback` says) and the status line
+  says "Vegeta Live dropped: using Albastar"; the next recording tries the socket again. History shows the Vegeta Live
+  round trip, Vegeta's own timings (queued, inference) and, for cleanup, the time to the first token.
+  `python replay.py take.wav [--asr api-live|api]` plays a recording through the engine at the API and prints, per
+  phrase, end of speech to corrected text.
 - **Models window:** every OpenRouter model and provider with latency, throughput, price, context and uptime, measured
   per provider. Sort, resize, reorder, show or hide any column. Star a model and provider to save it to My models,
   then pick from the last three in Settings.
@@ -126,10 +133,10 @@ keychain. The speech model (about 1 GB) downloads on first use.
 
 - Audio stays on your Mac. Each recording is written while you speak and deleted once transcribed, unless Keep audio
   is on. Failed recordings keep theirs.
-- With AI cleanup on, text is sent to Groq, OpenRouter or Citadel (Vegeta): the new text, the earlier text of the
+- With AI cleanup on, text is sent to Groq, OpenRouter or the API: the new text, the earlier text of the
   same recording, and the end of the current note. Filing notes by topic sends the new note text and the titles and
   tags of your notes.
-- With Vegeta or Vegeta Live as the speech model, the audio of each phrase is sent to Citadel.
+- With API or Vegeta Live as the speech model, the audio of each phrase is sent there.
 
 ## Files
 
@@ -160,21 +167,26 @@ If the file does not parse, the app says so in the status line, runs on the last
 (`settings.last-good.json`) and leaves the file as it is until the next launch; fix it and reopen. The first launch
 with no file writes it from the settings of earlier versions.
 
-For Vegeta:
+For the API:
 
 | Key | Default | |
 |---|---|---|
-| `speechModel` | `"phonon-2"` | `"vegeta"` transcribes on Vegeta, `"vegeta-live"` on Vegeta over the live stream; also `"parakeet"` |
-| `vegetaSpeechModel` | `"parakeet"` | Citadel's speech model (HTTP path only; the live stream has its own) |
-| `vegetaSpeechTimeoutS` | `8` | longest wait for one phrase before the fallback; on Vegeta Live, before the HTTP path |
-| `vegetaFallback` | `"local"` | `"local"`: finish the take with Phonon-2 on this Mac; `"fail"`: History shows it failed, with Retry |
-| `cleanupProvider` | `"openrouter"` | `"vegeta"` cleans up on Vegeta, `"vegeta-live"` the same over the live stream |
-| `cleanupModels` | `{}` | per provider; `"vegeta"` takes a model id from Citadel's `GET /v1/models`, `"vegeta-live"` the same (Vegeta's when unset) |
-| `cleanupTimeoutS` | `{"groq": 2.5, "openrouter": 2.5, "vegeta": 4, "vegeta-live": 4}` | longest cleanup of one phrase, per provider, 0.5 to 30 s |
+| `apiProvider` | `"albastar"` | `"custom"`: `apiCustomBase` with the Custom API key (`CUSTOM_API_KEY`) |
+| `apiCustomBase` | `""` | an OpenAI-compatible base URL, such as `https://openrouter.ai/api/v1` |
+| `speechModel` | `"phonon-2"` | `"api"` transcribes at the API, `"vegeta-live"` on Vegeta over the live stream; also `"parakeet"` |
+| `apiSpeechMode` | `"live"` | `"live"`: the realtime socket while you speak; `"after-stop"`: the whole recording when it stops |
+| `apiSpeechModels` | `{}` | the speech model id per provider (`"parakeet"` at Albastar) |
+| `apiSpeechTimeoutS` | `8` | longest wait for one phrase before the fallback |
+| `apiFallback` | `"local"` | `"local"`: finish the take with Phonon-2 on this Mac; `"fail"`: History shows it failed, with Retry |
+| `cleanupProvider` | `"openrouter"` | `"api"` cleans up at the API, `"vegeta-live"` on Vegeta over the live stream |
+| `cleanupModels` | `{}` | per provider; `"api-albastar"` / `"api-custom"` take an id from the API's `GET /models`, `"auto"` by default |
+| `cleanupTimeoutS` | `{"groq": 2.5, "openrouter": 2.5, "api": 4, "vegeta-live": 4}` | longest cleanup of one phrase, per provider, 0.5 to 30 s |
 
-To undo Vegeta Live: `speechModel` and `cleanupProvider` back to `"vegeta"` (or any other).
+Settings of earlier versions carry over: `speechModel: "vegeta"` becomes the API after stop at Albastar, and the
+`vegeta…` settings become the `api…` ones.
 
-The Albastov key (`CITADEL_API_KEY`) is in the login keychain like the other keys: Settings, Setup.
+The Albastar key (`CITADEL_API_KEY`) and the Custom API key are in the login keychain like the other keys: Settings,
+Setup.
 
 
 Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Sources/Keychain.swift`) next to `settings.json` while the app is closed. At launch the app moves them into the Keychain and deletes the file.
@@ -187,11 +199,12 @@ Keys work the same way: put `keys.json` (`{"citadel": "…"}`, ids as in `Source
 | `live.py` | the speech engine (Python, MLX), run by the app as a child process |
 | `segmenter.py` | voice detection; splits speech at pauses |
 | `asr.py` | Phonon-2 and Parakeet |
-| `vegeta.py` | speech to text on Vegeta through Citadel, with Phonon-2 on this Mac as the fallback |
+| `remote.py` | the API: its base URL and key, speech to text over HTTP (after stop), its model list, Phonon-2 on this Mac as the fallback |
+| `realtime.py` | live speech to text over the API's realtime transcription socket, reopened on a drop |
 | `vegeta_live.py` | the Vegeta Live session: one WebSocket for speech to text and cleanup, reopened on a drop |
-| `cleanup.py` | AI cleanup with Groq, OpenRouter and Vegeta |
-| `replay.py` | plays a recording through the engine on Vegeta Live and prints the time per phrase |
-| `tests/` | Python tests (`make test`); `tests/stream_stub.py` stands in for Citadel and the stream |
+| `cleanup.py` | AI cleanup with Groq, OpenRouter, the API (Auto or a named model) and Vegeta Live |
+| `replay.py` | plays a recording through the engine at the API and prints the time per phrase |
+| `tests/` | Python tests (`make test`); `tests/api_stub.py` stands in for an OpenAI-compatible API (HTTP and the realtime socket), `tests/stream_stub.py` for Vegeta Live |
 | `takes.py` | saves every recording while you speak |
 | `downloads.py` | downloads the speech model |
 | `Packages/ModelCatalog` | Swift package: `OpenRouterCatalog` (models, providers, stats) and `SortableTable` (sortable SwiftUI table) |

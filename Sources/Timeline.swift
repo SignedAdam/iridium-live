@@ -15,14 +15,16 @@ struct PhraseTiming: Codable, Equatable, Sendable {
         var completionTokens: Double?
         var costUsd: Double?
         var error: String?
-        /// Vegeta Live: the first token as this Mac saw it, and the stream's own timings for the call.
+        /// Streamed answers: the first token as this Mac saw it; Vegeta Live: the stream's own timings for the call.
         var ttftMs: Double?
         var streamMs: [String: Double]?
+        /// The model that answered, when the API named one other than the one asked for (`auto` resolves to one).
+        var served: String?
 
         init(provider: String, model: String, skipped: Bool, ms: Double, connectMs: Double? = nil,
              networkMs: Double? = nil, queueMs: Double? = nil, promptMs: Double? = nil, generateMs: Double? = nil,
              promptTokens: Double? = nil, completionTokens: Double? = nil, costUsd: Double? = nil,
-             error: String? = nil, ttftMs: Double? = nil, streamMs: [String: Double]? = nil) {
+             error: String? = nil, ttftMs: Double? = nil, streamMs: [String: Double]? = nil, served: String? = nil) {
             self.provider = provider
             self.model = model
             self.skipped = skipped
@@ -38,6 +40,7 @@ struct PhraseTiming: Codable, Equatable, Sendable {
             self.error = error
             self.ttftMs = ttftMs
             self.streamMs = streamMs
+            self.served = served
         }
 
         var providerName: String { Settings.cleanupProviders.first { $0.id == provider }?.name ?? provider }
@@ -48,8 +51,8 @@ struct PhraseTiming: Codable, Equatable, Sendable {
     var endpointMs: Double
     var queueMs: Double
     var decodeMs: Double
-    /// Where the phrase was transcribed when not on this Mac: "vegeta" or "vegeta-live", and `decodeMs` is the
-    /// round trip.
+    /// Where the phrase was transcribed when not on this Mac: "api", "api-live" or "vegeta-live", and `decodeMs` is
+    /// the round trip.
     var via: String?
     /// Vegeta Live: the stream's own timings for the phrase (queued, inference, …).
     var stream: [String: Double]?
@@ -186,7 +189,8 @@ struct PhraseTimeline: View {
     private var steps: [Step] {
         var steps = [Step(id: "pause", label: "End of speech", ms: timing.endpointMs, shade: 0.22)]
         if timing.queueMs >= 1 { steps.append(Step(id: "wait", label: "Waiting", ms: timing.queueMs, shade: 0.12)) }
-        let transcribed = ["vegeta": "Vegeta round trip", "vegeta-live": "Vegeta Live round trip"]
+        let transcribed = ["api": "API round trip", "api-live": "API live round trip",
+                           "vegeta-live": "Vegeta Live round trip"]
         steps.append(Step(id: "transcribe", label: timing.via.flatMap { transcribed[$0] } ?? "Transcribing",
                           ms: timing.decodeMs, shade: 0.5))
         steps += atVegeta(timing.stream, id: "transcribe")
@@ -199,7 +203,8 @@ struct PhraseTimeline: View {
             steps.append(Step(id: "cleanup", label: "Skipped, already clean", ms: cleanup.ms, shade: 0.85))
             return steps
         }
-        steps.append(Step(id: "cleanup", label: "Cleanup on \(cleanup.providerName)", ms: cleanup.ms, shade: 0.85))
+        let by = cleanup.served.map { " by \($0)" } ?? ""
+        steps.append(Step(id: "cleanup", label: "Cleanup on \(cleanup.providerName)\(by)", ms: cleanup.ms, shade: 0.85))
         let parts: [(String, Double?)] = [("Connecting", cleanup.connectMs), ("Network", cleanup.networkMs),
                                           ("Queued at \(cleanup.providerName)", cleanup.queueMs),
                                           ("Prompt", cleanup.promptMs), ("Writing", cleanup.generateMs),

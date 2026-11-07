@@ -97,7 +97,7 @@ MainActor.assumeIsolated {
 
     let engine: Engine
     do {
-        guard let command = AppResources.engineCommand(asr: model.settings.speechModel, wav: wav) else {
+        guard let command = AppResources.engineCommand(asr: model.settings.speechEngine, wav: wav) else {
             FileHandle.standardError.write(Data("uv was not found: install it from https://docs.astral.sh/uv\n".utf8))
             exit(1)
         }
@@ -183,7 +183,10 @@ MainActor.assumeIsolated {
                     }
                 }
                 if model.notingNow || event.take.map({ intents.wantsNotes($0) }) == true { notes.append(entry) }
-                if let ms = event.cleanupMs, ms > 0 { model.lastCleanupMs = ms }
+                if let ms = event.cleanupMs, ms > 0 {
+                    model.lastCleanupMs = ms
+                    model.lastCleanupServed = event.timing?.cleanup?.served
+                }
             case "session":
                 let polish = PolishRun(text: event.text, heard: event.heard ?? event.text, cleanup: event.cleanup)
                 if let last = event.phrases.last, let at = model.history.lastIndex(where: { $0.phrase == last }) {
@@ -311,9 +314,11 @@ MainActor.assumeIsolated {
             case "cleanup":
                 model.cleanup = event.status
                 if event.status.state == "error", let id = event.status.model,
-                   id.hasPrefix("vegeta:") || id.hasPrefix("vegeta-live:") {
+                   id.hasPrefix("api:") || id.hasPrefix("vegeta-live:") {
                     model.show(notice: event.status.message)
                 }
+            case "models":
+                ApiModels.shared.received(base: event.base, ids: event.models, problem: event.status.message)
             case "work":
                 model.finishing = event.pending && !model.recording
                 if !event.pending { idle.arm(after: model.idleUnloadMinutes) }
@@ -342,7 +347,8 @@ MainActor.assumeIsolated {
         engine.send("compare " + model.settings.openRouterModels.map(\.id).joined(separator: ","))
         engine.send(model.settings.failureCommand)
         engine.send(model.settings.cleanupTimeoutCommand)
-        engine.send(model.settings.vegetaCommand)
+        engine.send(model.settings.apiCommand)
+        engine.send("models")
     }
     configure()
     engine.onRestart = {
@@ -350,7 +356,7 @@ MainActor.assumeIsolated {
         model.ready = false
         model.engineStalled = false
         model.speech = ModelStatus(state: "loading")
-        engine.send("asr \(model.settings.speechModel)")
+        engine.send("asr \(model.settings.speechEngine)")
         configure()
     }
     model.onRecord = { recording in
@@ -391,6 +397,7 @@ MainActor.assumeIsolated {
     model.onCleanUpNote = { text in engine.send("rewrite note " + jsonString(text)) }
     model.onShowBenchmarks = { BenchmarkPanel.show(history: model.history, on: control.window.screen ?? screen) }
     model.onManageModels = { ModelsPanel.show(on: control.window.screen ?? screen, model: model) }
+    model.onListApiModels = { engine.send("models") }
     let ourselves = ProcessInfo.processInfo.processIdentifier
     let front = { @MainActor @Sendable (app: NSRunningApplication?) in
         if let app, app.processIdentifier != ourselves { model.frontApp = app.localizedName }
@@ -453,8 +460,13 @@ MainActor.assumeIsolated {
         if new.cleanupCommand != old.cleanupCommand {
             engine.send(new.cleanupCommand)
             model.lastCleanupMs = nil
+            model.lastCleanupServed = nil
         }
-        if new.speechModel != old.speechModel { engine.send("asr \(new.speechModel)") }
+        if new.apiCommand != old.apiCommand {
+            engine.send(new.apiCommand)
+            if new.apiBase != old.apiBase || new.apiKey.id != old.apiKey.id { engine.send("models") }
+        }
+        if new.speechEngine != old.speechEngine { engine.send("asr \(new.speechEngine)") }
         if new.cleanupInstructions != old.cleanupInstructions { engine.send("instructions " + jsonString(new.cleanupInstructions)) }
         if new.cleanupPolish != old.cleanupPolish { engine.send(new.cleanupPolish ? "polish on" : "polish off") }
         if new.cleanupBenchmark != old.cleanupBenchmark { engine.send(new.cleanupBenchmark ? "benchmark on" : "benchmark off") }
@@ -462,7 +474,6 @@ MainActor.assumeIsolated {
         if new.rulesCommand != old.rulesCommand { engine.send(new.rulesCommand) }
         if new.failureCommand != old.failureCommand { engine.send(new.failureCommand) }
         if new.cleanupTimeoutCommand != old.cleanupTimeoutCommand { engine.send(new.cleanupTimeoutCommand) }
-        if new.vegetaCommand != old.vegetaCommand { engine.send(new.vegetaCommand) }
         if new.autoUnload != old.autoUnload || new.autoUnloadMinutes != old.autoUnloadMinutes {
             idle.arm(after: model.idleUnloadMinutes)
         }
