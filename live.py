@@ -19,8 +19,7 @@ Commands arrive as lines on stdin:
     takes keep|drop FOLDER       where takes are written and whether their audio is kept
     retake ID "FILE"             transcribe a saved take again under that history id
     asr NAME | unload            load or release the speech model; `asr api` loads none and transcribes at the API
-                                 after stop (remote.py), `asr api-live` over its realtime socket (realtime.py),
-                                 `asr vegeta-live` over Vegeta's dictation stream (vegeta_live.py)
+                                 after stop (remote.py), `asr api-live` over its realtime socket (realtime.py)
     api {"base", "key_env", "name", "model", "timeout_s", "fallback"}   the API (base URL, the environment variable
                                  with its key, its name for the status line), its speech model, what a failed take does
     models                       list the API's models: answered with a `models` event
@@ -63,7 +62,6 @@ import segmenter as seg
 import takes as takes_module
 import realtime
 import remote
-import vegeta_live
 
 TYPE_HOLD_S = 0.7
 STALL_S = 90.0
@@ -74,7 +72,7 @@ SILENT_AFTER_S = 1.0
 CACHE_DIR = Path.home() / ".cache" / "iridium-live"
 if not CACHE_DIR.exists() and (CACHE_DIR.parent / "phonon-live").exists():
     (CACHE_DIR.parent / "phonon-live").rename(CACHE_DIR)
-REMOTE_SPEECH = (remote.ENGINE, realtime.ENGINE, vegeta_live.ENGINE)
+REMOTE_SPEECH = (remote.ENGINE, realtime.ENGINE)
 ENGINES = sorted([*asr.MODELS, *REMOTE_SPEECH])
 STOP, QUIT, CONTROL, CANCEL, RESTART = "stop", "quit", "control", "cancel", "restart"
 
@@ -154,7 +152,7 @@ class TimedSpeech:
 
     @property
     def deferred(self) -> bool:
-        """Finals are submitted and come back later as `heard` jobs (Vegeta); else they are decoded here."""
+        """Finals are submitted and come back later as `heard` jobs (the API); else they are decoded here."""
         return getattr(self.speech, "deferred", False)
 
     def partial(self, audio, phrase) -> str:
@@ -418,7 +416,7 @@ class ModelSlot:
 
 
 def load_fallback():
-    """Phonon-2 for a take Vegeta could not transcribe. Runs on the lane's own thread, which also decodes with it."""
+    """Phonon-2 for a take the API could not transcribe. Runs on the lane's own thread, which also decodes with it."""
     asr.ensure("phonon-2", lambda fraction: None)
     model = asr.load("phonon-2", CACHE_DIR)
     asr.warm_up(TimedSpeech(model))
@@ -662,7 +660,6 @@ def main() -> None:
 
     def stopped() -> None:
         """Right after a stop: work is pending while the main loop still has the take (a busy loop, or the API)."""
-        stream.end()
         api_stream.end()
         take = recorder.take
         work.update(lambda: take in open_takes)
@@ -686,16 +683,13 @@ def main() -> None:
             return
         events.send({"kind": "models", "base": base, "models": remote.choices(ids)})
 
-    stream = vegeta_live.Stream(notice=tell)
-    cleanup_model.set_stream(stream)
     api_stream = realtime.Stream(remote.api, notice=tell)
     lane = remote.Lane(remote.Client(remote.api), lambda phrase: audio.put(Job("heard", (phrase,))),
                        load_local=load_fallback, release_local=release_fallback, notice=tell)
     api_failed: dict[str, str] = {}
     speech_slot = ModelSlot("asr", events, control, audio,
                             {remote.ENGINE: remote.Speech(lane, holds=True),
-                             realtime.ENGINE: remote.Speech(lane, live=api_stream),
-                             vegeta_live.ENGINE: remote.Speech(lane, live=stream)})
+                             realtime.ENGINE: remote.Speech(lane, live=api_stream)})
     cleanup_slot = ModelSlot("cleanup", events, control, audio)
     speech = TimedSpeech(None)
     stable = StablePrefix(TYPE_HOLD_S)
@@ -748,14 +742,10 @@ def main() -> None:
                 continue
             if command == "start":
                 resume()
-                if (speech_slot.want == vegeta_live.ENGINE
-                        or (cleanup_slot.want or "").startswith(vegeta_live.ENGINE + ":")):
-                    stream.begin()  # warm for the first phrase
                 if speech_slot.want == realtime.ENGINE:
                     api_stream.begin()
                 recorder.start(context)
                 if not recorder.recording:
-                    stream.end()  # the microphone did not start
                     api_stream.end()
                 context = ""
                 if isinstance(cleaner := cleanup_slot.model, cleanup_model.Remote) and not cleaner.stale():
@@ -764,7 +754,6 @@ def main() -> None:
                 recorder.stop()
             elif command == "cancel":
                 recorder.cancel()
-                stream.end()
                 api_stream.end()
             elif command == "hold":
                 stable.hold_s = min(max(float(argument), 0.2), 3.0)
@@ -878,8 +867,7 @@ def main() -> None:
                 and (typed := stable.update(text, speech.audio_s))):
             send({"kind": "type", "text": typed, "final": False})
 
-    def on_final(text: str, timing: seg.Timing, samples: np.ndarray, take: str, via: str | None = None,
-                 stream_ms: dict | None = None) -> None:
+    def on_final(text: str, timing: seg.Timing, samples: np.ndarray, take: str, via: str | None = None) -> None:
         if discarding.is_set():
             return
         dictation = dictations.get(take)
@@ -951,8 +939,6 @@ def main() -> None:
                            "total_ms": round((time.time() - timing.last_speech) * 1000)}
         if via:
             final["timing"]["via"] = via
-        if stream_ms:
-            final["timing"]["stream"] = stream_ms
         if heard:
             final["audio"] = heard
         send(final)
@@ -1046,7 +1032,7 @@ def main() -> None:
         settle()
 
     def conclude(take: str) -> None:
-        """A stopped take whose phrases are all back: delivered, or failed when Vegeta failed it."""
+        """A stopped take whose phrases are all back: delivered, or failed when the API failed it."""
         if (take == recorder.take and recorder.recording) or lane.pending(take):
             return
         reason = api_failed.pop(take, None)
@@ -1074,8 +1060,7 @@ def main() -> None:
             catching_up[0] = not recording_it
             try:
                 on_final(phrase.text, seg.Timing(speech.audio_s, started, last_speech, closed, phrase.sent_at,
-                                                 phrase.answered_at), phrase.audio, take, phrase.via,
-                         phrase.stream_ms)
+                                                 phrase.answered_at), phrase.audio, take, phrase.via)
             finally:
                 catching_up[0] = False
         if stable.typed and not recording_it and not lane.pending(take):

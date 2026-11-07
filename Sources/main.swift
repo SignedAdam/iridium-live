@@ -313,8 +313,7 @@ MainActor.assumeIsolated {
                 }
             case "cleanup":
                 model.cleanup = event.status
-                if event.status.state == "error", let id = event.status.model,
-                   id.hasPrefix("api:") || id.hasPrefix("vegeta-live:") {
+                if event.status.state == "error", let id = event.status.model, id.hasPrefix("api:") {
                     model.show(notice: event.status.message)
                 }
             case "models":

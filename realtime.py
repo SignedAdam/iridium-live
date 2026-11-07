@@ -57,7 +57,6 @@ class Refused(RuntimeError):
 
 class Answer(NamedTuple):
     text: str
-    ms: dict | None
     round_trip_ms: int
 
 
@@ -183,7 +182,7 @@ class Stream:
             raise TimeoutError(f"{self.endpoint.name} live did not answer in time")
         if request.error is not None:
             raise request.error
-        return Answer(request.text, None, round((time.monotonic() - request.sent_at) * 1000))
+        return Answer(request.text, round((time.monotonic() - request.sent_at) * 1000))
 
     def forget(self, take) -> None:
         """A cancelled or failed take: its phrases are dropped, and what of them is in the server's buffer cleared."""

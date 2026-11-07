@@ -62,12 +62,10 @@ struct SettingsPane: View {
     @ViewBuilder
     private func speech(_ proxy: ScrollViewProxy) -> some View {
         let api = model.settings.speechModel == "api"
-        let live = model.settings.speechModel == "vegeta-live"
         let fallback = model.settings.apiFallback == .local
         let afterStop = model.settings.apiSpeechMode == .afterStop
         Section("Speech") {
-            Row("Model", detail: api ? "At \(model.settings.apiName), nothing loaded on this Mac"
-                                     : live ? "On Vegeta, nothing loaded on this Mac" : status(model.speech),
+            Row("Model", detail: api ? "At \(model.settings.apiName), nothing loaded on this Mac" : status(model.speech),
                 alert: model.speech.state == "error") {
                 GlassMenu(selection: $model.settings.speechModel, options: Settings.speechModels).frame(width: 170)
             }
@@ -82,16 +80,10 @@ struct SettingsPane: View {
                     alert: model.settings.apiSpeechModel.isEmpty, inset: 14) {
                     ModelField(id: $model.settings.apiSpeechModel, placeholder: "whisper-1")
                 }
-            }
-            if api || live {
-                if live, Setup.shared.keys[ApiKey.citadel.id] != true { missingKey(ApiKey.citadel, proxy) }
                 Row("When it fails",
-                    detail: api && !afterStop
+                    detail: !afterStop
                         ? (fallback ? "The rest of that recording goes over HTTP, then Phonon-2 on this Mac"
                                     : "The rest of that recording goes over HTTP, else it waits in History, with Retry")
-                        : live
-                        ? (fallback ? "Vegeta takes over that recording, then Phonon-2 on this Mac"
-                                    : "Vegeta takes over that recording, else it waits in History, with Retry")
                         : (fallback ? "Phonon-2 on this Mac takes over that recording"
                                     : "The recording waits in History, with Retry"),
                     inset: 14) {
@@ -100,7 +92,7 @@ struct SettingsPane: View {
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: api || live)
+        .animation(.easeOut(duration: 0.2), value: api)
     }
 
     private func missingKey(_ key: ApiKey, _ proxy: ScrollViewProxy) -> some View {
@@ -120,8 +112,7 @@ struct SettingsPane: View {
         let provider = model.settings.cleanupProvider
         let openRouter = provider == "openrouter"
         let api = provider == "api"
-        let vegetaLive = provider == "vegeta-live"
-        let key = api ? model.settings.apiKey : vegetaLive ? ApiKey.citadel : openRouter ? ApiKey.openRouter : ApiKey.groq
+        let key = api ? model.settings.apiKey : openRouter ? ApiKey.openRouter : ApiKey.groq
         let saved = model.settings.savedModelsByRecency
         let recent = Array(saved.prefix(3))
         let others = Array(saved.dropFirst(3))
@@ -166,11 +157,6 @@ struct SettingsPane: View {
                     }
                     .task(id: model.pane == .settings) {
                         if model.pane == .settings { model.onListApiModels() }
-                    }
-                } else if vegetaLive {
-                    Row("Model", detail: model.settings.cleanupModel.isEmpty ? "Needed" : nil,
-                        alert: model.settings.cleanupModel.isEmpty, inset: 14) {
-                        ModelField(id: $model.settings.cleanupModel, placeholder: "vegeta-fast")
                     }
                 } else {
                     Row("Model", inset: 14) {

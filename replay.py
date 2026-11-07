@@ -79,8 +79,8 @@ def main() -> int:
 
         for command in commands:
             send(command)
-        widths = [5, 6, 7, 8, 6, 7, 6, 6, 0]
-        print(row(["id", "speech", "total", "endpoint", "stt", "infer", "clean", "ttft", "text"], widths))
+        widths = [5, 6, 7, 8, 6, 6, 6, 0]
+        print(row(["id", "speech", "total", "endpoint", "stt", "clean", "ttft", "text"], widths))
         totals, stts, cleans, polish = [], [], [], None
         started = False
         watchdog = threading.Timer(600, engine.kill)
@@ -102,7 +102,6 @@ def main() -> int:
             elif kind == "final":
                 timing = event.get("timing") or {}
                 cleanup = timing.get("cleanup") or {}
-                server = timing.get("stream") or {}
                 via = timing.get("via") or "this Mac"
                 totals.append(timing.get("total_ms", 0))
                 stts.append(timing.get("decode_ms", 0))
@@ -110,7 +109,6 @@ def main() -> int:
                     cleans.append(cleanup.get("ms", 0))
                 print(row([event.get("id", ""), ms(timing.get("speech_ms")), ms(timing.get("total_ms")),
                            ms(timing.get("endpoint_ms")), ms(timing.get("decode_ms")),
-                           ms(server.get("inference")),
                            "skip" if cleanup.get("skipped") else ms(cleanup.get("ms")) if cleanup else "",
                            ms(cleanup.get("ttft_ms")),
                            (f"[{via}] " if via != args.asr else "") + (f"[{cleanup['error']}] "

@@ -54,7 +54,7 @@ struct Settings: Codable, Equatable {
     var cleanupQuotes = false
     var cleanupFailure = CleanupFailure.raw
     var cleanupRetries = 3
-    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "api": 4, "vegeta-live": 4]
+    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "api": 4]
     var openRouterModels = SavedModel.starters
     var openRouterRecent = SavedModel.starters.map(\.id)
     var captionsShown = true
@@ -85,13 +85,12 @@ struct Settings: Codable, Equatable {
 
     static let albastarBase = "https://api.albastov.com/v1"
     static let speechModels = [("phonon-2", "Phonon-2 · this Mac"), ("parakeet", "Parakeet · this Mac"),
-                               ("api", "API · Provider above"), ("vegeta-live", "Vegeta Live")]
+                               ("api", "API · Provider above")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", []),
         ("api", "API", []), // the provider of Settings, Provider; `auto` lets it pick the model
-        ("vegeta-live", "Vegeta Live", []), // Vegeta's chat over the live stream
     ]
     static let meetingLanguages = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("sv-SE", "Swedish"),
                                    ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"),
@@ -122,9 +121,8 @@ struct Settings: Codable, Equatable {
 
     var cleanupModel: String {
         get {
-            // an id from the API's GET /models, `auto` until one is picked; Vegeta Live: one from Citadel's
+            // an id from the API's GET /models, `auto` until one is picked
             if cleanupProvider == "api" { return cleanupModels[apiModelKey] ?? "auto" }
-            if cleanupProvider == "vegeta-live" { return cleanupModels["vegeta-live"] ?? cleanupModels["vegeta"] ?? "" }
             let offered = cleanupModels(on: cleanupProvider)
             if let picked = cleanupModels[cleanupProvider], offered.contains(where: { $0.0 == picked }) { return picked }
             return cleanupProvider == "openrouter" ? (openRouterRecent.first ?? offered.first?.0 ?? "") : offered.first?.0 ?? ""
@@ -228,9 +226,9 @@ extension Settings {
         let fallback = Settings()
         func value<T: Decodable>(_ key: CodingKeys, _ current: T) -> T { (try? saved.decodeIfPresent(T.self, forKey: key)) ?? current }
         func old<T: Decodable>(_ name: String) -> T? { try? legacy.decodeIfPresent(T.self, forKey: LegacyKey(name)) }
-        // Vegeta (HTTP) became the API after stop, at Albastar; the Vegeta settings carry over
+        // Vegeta became the API at Albastar, after stop over HTTP or live over Vegeta Live; its settings carry over
         let speech = value(.speechModel, fallback.speechModel)
-        speechModel = speech == "vegeta" ? "api" : speech
+        speechModel = speech == "vegeta" || speech == "vegeta-live" ? "api" : speech
         apiProvider = value(.apiProvider, fallback.apiProvider)
         apiCustomBase = value(.apiCustomBase, fallback.apiCustomBase)
         apiSpeechMode = value(.apiSpeechMode, speech == "vegeta" ? .afterStop : fallback.apiSpeechMode)
@@ -243,7 +241,7 @@ extension Settings {
         sounds = value(.sounds, fallback.sounds)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
         let provider = value(.cleanupProvider, fallback.cleanupProvider)
-        let migrated = provider == "vegeta" ? "api" : provider
+        let migrated = provider == "vegeta" || provider == "vegeta-live" ? "api" : provider
         cleanupProvider = Settings.cleanupProviders.contains { $0.id == migrated } ? migrated : fallback.cleanupProvider
         cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
         cleanupPolish = value(.cleanupPolish, fallback.cleanupPolish)

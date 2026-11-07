@@ -15,16 +15,15 @@ struct PhraseTiming: Codable, Equatable, Sendable {
         var completionTokens: Double?
         var costUsd: Double?
         var error: String?
-        /// Streamed answers: the first token as this Mac saw it; Vegeta Live: the stream's own timings for the call.
+        /// Streamed answers: the first token as this Mac saw it.
         var ttftMs: Double?
-        var streamMs: [String: Double]?
         /// The model that answered, when the API named one other than the one asked for (`auto` resolves to one).
         var served: String?
 
         init(provider: String, model: String, skipped: Bool, ms: Double, connectMs: Double? = nil,
              networkMs: Double? = nil, queueMs: Double? = nil, promptMs: Double? = nil, generateMs: Double? = nil,
              promptTokens: Double? = nil, completionTokens: Double? = nil, costUsd: Double? = nil,
-             error: String? = nil, ttftMs: Double? = nil, streamMs: [String: Double]? = nil, served: String? = nil) {
+             error: String? = nil, ttftMs: Double? = nil, served: String? = nil) {
             self.provider = provider
             self.model = model
             self.skipped = skipped
@@ -39,7 +38,6 @@ struct PhraseTiming: Codable, Equatable, Sendable {
             self.costUsd = costUsd
             self.error = error
             self.ttftMs = ttftMs
-            self.streamMs = streamMs
             self.served = served
         }
 
@@ -51,11 +49,8 @@ struct PhraseTiming: Codable, Equatable, Sendable {
     var endpointMs: Double
     var queueMs: Double
     var decodeMs: Double
-    /// Where the phrase was transcribed when not on this Mac: "api", "api-live" or "vegeta-live", and `decodeMs` is
-    /// the round trip.
+    /// Where the phrase was transcribed when not on this Mac: "api" or "api-live", and `decodeMs` is the round trip.
     var via: String?
-    /// Vegeta Live: the stream's own timings for the phrase (queued, inference, …).
-    var stream: [String: Double]?
     var cleanup: Cleanup?
     var totalMs: Double
 }
@@ -189,11 +184,9 @@ struct PhraseTimeline: View {
     private var steps: [Step] {
         var steps = [Step(id: "pause", label: "End of speech", ms: timing.endpointMs, shade: 0.22)]
         if timing.queueMs >= 1 { steps.append(Step(id: "wait", label: "Waiting", ms: timing.queueMs, shade: 0.12)) }
-        let transcribed = ["api": "API round trip", "api-live": "API live round trip",
-                           "vegeta-live": "Vegeta Live round trip"]
+        let transcribed = ["api": "API round trip", "api-live": "API live round trip"]
         steps.append(Step(id: "transcribe", label: timing.via.flatMap { transcribed[$0] } ?? "Transcribing",
                           ms: timing.decodeMs, shade: 0.5))
-        steps += atVegeta(timing.stream, id: "transcribe")
         guard let cleanup = timing.cleanup else { return steps }
         if let error = cleanup.error {
             steps.append(Step(id: "cleanup", label: "\(cleanup.providerName) failed: \(error)", ms: cleanup.ms, shade: 0.85, alert: true))
@@ -210,18 +203,7 @@ struct PhraseTimeline: View {
                                           ("Prompt", cleanup.promptMs), ("Writing", cleanup.generateMs),
                                           ("First token", cleanup.ttftMs)]
         steps += parts.compactMap { label, ms in ms.map { Step(id: label, label: label, ms: $0) } }
-        return steps + atVegeta(cleanup.streamMs, id: "cleanup")
-    }
-
-    /// The live stream's own timings for a request, as unshaded lines in the order they happen.
-    private func atVegeta(_ timings: [String: Double]?, id: String) -> [Step] {
-        guard let timings else { return [] }
-        let names = ["received": "Received at Vegeta", "queued": "Queued at Vegeta", "inference": "Inference at Vegeta",
-                     "ttft": "First token at Vegeta", "total": "At Vegeta"]
-        let order = ["received", "queued", "inference", "ttft", "total"]
-        func rank(_ name: String) -> Int { order.firstIndex(of: name) ?? order.count }
-        return timings.sorted { (rank($0.key), $0.key) < (rank($1.key), $1.key) }
-            .map { Step(id: "\(id)-\($0.key)", label: names[$0.key] ?? "At Vegeta: \($0.key)", ms: $0.value) }
+        return steps
     }
 
     private var bar: some View {

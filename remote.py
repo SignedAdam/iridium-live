@@ -319,7 +319,6 @@ class Phrase:
         self.local = False
         self.live = None  # the realtime stream it goes over first, if any
         self.via: str | None = ENGINE  # who transcribed it: "api", "api-live", or None for this Mac
-        self.stream_ms: dict | None = None  # the live stream's own timings for it, when it gives any
         self.done = False
         self.dropped = False
         self.sent_at = 0.0
@@ -469,7 +468,7 @@ class Lane:
                     return  # cancelled: no answer is wanted, and the socket did nothing wrong
                 live.give_up(exc)  # this phrase and the rest of the take go the HTTP way
             else:
-                phrase.text, phrase.stream_ms, phrase.via = answer.text, answer.ms, live.ENGINE
+                phrase.text, phrase.via = answer.text, live.ENGINE
                 phrase.answered_at = time.time()
                 self._finish(phrase)
                 return
