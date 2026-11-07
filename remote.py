@@ -1,13 +1,11 @@
-"""Vegeta: speech to text through Citadel, the estate GPU behind an OpenAI-compatible API.
+"""Speech to text at an OpenAI-compatible API: Albastar (`https://api.albastov.com/v1`) or any other base URL and key.
 
-Finals, the phrases the segmenter closes, go out the moment they close and may come back in any order; they are
-handed on in the order they were spoken. Partials, the captions while a phrase is still open, are one request at a
-time on the audio so far, at most every PARTIAL_EVERY_S, and an answer for a phrase that has closed is dropped.
-A final that fails either moves the rest of its take to Phonon-2 on this Mac (fallback "local") or fails the take
-(fallback "fail"); the next take tries Vegeta again. The take's audio is on disk either way (takes.py).
-
-With a live stream (vegeta_live.py, engine "vegeta-live") finals and captions go over its socket first; a final the
-socket cannot answer gives the stream up for the rest of the take, and that phrase and the rest take the path above.
+After stop (engine "api"): a take's phrases are held while it records and, when it stops, all go out at once as
+`POST {base}/audio/transcriptions`; they may come back in any order and are handed on in the order they were spoken.
+Live (engine "api-live", realtime.py): phrases go over the realtime socket while the take records; one the socket
+cannot answer gives the socket up for the rest of the take, and that phrase and the rest go the HTTP way at once.
+A phrase the API fails either moves the rest of its take to Phonon-2 on this Mac (fallback "local") or fails the take
+(fallback "fail"); the next take tries the API again. The take's audio is on disk either way (takes.py).
 """
 from __future__ import annotations
 
@@ -27,46 +25,78 @@ import numpy as np
 
 from segmenter import SAMPLE_RATE
 
-ENGINE = "vegeta"
-BASE = "https://citadel.albastov.com/v1"
+ENGINE = "api"
+BASE = "https://api.albastov.com/v1"
 KEY_ENV = "CITADEL_API_KEY"
+NAME = "Albastar"
 USER_AGENT = "Iridium Live"  # Cloudflare in front of Citadel refuses the Python urllib default
-QUEUE_TIMEOUT_S = 10  # how long a dictation job may wait in Vegeta's queue
+QUEUE_TIMEOUT_S = 10  # how long a job may wait in the server's queue
 PARTIAL_EVERY_S = 1.0
 LOCAL_LOAD_TIMEOUT_S = 75.0
+MODELS_TIMEOUT_S = 10.0
 IDLE_CONNECTIONS = 4
 RELEASE = "release"
 
 
+class Endpoint:
+    """The API in use: its base URL, the environment variable that holds its key, and its name for the status line.
+    Speech, the realtime socket and cleanup all read it at the moment they call, so a change applies to the next call."""
+
+    def __init__(self, base: str = BASE, key_env: str = KEY_ENV, name: str = NAME):
+        self.base, self.key_env, self.name = base.rstrip("/"), key_env, name
+
+    def update(self, base: str | None = None, key_env: str | None = None, name: str | None = None) -> bool:
+        """True when something changed."""
+        before = (self.base, self.key_env, self.name)
+        self.base = (base or self.base).rstrip("/")
+        self.key_env = key_env or self.key_env
+        self.name = name or self.name
+        return before != (self.base, self.key_env, self.name)
+
+    def key(self) -> str | None:
+        return os.environ.get(self.key_env) or None
+
+    def connection(self, timeout: float) -> http.client.HTTPConnection:
+        split = urlsplit(self.base)
+        kind = http.client.HTTPSConnection if split.scheme == "https" else http.client.HTTPConnection
+        return kind(split.hostname, split.port, timeout=timeout)
+
+    def path(self, route: str) -> str:
+        return urlsplit(self.base).path + route
+
+
+api = Endpoint()
+
+
 class Unavailable(RuntimeError):
-    """Vegeta did not answer with text. The message is in plain words, for the status line."""
+    """The API did not answer with text. The message is in plain words, for the status line."""
 
     def __init__(self, message: str, status: int = 0):
         super().__init__(message)
         self.status = status
 
 
-def say(status: int, code: str = "") -> str:
-    """What an HTTP failure from Citadel means, in plain words."""
+def say(status: int, code: str = "", name: str = NAME) -> str:
+    """What an HTTP failure from the API means, in plain words."""
     if code in ("queued", "queue-timeout", "gpu-busy"):
-        return "Vegeta is busy"
-    if code == "model_loading":
-        return "Vegeta is loading the model"
+        return f"{name} is busy"
+    if code in ("model_loading", "model_not_loaded"):
+        return f"{name} is loading the model"
     if status == 401:
-        return "Vegeta: key rejected"
+        return f"{name}: key rejected"
     if status == 403:
-        return "Vegeta: key not allowed"
+        return f"{name}: key not allowed"
     if status == 404:
-        return "Vegeta: no such model"
+        return f"{name}: no such model"
     if status == 413:
-        return "Vegeta: recording too long"
+        return f"{name}: recording too long"
     if status == 429:
-        return "Vegeta: too many requests"
+        return f"{name}: too many requests"
     if status in (400, 415, 422):
-        return "Vegeta refused the request"
+        return f"{name} refused the request"
     if status >= 500:
-        return "Vegeta is offline"
-    return f"Vegeta answered {status}"
+        return f"{name} is offline"
+    return f"{name} answered {status}"
 
 
 def error_code(data: bytes) -> str:
@@ -80,17 +110,17 @@ def error_code(data: bytes) -> str:
     return error if isinstance(error, str) else ""
 
 
-def explain(exc: BaseException) -> str:
-    """A failed call to Citadel in plain words: errors that already are come through unchanged."""
+def explain(exc: BaseException, name: str = NAME) -> str:
+    """A failed call to the API in plain words: errors that already are come through unchanged."""
     if isinstance(exc, TimeoutError):
-        return "Vegeta did not answer in time"
+        return f"{name} did not answer in time"
     if isinstance(exc, (OSError, http.client.HTTPException)):
-        return "Vegeta is offline"
+        return f"{name} is offline"
     return str(exc)
 
 
 def pcm16(samples: np.ndarray) -> bytes:
-    """16 kHz mono float samples as little-endian 16-bit PCM."""
+    """Mono float samples as little-endian 16-bit PCM."""
     return (np.clip(np.round(np.asarray(samples, dtype=np.float32) * 32767.0), -32768, 32767)
             .astype("<i2").tobytes())
 
@@ -122,21 +152,51 @@ def _seconds(header: str | None) -> float | None:
         return None
 
 
-class Client:
-    """`POST /audio/transcriptions` over a few kept-alive connections, safe to call from several threads."""
+def models(endpoint: Endpoint = api) -> list[str]:
+    """The model ids of `GET {base}/models`, in the order the API lists them. Raises Unavailable."""
+    key = endpoint.key()
+    if not key:
+        raise Unavailable(f"{endpoint.name}: no key")
+    conn = endpoint.connection(MODELS_TIMEOUT_S)
+    try:
+        conn.request("GET", endpoint.path("/models"), headers={"Authorization": f"Bearer {key}",
+                                                              "User-Agent": USER_AGENT})
+        response = conn.getresponse()
+        data = response.read()
+    except Exception as exc:
+        raise Unavailable(explain(exc, endpoint.name)) from None
+    finally:
+        conn.close()
+    if response.status != 200:
+        raise Unavailable(say(response.status, error_code(data), endpoint.name), response.status)
+    try:
+        listed = json.loads(data)["data"]
+        return [str(model["id"]) for model in listed if isinstance(model, dict) and model.get("id")]
+    except (ValueError, KeyError, TypeError):
+        raise Unavailable(f"{endpoint.name} sent no model list") from None
 
-    def __init__(self, base: str = BASE, model: str = "parakeet", timeout_s: float = 8.0):
-        self.base = base.rstrip("/")
+
+def choices(ids: list[str]) -> list[str]:
+    """The cleanup model picker: `auto` first when the API lists it (and only then), the other ids as listed."""
+    return (["auto"] if "auto" in ids else []) + [model for model in dict.fromkeys(ids) if model != "auto"]
+
+
+class Client:
+    """`POST {base}/audio/transcriptions` over a few kept-alive connections, safe to call from several threads."""
+
+    def __init__(self, endpoint: Endpoint = api, model: str = "parakeet", timeout_s: float = 8.0):
+        self.endpoint = endpoint
         self.model = model
         self.timeout_s = timeout_s
-        self.idle: list[http.client.HTTPConnection] = []
+        self.idle: list[tuple[str, http.client.HTTPConnection]] = []
         self.closed = False
         self.lock = threading.Lock()
 
     def transcribe(self, samples: np.ndarray) -> str:
-        key = os.environ.get(KEY_ENV)
+        name = self.endpoint.name
+        key = self.endpoint.key()
         if not key:
-            raise Unavailable("Vegeta: no key")
+            raise Unavailable(f"{name}: no key")
         timeout_s = self.timeout_s
         deadline = time.monotonic() + timeout_s
         body, content_type = multipart({"model": self.model, "response_format": "json"}, wav_bytes(samples))
@@ -148,7 +208,7 @@ class Client:
                 try:
                     text = json.loads(data)["text"]
                 except Exception:
-                    raise Unavailable("Vegeta sent no text", status) from None
+                    raise Unavailable(f"{name} sent no text", status) from None
                 return " ".join(str(text or "").split())
             code = error_code(data)
             # The same body is the same job (Citadel derives an idempotency key from it): asking again waits for it.
@@ -156,51 +216,53 @@ class Client:
                     and time.monotonic() + retry_after < deadline):
                 time.sleep(retry_after)
                 continue
-            raise Unavailable(say(status, code), status)
+            raise Unavailable(say(status, code, name), status)
 
-    def _post(self, path: str, body: bytes, headers: dict, deadline: float,
+    def _post(self, route: str, body: bytes, headers: dict, deadline: float,
               timeout_s: float) -> tuple[int, float | None, bytes]:
+        name = self.endpoint.name
         for attempt in (0, 1):
             left = deadline - time.monotonic()
             if left <= 0:
-                raise Unavailable(f"Vegeta did not answer in {timeout_s:g} s")
-            conn, reused = self._connection(left)
+                raise Unavailable(f"{name} did not answer in {timeout_s:g} s")
+            base, conn, reused = self._connection(left)
             try:
                 conn.timeout = left
                 if conn.sock is not None:
                     conn.sock.settimeout(left)
-                conn.request("POST", urlsplit(self.base).path + path, body, headers)
+                conn.request("POST", urlsplit(base).path + route, body, headers)
                 if conn.sock is not None:
                     conn.sock.settimeout(max(0.01, deadline - time.monotonic()))
                 response = conn.getresponse()
                 data = response.read()
             except TimeoutError:
                 conn.close()
-                raise Unavailable(f"Vegeta did not answer in {timeout_s:g} s") from None
+                raise Unavailable(f"{name} did not answer in {timeout_s:g} s") from None
             except (OSError, http.client.HTTPException):
                 conn.close()
                 if reused and attempt == 0:
                     continue  # a kept-alive connection the server had already closed
-                raise Unavailable("Vegeta is offline") from None
+                raise Unavailable(f"{name} is offline") from None
             if response.will_close:
                 conn.close()
             else:
-                self._release(conn)
+                self._release(base, conn)
             return response.status, _seconds(response.getheader("retry-after")), data
-        raise Unavailable("Vegeta is offline")
+        raise Unavailable(f"{name} is offline")
 
-    def _connection(self, timeout: float) -> tuple[http.client.HTTPConnection, bool]:
+    def _connection(self, timeout: float) -> tuple[str, http.client.HTTPConnection, bool]:
+        base = self.endpoint.base
         with self.lock:
-            if self.idle:
-                return self.idle.pop(), True
-        split = urlsplit(self.base)
-        kind = http.client.HTTPSConnection if split.scheme == "https" else http.client.HTTPConnection
-        return kind(split.hostname, split.port, timeout=timeout), False
+            for index, (at, conn) in enumerate(self.idle):
+                if at == base:
+                    del self.idle[index]
+                    return base, conn, True
+        return base, self.endpoint.connection(timeout), False
 
-    def _release(self, conn: http.client.HTTPConnection) -> None:
+    def _release(self, base: str, conn: http.client.HTTPConnection) -> None:
         with self.lock:
-            if not self.closed and len(self.idle) < IDLE_CONNECTIONS:
-                self.idle.append(conn)
+            if not self.closed and base == self.endpoint.base and len(self.idle) < IDLE_CONNECTIONS:
+                self.idle.append((base, conn))
                 return
         conn.close()
 
@@ -208,7 +270,7 @@ class Client:
         """Closes the kept-alive connections, and those of requests still under way when they end."""
         with self.lock:
             idle, self.idle, self.closed = self.idle, [], True
-        for conn in idle:
+        for _, conn in idle:
             conn.close()
 
 
@@ -255,21 +317,26 @@ class Phrase:
         self.text = ""
         self.error = ""
         self.local = False
-        self.live = False
-        self.via: str | None = ENGINE  # who transcribed it: "vegeta", "vegeta-live", or None for this Mac
-        self.stream_ms: dict | None = None  # the live stream's `ms` for it
+        self.live = None  # the realtime stream it goes over first, if any
+        self.via: str | None = ENGINE  # who transcribed it: "api", "api-live", or None for this Mac
+        self.stream_ms: dict | None = None  # the live stream's own timings for it, when it gives any
         self.done = False
         self.dropped = False
         self.sent_at = 0.0
         self.answered_at = 0.0
         self.waiter: threading.Event | None = None
 
+    @property
+    def key(self):
+        """The phrase as captions name it: its take and when it started."""
+        return self.take, (self.meta[0] if self.meta else None)
+
 
 class Lane:
-    """Finals to Vegeta, handed to `emit` in the order they were submitted, whatever order the answers come in."""
+    """Finals to the API, handed to `emit` in the order they were submitted, whatever order the answers come in."""
 
     def __init__(self, client: Client, emit, *, fallback: str = "local", load_local=None, release_local=None,
-                 notice=None, live=None):
+                 notice=None):
         self.client = client
         self.emit = emit
         self.fallback = fallback
@@ -277,36 +344,52 @@ class Lane:
         self.release_local = release_local or (lambda: None)
         self.notice = notice or (lambda text: None)
         self.partials = Partials(client)
-        self.live = live  # a vegeta_live.Stream, for phrases submitted live
         self.lock = threading.Lock()
         self.order: list[Phrase] = []
         self.outstanding: dict[str | None, int] = {}
         self.fallen: dict[str | None, str] = {}
         self.failed: dict[str | None, str] = {}
+        self.holding: dict[str | None, list[Phrase]] = {}  # after stop: a recording's phrases, sent when it stops
         self.local_jobs: queue.Queue = queue.Queue()
         threading.Thread(target=self._local_work, daemon=True).start()
 
-    def configure(self, model: str | None = None, timeout_s: float | None = None, fallback: str | None = None,
-                  base: str | None = None) -> None:
+    def configure(self, model: str | None = None, timeout_s: float | None = None,
+                  fallback: str | None = None) -> None:
         if model:
             self.client.model = model
         if timeout_s:
             self.client.timeout_s = min(max(float(timeout_s), 1.0), 60.0)
         if fallback in ("local", "fail"):
             self.fallback = fallback
-        if base:  # Citadel's origin, for the replay script and tests; the app never sends it
-            self.client.base = base.rstrip("/") + "/v1"
-            if self.live is not None:
-                self.live.base = base.rstrip("/")
 
-    def submit(self, audio: np.ndarray, take: str | None, meta=None, live: bool = False) -> Phrase:
+    def hold(self, take: str | None) -> None:
+        """This recording's phrases wait until `send_held`: transcription after stop."""
+        with self.lock:
+            self.holding.setdefault(take, [])
+
+    def send_held(self, take: str | None) -> None:
+        """The recording stopped: its held phrases all go out now, and later ones at once."""
+        with self.lock:
+            held = self.holding.pop(take, [])
+        for phrase in held:
+            self._start(phrase)
+
+    def submit(self, audio: np.ndarray, take: str | None, meta=None, live=None) -> Phrase:
         phrase = Phrase(take, audio, meta)
-        phrase.live = live and self.live is not None
+        phrase.live = live
         with self.lock:
             self.outstanding[take] = self.outstanding.get(take, 0) + 1
             self.order.append(phrase)
-            failed = self.failed.get(take)
-            local = take in self.fallen
+            if take in self.holding:
+                self.holding[take].append(phrase)
+                return phrase
+        self._start(phrase)
+        return phrase
+
+    def _start(self, phrase: Phrase) -> None:
+        with self.lock:
+            failed = self.failed.get(phrase.take)
+            local = phrase.take in self.fallen
         if failed is not None:
             phrase.error = failed
             self._finish(phrase)
@@ -314,10 +397,9 @@ class Lane:
             self.local_jobs.put(phrase)
         else:
             threading.Thread(target=self._remote, args=(phrase,), daemon=True).start()
-        return phrase
 
     def troubled(self, take: str | None) -> bool:
-        """Vegeta failed this take: it runs on this Mac or has failed, and gets no captions from Vegeta."""
+        """The API failed this take: it runs on this Mac or has failed, and gets no captions from the API."""
         with self.lock:
             return take in self.fallen or take in self.failed
 
@@ -344,11 +426,12 @@ class Lane:
                 if phrase.take == take:
                     phrase.dropped = True
             self.outstanding.pop(take, None)
+            self.holding.pop(take, None)
             self._flush()
         self.close(take)
 
     def close(self, take: str | None) -> None:
-        """The take is over: the next one tries Vegeta again, and this Mac's model goes once no take needs it."""
+        """The take is over: the next one tries the API again, and this Mac's model goes once no take needs it."""
         with self.lock:
             self.fallen.pop(take, None)
             self.failed.pop(take, None)
@@ -359,13 +442,8 @@ class Lane:
     def release(self) -> None:
         self.local_jobs.put(RELEASE)
 
-    def transcribe_now(self, audio: np.ndarray, live: bool = False) -> str:
-        """Blocking, for a retake: the live stream when asked, then Vegeta, else this Mac when the fallback is local."""
-        if live and self.live is not None:
-            try:
-                return self.live.transcribe(audio, timeout_s=self.client.timeout_s).text
-            except Exception as exc:
-                self.live.give_up(exc)
+    def transcribe_now(self, audio: np.ndarray) -> str:
+        """Blocking, for a retake: the API over HTTP, else this Mac when the fallback is local."""
         try:
             return self.client.transcribe(audio)
         except Unavailable as exc:
@@ -382,21 +460,25 @@ class Lane:
 
     def _remote(self, phrase: Phrase) -> None:
         phrase.sent_at = time.time()
-        if phrase.live:
+        live = phrase.live
+        if live is not None and not live.down:
             try:
-                answer = self.live.transcribe(phrase.audio, timeout_s=self.client.timeout_s)
+                answer = live.transcribe(phrase.audio, timeout_s=self.client.timeout_s, phrase=phrase.key)
             except Exception as exc:
-                self.live.give_up(exc)  # this phrase and the rest of the take go the HTTP way
+                if phrase.dropped:
+                    return  # cancelled: no answer is wanted, and the socket did nothing wrong
+                live.give_up(exc)  # this phrase and the rest of the take go the HTTP way
             else:
-                phrase.text, phrase.stream_ms, phrase.via = answer.text, answer.ms, self.live.ENGINE
+                phrase.text, phrase.stream_ms, phrase.via = answer.text, answer.ms, live.ENGINE
                 phrase.answered_at = time.time()
                 self._finish(phrase)
                 return
         try:
             phrase.text = self.client.transcribe(phrase.audio)
         except Exception as exc:
-            self._failed(phrase, explain(exc))
+            self._failed(phrase, explain(exc, self.client.endpoint.name))
             return
+        phrase.via = ENGINE
         phrase.answered_at = time.time()
         self._finish(phrase)
 
@@ -467,7 +549,7 @@ class Lane:
             try:
                 result.append(self.load_local())
             except Exception as exc:
-                print(f"vegeta fallback: the speech model did not load: {exc}", file=sys.stderr, flush=True)
+                print(f"api fallback: the speech model did not load: {exc}", file=sys.stderr, flush=True)
         loader = threading.Thread(target=load, daemon=True)
         loader.start()
         loader.join(LOCAL_LOAD_TIMEOUT_S)
@@ -477,29 +559,31 @@ class Lane:
 
 
 class Speech:
-    """What the segmenter talks to in vegeta mode. Deferred: finals go to the lane and come back as events.
-    Live: finals and captions go over the lane's live stream while it holds."""
+    """What the segmenter talks to for the API. Deferred: finals go to the lane and come back as events.
+    `holds`: after stop, a recording's phrases wait for its end. `live`: a realtime stream that carries finals and
+    captions while it holds."""
 
     ready = True
 
-    def __init__(self, lane: Lane, deferred: bool = True, live: bool = False):
+    def __init__(self, lane: Lane, deferred: bool = True, live=None, holds: bool = False):
         self.lane = lane
         self.deferred = deferred
         self.live = live
+        self.holds = holds
 
     def partial(self, audio: np.ndarray, phrase) -> tuple[str, float] | None:
-        if self.lane.troubled(phrase[0]):
+        if self.holds or self.lane.troubled(phrase[0]):
             return None
-        if self.live and not self.lane.live.down:
-            return self.lane.live.captions.offer(audio, phrase)
+        if self.live is not None and not self.live.down:
+            return self.live.offer(audio, phrase)
         return self.lane.partials.offer(audio, phrase)
 
     def submit(self, audio: np.ndarray, take: str | None, meta) -> None:
         self.lane.submit(audio, take, meta, live=self.live)
 
     def transcribe_array(self, audio: np.ndarray):
-        return self.lane.transcribe_now(audio, self.live), None, None
+        return self.lane.transcribe_now(audio), None, None
 
     def blocking(self) -> Speech:
         """The same speech for a retake, which waits for each phrase."""
-        return Speech(self.lane, deferred=False, live=self.live)
+        return Speech(self.lane, deferred=False)

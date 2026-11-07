@@ -33,7 +33,7 @@ import numpy as np
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
 
-import vegeta
+import remote as vegeta  # the Citadel HTTP side, now remote.py
 from segmenter import SAMPLE_RATE
 
 ENGINE = "vegeta-live"
@@ -165,7 +165,10 @@ class Stream:
         with self.lock:
             self.recording, self.used = False, time.monotonic()
 
-    def transcribe(self, samples: np.ndarray, final: bool = True, timeout_s: float = 8.0) -> Answer:
+    def offer(self, audio: np.ndarray, phrase) -> tuple[str, float] | None:
+        return self.captions.offer(audio, phrase)
+
+    def transcribe(self, samples: np.ndarray, final: bool = True, timeout_s: float = 8.0, phrase=None) -> Answer:
         deadline = time.monotonic() + timeout_s
         request = self._send({"op": "transcribe", "final": final}, vegeta.pcm16(samples))
         reply = self._wait(request, deadline)
@@ -311,8 +314,8 @@ class Stream:
                                        proxy=None)
                 except InvalidStatus as exc:
                     status = exc.response.status_code
-                    reason = "Vegeta Live: session refused" if status in (401, 403) else vegeta.say(status).replace(
-                        "Vegeta", "Vegeta Live", 1)
+                    reason = ("Vegeta Live: session refused" if status in (401, 403)
+                              else vegeta.say(status, "", "Vegeta Live"))
                     if status in (401, 403) and not renewed:
                         break  # the ticket expired: a new session, once
                 except (OSError, TimeoutError, WebSocketException):
@@ -347,8 +350,7 @@ class Stream:
             conn.close()
         if response.status not in (200, 201):
             raise vegeta.Unavailable("Vegeta Live is not available" if response.status == 404 else
-                                     vegeta.say(response.status, vegeta.error_code(data)).replace(
-                                         "Vegeta", "Vegeta Live", 1))
+                                     vegeta.say(response.status, vegeta.error_code(data), "Vegeta Live"))
         try:
             answer = json.loads(data)
             session = {"id": str(answer["session_id"]), "ticket": str(answer["ticket"])}

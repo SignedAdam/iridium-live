@@ -12,7 +12,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import cleanup  # noqa: E402
-import vegeta  # noqa: E402
+import remote as vegeta  # noqa: E402
 import vegeta_live  # noqa: E402
 from stream_stub import StreamStub, StubError  # noqa: E402
 
@@ -68,9 +68,9 @@ class LiveTest(unittest.TestCase):
                                 f"{len(emitted)} of {count} phrases came back")
                 return list(emitted)
 
-        client = vegeta.Client(self.stub.base + "/v1", timeout_s=3.0)
+        client = vegeta.Client(vegeta.Endpoint(self.stub.base + "/v1", name="Vegeta"), timeout_s=3.0)
         self.addCleanup(client.close)
-        lane = vegeta.Lane(client, emit, live=self.stream, notice=self.notices.append, **options)
+        lane = vegeta.Lane(client, emit, notice=self.notices.append, **options)
         return lane, wait_for
 
     def test_session_opens_at_record_start_and_closes_when_idle(self):
@@ -100,7 +100,7 @@ class LiveTest(unittest.TestCase):
         self.stream.begin()
         started = time.monotonic()
         for mark in (1, 2, 3):
-            lane.submit(tone(mark), "take", mark, live=True)
+            lane.submit(tone(mark), "take", (float(mark), 0.0, 0.0), live=self.stream)
         phrases = wait_for(3)
         self.assertEqual([phrase.text for phrase in phrases], ["final 1", "final 2", "final 3"])
         self.assertLess(time.monotonic() - started, 0.9, "finals went out together on one socket")
@@ -154,7 +154,7 @@ class LiveTest(unittest.TestCase):
         lane, wait_for = self.lane()
         self.stream.begin()
         for mark in (1, 2, 3):
-            lane.submit(tone(mark), "take", mark, live=True)
+            lane.submit(tone(mark), "take", (float(mark), 0.0, 0.0), live=self.stream)
         phrases = wait_for(3)
         self.assertEqual([phrase.text for phrase in phrases], ["final 1", "final 2", "final 3"])
         self.assertEqual([phrase.via for phrase in phrases], ["vegeta-live"] * 3)
@@ -190,13 +190,13 @@ class LiveTest(unittest.TestCase):
         lane, wait_for = self.lane()
         self.stream.begin()
         for mark in (1, 2):
-            lane.submit(tone(mark), "take", mark, live=True)
+            lane.submit(tone(mark), "take", (float(mark), 0.0, 0.0), live=self.stream)
         phrases = wait_for(2)
-        self.assertEqual([(phrase.text, phrase.via) for phrase in phrases], [("http 1", "vegeta"), ("http 2", "vegeta")])
+        self.assertEqual([(phrase.text, phrase.via) for phrase in phrases], [("http 1", "api"), ("http 2", "api")])
         self.assertEqual(self.notices, ["Vegeta Live is offline: using Vegeta"])
         self.stub.refuse_sockets = False
         self.stream.begin()  # the next take tries live again
-        lane.submit(tone(3), "next", None, live=True)
+        lane.submit(tone(3), "next", None, live=self.stream)
         self.assertEqual((wait_for(3)[2].text, wait_for(3)[2].via), ("final 3", "vegeta-live"))
         self.assertEqual(len(self.notices), 1)
 
@@ -204,17 +204,17 @@ class LiveTest(unittest.TestCase):
         self.stub.http_speak = lambda mark: (502, {"error": "bad gateway"})
         lane, wait_for = self.lane(load_local=LocalModel)
         self.stream.begin()
-        lane.submit(tone(1), "take", 1, live=True)
+        lane.submit(tone(1), "take", (1.0, 0.0, 0.0), live=self.stream)
         self.assertEqual(wait_for(1)[0].via, "vegeta-live")
 
         def drop(header, mark):
             self.stub.refuse_sockets = True
             return True
         self.stub.drop_on = drop
-        lane.submit(tone(2), "take", 2, live=True)
+        lane.submit(tone(2), "take", (2.0, 0.0, 0.0), live=self.stream)
         second = wait_for(2)[1]
         self.assertEqual((second.text, second.via), ("local 2", None))
-        lane.submit(tone(3), "take", 3, live=True)
+        lane.submit(tone(3), "take", (3.0, 0.0, 0.0), live=self.stream)
         self.assertEqual(wait_for(3)[2].text, "local 3")
         self.assertEqual(self.notices, ["Vegeta Live dropped: using Vegeta", "Vegeta is offline: using this Mac"])
         self.assertEqual(self.stub.http.count("/v1/audio/transcriptions"), 1, "the rest of the take stays here")
@@ -239,8 +239,8 @@ class LiveTest(unittest.TestCase):
         self.stub.speak = speak
         lane, wait_for = self.lane()
         self.stream.begin()
-        lane.submit(tone(1), "take", 1, live=True)
-        self.assertEqual((wait_for(1)[0].text, wait_for(1)[0].via), ("http 1", "vegeta"))
+        lane.submit(tone(1), "take", (1.0, 0.0, 0.0), live=self.stream)
+        self.assertEqual((wait_for(1)[0].text, wait_for(1)[0].via), ("http 1", "api"))
         self.assertEqual(self.notices, ["Parakeet is not running: using Vegeta"])
         self.assertIsNone(self.stream.captions.offer(tone(1), ("take", 1.0)))
 
@@ -312,7 +312,7 @@ class LiveCleanupTest(unittest.TestCase):
         out, stats = self.remote.rewrite("um fine")
         self.assertEqual(out, "um fine")
         self.assertTrue(stats.failed)
-        self.assertEqual(self.states[-1], ("error", "Vegeta is busy"))
+        self.assertEqual(self.states[-1], ("error", "Vegeta Live is busy"))
 
 
 if __name__ == "__main__":

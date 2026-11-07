@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import queue
@@ -9,8 +10,9 @@ import sys
 import threading
 import time
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
-import vegeta
+import remote
 import vegeta_live
 
 MAX_NEW = 160
@@ -33,8 +35,9 @@ class Stats(NamedTuple):
     cost_usd: float | None = None
     error: str | None = None
     failed: bool = False
-    ttft_ms: int | None = None  # Vegeta Live: the first token, as this Mac saw it
+    ttft_ms: int | None = None  # streamed answers: the first token, as this Mac saw it
     stream_ms: dict | None = None  # Vegeta Live: the stream's own timings for the call
+    served: str | None = None  # the model that answered (`auto` resolves to one), when the API says
 
 
 class Failed(RuntimeError):
@@ -294,29 +297,30 @@ def plausible(raw: str, out: str) -> bool:
 
 class Provider(NamedTuple):
     label: str
-    host: str
-    path: str
+    url: str  # the chat completions URL
     key_env: str
     budget: str
     quiet: tuple[dict, ...]
     accounting: dict
+    stream: bool = False  # ask for the answer streamed (server-sent events)
 
 
+API = "api"  # the API of Settings, Provider: Albastar or any OpenAI-compatible base URL (remote.api)
 PROVIDERS = {
-    "openrouter": Provider("OpenRouter", "openrouter.ai", "/api/v1/chat/completions", "OPENROUTER_API_KEY",
+    "openrouter": Provider("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY",
                            "max_tokens", ({"reasoning": {"enabled": False, "exclude": True}}, {}),
                            {"usage": {"include": True}}),
-    "groq": Provider("Groq", "api.groq.com", "/openai/v1/chat/completions", "GROQ_API_KEY",
+    "groq": Provider("Groq", "https://api.groq.com/openai/v1/chat/completions", "GROQ_API_KEY",
                      "max_completion_tokens", ({"reasoning_effort": "none", "reasoning_format": "hidden"},
                                                {"reasoning_effort": "low", "reasoning_format": "hidden"}, {}),
                      {}),
-    "vegeta": Provider("Vegeta", "citadel.albastov.com", "/v1/chat/completions", vegeta.KEY_ENV, "max_tokens",
-                       ({"chat_template_kwargs": {"enable_thinking": False}},), {}),
-    # The same Citadel chat, over the live stream; the HTTP path above when the stream is down.
-    "vegeta-live": Provider("Vegeta Live", "citadel.albastov.com", "/v1/chat/completions", vegeta.KEY_ENV,
+    # Citadel's chat over Vegeta's dictation stream; Citadel over HTTP when the stream is down.
+    "vegeta-live": Provider("Vegeta Live", "https://citadel.albastov.com/v1/chat/completions", remote.KEY_ENV,
                             "max_tokens", ({"chat_template_kwargs": {"enable_thinking": False}},), {}),
 }
-VEGETA = ("vegeta", vegeta_live.ENGINE)
+VEGETA = (vegeta_live.ENGINE,)
+AUTO = "auto"
+AUTO_REQUIREMENTS = {"reasoning": "off"}  # a phrase needs a model that answers at once
 _stream: vegeta_live.Stream | None = None
 TIMEOUT_S = 2.5
 _timeout_s = TIMEOUT_S
@@ -346,7 +350,13 @@ def _groq_cost(model: str, prompt_tokens: int | None, completion_tokens: int | N
 
 
 def provider(key: str | None) -> Provider | None:
-    return PROVIDERS.get(key.split(":", 1)[0]) if key and ":" in key else None
+    if not key or ":" not in key:
+        return None
+    name = key.split(":", 1)[0]
+    if name == API:
+        return Provider(remote.api.name, remote.api.base + "/chat/completions", remote.api.key_env, "max_tokens",
+                        ({},), {"stream_options": {"include_usage": True}}, stream=True)
+    return PROVIDERS.get(name)
 
 
 def missing_key(key: str) -> str:
@@ -371,7 +381,7 @@ class Remote:
     def __init__(self, key: str, notify=None, stale=None):
         self.key = key
         self.name = key.split(":", 1)[0]
-        self.provider = provider(key)
+        self.conn_url: str | None = None  # the URL self.conn was opened for
         self.model = key.split(":", 1)[1]
         self.model_id, _, self.route = self.model.rpartition("@") if "@" in self.model else (self.model, "", "")
         self.notify = notify or (lambda state, message="": None)
@@ -384,9 +394,11 @@ class Remote:
         self.note = ""
         self.connect_ms: int | None = None
         self.trip_ms = 0.0
-        self.via = self.name  # where the last call went: vegeta-live falls back to vegeta's HTTP path
+        self.via = self.name  # where the last call went: vegeta-live falls back to Citadel's HTTP path
         self.ttft_ms: int | None = None
         self.stream_ms: dict | None = None
+        self.served: str | None = None  # the model that answered, as the API names it: `auto` resolves to one
+        self.resolved: str | None = None  # the last answer's X-Model-Resolved header
         self.shots = [message for phrase, clean in SHOTS
                       for message in ({"role": "user", "content": phrase},
                                       {"role": "assistant", "content": clean})]
@@ -394,6 +406,11 @@ class Remote:
         self.wait_s: float | None = None
         self.trace: dict = {}
         self.warmed = float("-inf")
+
+    @property
+    def provider(self) -> Provider:
+        """Looked up per call: the API's base URL and key may change in Settings."""
+        return provider(self.key)
 
     def _begin(self, kind: str, text: str, context: str, **extra) -> None:
         """Starts the record of one cleanup call: what went in and what the model was allowed to see."""
@@ -459,7 +476,7 @@ class Remote:
             self.note = f"{self.model} implausible"
             self._end(text, rejected=cleaned)
             return text, self._stats(error="implausible rewrite", **usage), None
-        self.note = self.model
+        self.note = self._answered_by()
         self._end(cleaned, accepted=True)
         return cleaned, self._stats(**usage), None
 
@@ -499,17 +516,22 @@ class Remote:
             self.note = f"{self.model} implausible"
             self._end(text, rejected=out)
             return text, self._stats(error="implausible rewrite", **usage)
-        self.note = self.model
+        self.note = self._answered_by()
         self._end(out, accepted=True)
         return out, self._stats(**usage)
 
+    def _answered_by(self) -> str:
+        """The model asked for, and the one that answered when the API resolved it (`auto -> qwen3.8-27b`)."""
+        return f"{self.model} -> {self.served}" if self.served and self.served != self.model else self.model
+
     def _fresh(self) -> None:
         self.connect_ms, self.trip_ms, self.ttft_ms, self.stream_ms, self.via = None, 0.0, None, None, self.name
+        self.served = self.resolved = None
         self.tries = 0
 
     def _stats(self, *, skipped: bool = False, **fields) -> Stats:
         return Stats(self.via, self.model, skipped, connect_ms=self.connect_ms, ttft_ms=self.ttft_ms,
-                     stream_ms=self.stream_ms, **fields)
+                     stream_ms=self.stream_ms, served=self.served, **fields)
 
     def _ask_retrying(self, retries: int, text: str, deadline_s: float, context: str = "", whole: bool = False,
                       correcting: int | None = None) -> tuple[str, dict]:
@@ -534,16 +556,19 @@ class Remote:
 
     def _say(self, exc: BaseException) -> str:
         """A failed call as the status line shows it."""
-        if self.name not in VEGETA:
-            return f"{self.provider.label}: {exc}"
+        label = self.provider.label
+        if self.name != API and self.name not in VEGETA:
+            return f"{label}: {exc}"
         if isinstance(exc, Failed) and exc.status:
-            return vegeta.say(exc.status, exc.code)
-        return vegeta.explain(exc)
+            return remote.say(exc.status, exc.code, label)
+        return remote.explain(exc, label)
 
     def warm(self) -> bool:
-        """Vegeta unloads a model it has not used for a while: one tiny request while the user is still talking
-        brings it back before the first phrase needs it. At most once a minute; nothing waits for the answer."""
-        if self.name not in VEGETA or missing_key(self.key) or time.monotonic() - self.warmed < WARM_EVERY_S:
+        """Our API unloads a model it has not used for a while: one tiny request while the user is still talking
+        brings a named model back before the first phrase needs it (`auto` picks a loaded one by itself). At most
+        once a minute; nothing waits for the answer."""
+        if (self.name not in (API, *VEGETA) or self.model_id == AUTO or missing_key(self.key)
+                or time.monotonic() - self.warmed < WARM_EVERY_S):
             return False
         self.warmed = time.monotonic()
         threading.Thread(target=self._warm, daemon=True).start()
@@ -555,21 +580,19 @@ class Remote:
                            **self.provider.quiet[0]}).encode()
 
     def _warm(self) -> None:
-        import http.client
-
         if self.name == vegeta_live.ENGINE and _stream is not None:
             try:
                 _stream.chat(json.loads(self.warm_body()), time.monotonic() + WARM_TIMEOUT_S)
                 print(f"warm-up {self.model_id}: done over the stream", file=sys.stderr, flush=True)
                 return
-            except vegeta.Unavailable:
+            except remote.Unavailable:
                 pass  # no live socket: the HTTP way, as the phrases go
             except Exception as exc:
                 print(f"warm-up {self.model_id}: {exc}", file=sys.stderr, flush=True)
                 return
-        conn = http.client.HTTPSConnection(self.provider.host, timeout=WARM_TIMEOUT_S)
+        conn = _connection(self.provider.url, WARM_TIMEOUT_S)
         try:
-            conn.request("POST", self.provider.path, self.warm_body(), self._headers())
+            conn.request("POST", _path(self.provider.url), self.warm_body(), self._headers())
             status = conn.getresponse().status
             print(f"warm-up {self.model_id}: {status}", file=sys.stderr, flush=True)
         except Exception as exc:
@@ -579,7 +602,7 @@ class Remote:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {os.environ[self.provider.key_env]}", "Content-Type": "application/json",
-                "X-Title": "Iridium Live", "User-Agent": vegeta.USER_AGENT, "Connection": "keep-alive"}
+                "X-Title": "Iridium Live", "User-Agent": remote.USER_AGENT, "Connection": "keep-alive"}
 
     def close(self) -> None:
         if self.conn is not None:
@@ -613,7 +636,7 @@ class Remote:
             status, data = send()
         if status != 200:
             raise Failed(f"{status} {SAYS.get(status) or _message(data)}", status, self.wait_s,
-                         vegeta.error_code(data))
+                         remote.error_code(data))
         try:
             body = json.loads(data)
             choice = body["choices"][0]
@@ -621,6 +644,8 @@ class Remote:
             self.cut = choice.get("finish_reason") == "length"
         except Exception:
             raise RuntimeError(f"bad response: {_message(data)}") from None
+        served = self.resolved or body.get("model")
+        self.served = str(served) if served else None
         if correcting:
             return out or "", self._usage(body)
         lines = [" ".join(line.split()) for line in (out or "").splitlines()]
@@ -659,37 +684,41 @@ class Remote:
                         + [{"role": "user", "content": preface() + lead + text}])
             extra = {}
         routing = {"provider": {"order": [self.route], "allow_fallbacks": True, "sort": "latency"}} if self.route else {}
+        # `auto` lets the API pick the model; `requirements` says what the pick must do, and only `auto` takes it
+        picking = {"requirements": AUTO_REQUIREMENTS} if self.model_id == AUTO else {}
         return json.dumps({
             "model": self.model_id,
             "messages": messages,
             "temperature": 0,
-            "stream": False,
+            "stream": self.provider.stream,
             self.provider.budget: room,
             **self.provider.accounting,
             **self.provider.quiet[self.quiet],
             **extra,
             **routing,
+            **picking,
         }).encode()
 
     def _round_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
         if self.name == vegeta_live.ENGINE and _stream is not None:
             try:
                 return self._streamed(payload, deadline)
-            except vegeta.Unavailable:
+            except remote.Unavailable:
                 self.via = "vegeta"  # no live socket for the rest of this take: Citadel over HTTP
         return self._http_trip(payload, deadline)
 
     def _http_trip(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
-        import http.client
-
         headers = self._headers()
+        url = self.provider.url
+        if self.conn is not None and self.conn_url != url:
+            self.close()  # the API's base URL changed in Settings
         for retry in (True, False):
             left = deadline - time.monotonic()
             if left <= 0:
                 raise TimeoutError("timed out")
             fresh = self.conn is None
             if fresh:
-                self.conn = http.client.HTTPSConnection(self.provider.host, timeout=left)
+                self.conn, self.conn_url = _connection(url, left), url
             self.conn.timeout = left
             if self.conn.sock is not None:
                 self.conn.sock.settimeout(left)
@@ -700,9 +729,13 @@ class Remote:
                     self.connect_ms = round((time.perf_counter() - opened) * 1000)
                     self.conn.sock.settimeout(left)
                 sent = time.perf_counter()
-                self.conn.request("POST", self.provider.path, payload, headers)
+                self.conn.request("POST", _path(url), payload, headers)
                 response = self.conn.getresponse()
-                data = response.read()
+                self.resolved = response.getheader("x-model-resolved")
+                if response.status == 200 and "event-stream" in (response.getheader("content-type") or ""):
+                    data = self._events(response, sent)
+                else:
+                    data = response.read()
                 self.trip_ms = (time.perf_counter() - sent) * 1000
                 wait = response.getheader("retry-after")
                 self.wait_s = float(wait) if wait and wait.replace(".", "", 1).isdigit() else None
@@ -717,6 +750,35 @@ class Remote:
                 if fresh or not retry:
                     raise
         raise RuntimeError("unreachable")
+
+    def _events(self, response, sent: float) -> bytes:
+        """A streamed answer (`data: {chunk}` lines up to `data: [DONE]`) as the JSON body a plain answer has: the
+        content joined, the last finish reason, the usage of the last chunk and the model the chunks name."""
+        parts: list[str] = []
+        finish, usage, model = None, None, None
+        for line in iter(response.readline, b""):
+            line = line.strip()
+            if not line.startswith(b"data:"):
+                continue
+            data = line[5:].strip()
+            if data == b"[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except ValueError:
+                continue
+            model = model or chunk.get("model")
+            usage = chunk.get("usage") or usage
+            for choice in chunk.get("choices") or []:
+                piece = (choice.get("delta") or {}).get("content")
+                if piece:
+                    if not parts:
+                        self.ttft_ms = round((time.perf_counter() - sent) * 1000)
+                    parts.append(piece)
+                finish = choice.get("finish_reason") or finish
+        response.read()  # the rest of the body, so the connection can carry the next call
+        return json.dumps({"model": model, "usage": usage,
+                           "choices": [{"message": {"content": "".join(parts)}, "finish_reason": finish}]}).encode()
 
     def _streamed(self, payload: bytes, deadline: float) -> tuple[int, bytes]:
         """The same body over the live stream, answered as an HTTP call would be: status and JSON body."""
@@ -733,6 +795,17 @@ class Remote:
         self.ttft_ms, self.stream_ms, self.wait_s = chat.ttft_ms, chat.ms, None
         return 200, json.dumps({"choices": [{"message": {"content": chat.text}, "finish_reason": chat.finish}],
                                 "usage": chat.usage}).encode()
+
+
+def _connection(url: str, timeout: float) -> http.client.HTTPConnection:
+    split = urlsplit(url)
+    kind = http.client.HTTPSConnection if split.scheme == "https" else http.client.HTTPConnection
+    return kind(split.hostname, split.port, timeout=timeout)
+
+
+def _path(url: str) -> str:
+    split = urlsplit(url)
+    return split.path + (f"?{split.query}" if split.query else "")
 
 
 def _message(data: bytes) -> str:
