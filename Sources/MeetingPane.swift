@@ -239,6 +239,7 @@ struct LiveTranscriptView: View {
     private static let tail = "tail"
 
     var body: some View {
+        let paragraphs = live.transcript.paragraphs
         VStack(alignment: .leading, spacing: 8) {
             if let line = statusNote {
                 Text(line)
@@ -250,10 +251,10 @@ struct LiveTranscriptView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        if live.transcript.paragraphs.isEmpty && statusNote == nil {
+                        if paragraphs.isEmpty && statusNote == nil {
                             empty
                         }
-                        ForEach(live.transcript.paragraphs) { paragraph in
+                        ForEach(paragraphs) { paragraph in
                             LiveParagraph(name: paragraph.kind == .mic ? "You" : (live.namedOther ?? otherSideLabel),
                                           text: paragraph.text, pending: paragraph.pending)
                         }

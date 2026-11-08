@@ -197,7 +197,8 @@ struct MeetingStrip: View {
     }
 
     private func line(_ meetings: MeetingsModel, compact: Bool) -> some View {
-        let said = caption(meetings)
+        let last = meetings.live.transcript.paragraphs.last
+        let said = caption(last)
         let body = Text(said)
             .font(tiktok(compact ? 11 : 12))
             .foregroundStyle(.white.opacity(said == "Listening" ? 0.6 : 0.88))
@@ -206,7 +207,7 @@ struct MeetingStrip: View {
             .fixedSize()
             .animation(.easeOut(duration: 0.24), value: said)
         return HStack(spacing: compact ? 5 : 6) {
-            if let who = speaker(meetings) {
+            if let who = speaker(last, meetings) {
                 Text(who)
                     .font(tiktok(compact ? 10 : 11, "Medium"))
                     .foregroundStyle(.white.opacity(0.6))
@@ -227,15 +228,15 @@ struct MeetingStrip: View {
         }
     }
 
-    private func speaker(_ meetings: MeetingsModel) -> String? {
-        guard let last = meetings.live.transcript.paragraphs.last else { return nil }
+    private func speaker(_ last: LiveTranscript.Paragraph?, _ meetings: MeetingsModel) -> String? {
+        guard let last else { return nil }
         return last.kind == .mic ? "You" : (meetings.live.namedOther ?? otherSideLabel)
     }
 
-    private func caption(_ meetings: MeetingsModel) -> String {
-        guard let last = meetings.live.transcript.paragraphs.last else { return "Listening" }
+    private func caption(_ last: LiveTranscript.Paragraph?) -> String {
+        guard let last else { return "Listening" }
         let said = [last.text, last.pending].filter { !$0.isEmpty }.joined(separator: " ")
-        return said.isEmpty ? "Listening" : said
+        return said.isEmpty ? "Listening" : String(said.suffix(200))
     }
 }
 

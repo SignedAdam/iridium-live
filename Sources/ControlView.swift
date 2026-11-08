@@ -7,6 +7,7 @@ struct ControlView: View {
     @Bindable var model: AppModel
     let notes: NotesEditor
     let mover: WindowMover
+    @State private var leaving: AppModel.Pane?
 
     var body: some View {
         let metrics = model.metrics
@@ -45,6 +46,11 @@ struct ControlView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: model.linesHeight)
         .animation(.spring(response: 0.4, dampingFraction: 0.88), value: model.meetingStripShown)
         .animation(.spring(response: 0.42, dampingFraction: 0.86), value: metrics)
+        .onChange(of: model.pane) { old, _ in leaving = old }
+        .task(id: model.pane) {
+            guard (try? await Task.sleep(for: .seconds(1))) != nil else { return }
+            leaving = nil
+        }
     }
 
     private var bar: some View {
@@ -92,10 +98,14 @@ struct ControlView: View {
         }
     }
 
+    /// The meeting, history and settings panes are built only while shown or fading out, so a hidden one never lays
+    /// out again with every frame the window draws (a meeting's level meters, the record button's pulse). Notes
+    /// stays built: its text view is kept by the editor, which hides it.
     private func pane(_ which: AppModel.Pane, @ViewBuilder content: () -> some View) -> some View {
         let shown = model.pane == which
         let side: CGFloat = which.rawValue < (model.pane?.rawValue ?? which.rawValue) ? -1 : 1
-        return content()
+        let built = shown || leaving == which || which == .notes
+        return Group { if built { content().transition(.identity) } }
             .opacity(shown ? 1 : 0)
             .offset(x: shown || model.pane == nil ? 0 : side * 40)
             .allowsHitTesting(shown)
