@@ -27,12 +27,18 @@ struct SavedModel: Codable, Hashable, Identifiable {
 struct Settings: Codable, Equatable {
     enum CaptionPosition: String, Codable { case top, bottom }
     enum CleanupFailure: String, Codable { case retry, notify, raw }
-    enum VegetaFallback: String, Codable { case local, fail }
+    enum SpeechFallback: String, Codable { case local, fail }
+    enum SpeechMode: String, Codable { case live, afterStop = "after-stop" }
+    enum ApiProvider: String, Codable { case albastar, custom }
 
     var speechModel = "phonon-2"
-    var vegetaSpeechModel = "parakeet"
-    var vegetaSpeechTimeoutS = 8.0
-    var vegetaFallback = VegetaFallback.local
+    /// The API (Settings, Provider): Albastar, or any OpenAI-compatible base URL with its own key.
+    var apiProvider = ApiProvider.albastar
+    var apiCustomBase = ""
+    var apiSpeechMode = SpeechMode.live
+    var apiSpeechModels: [String: String] = [:] // per provider: the speech model id
+    var apiSpeechTimeoutS = 8.0
+    var apiFallback = SpeechFallback.local
     var typingHold = 0.7
     var pasteApps = ["so.stencil.tern"] // bundle IDs that get each sentence as one paste instead of typed keys
     var sounds = true
@@ -48,7 +54,7 @@ struct Settings: Codable, Equatable {
     var cleanupQuotes = false
     var cleanupFailure = CleanupFailure.raw
     var cleanupRetries = 3
-    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "vegeta": 4, "vegeta-live": 4]
+    var cleanupTimeoutS: [String: Double] = ["groq": 2.5, "openrouter": 2.5, "api": 4]
     var openRouterModels = SavedModel.starters
     var openRouterRecent = SavedModel.starters.map(\.id)
     var captionsShown = true
@@ -77,14 +83,14 @@ struct Settings: Codable, Equatable {
     var summaryModels: [String: String] = [:]
     var notesFiling = true
 
+    static let albastarBase = "https://api.albastov.com/v1"
     static let speechModels = [("phonon-2", "Phonon-2 · this Mac"), ("parakeet", "Parakeet · this Mac"),
-                               ("vegeta", "Vegeta"), ("vegeta-live", "Vegeta Live")]
+                               ("api", "API · Provider above")]
     static let cleanupProviders: [(id: String, name: String, models: [(String, String)])] = [
         ("groq", "Groq", [("qwen/qwen3.8-27b", "Qwen3.8 27B"), ("openai/gpt-oss-120b", "GPT-OSS 120B"),
                           ("openai/gpt-oss-20b", "GPT-OSS 20B")]),
         ("openrouter", "OpenRouter", []),
-        ("vegeta", "Vegeta", []),
-        ("vegeta-live", "Vegeta Live", []), // Vegeta's chat over the live stream
+        ("api", "API", []), // the provider of Settings, Provider; `auto` lets it pick the model
     ]
     static let meetingLanguages = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("sv-SE", "Swedish"),
                                    ("de-DE", "German"), ("fr-FR", "French"), ("es-ES", "Spanish"),
@@ -115,14 +121,13 @@ struct Settings: Codable, Equatable {
 
     var cleanupModel: String {
         get {
-            // an id from Citadel's GET /v1/models; Vegeta Live starts from the one chosen for Vegeta
-            if cleanupProvider == "vegeta" { return cleanupModels["vegeta"] ?? "" }
-            if cleanupProvider == "vegeta-live" { return cleanupModels["vegeta-live"] ?? cleanupModels["vegeta"] ?? "" }
+            // an id from the API's GET /models, `auto` until one is picked
+            if cleanupProvider == "api" { return cleanupModels[apiModelKey] ?? "auto" }
             let offered = cleanupModels(on: cleanupProvider)
             if let picked = cleanupModels[cleanupProvider], offered.contains(where: { $0.0 == picked }) { return picked }
             return cleanupProvider == "openrouter" ? (openRouterRecent.first ?? offered.first?.0 ?? "") : offered.first?.0 ?? ""
         }
-        set { cleanupModels[cleanupProvider] = newValue }
+        set { cleanupModels[cleanupProvider == "api" ? apiModelKey : cleanupProvider] = newValue }
     }
 
     func summaryModels(on provider: String) -> [(String, String)] {
@@ -171,15 +176,44 @@ struct Settings: Codable, Equatable {
     }
 
     var cleanupTimeoutCommand: String {
-        let vegeta = cleanupProvider == "vegeta-live" ? cleanupTimeoutS["vegeta"] : nil
-        return "timeout \(cleanupTimeoutS[cleanupProvider] ?? vegeta ?? 2.5)"
+        "timeout \(cleanupTimeoutS[cleanupProvider] ?? 2.5)"
     }
 
-    var vegetaCommand: String {
-        let config: [String: Any] = ["model": vegetaSpeechModel, "timeout_s": vegetaSpeechTimeoutS,
-                                     "fallback": vegetaFallback.rawValue]
+    /// The cleanup model chosen per provider preset: the custom provider's models are not ours.
+    private var apiModelKey: String { "api-\(apiProvider.rawValue)" }
+
+    var apiBase: String {
+        switch apiProvider {
+        case .albastar: Self.albastarBase
+        case .custom:
+            String(apiCustomBase.trimmingCharacters(in: .whitespacesAndNewlines).reversed().drop { $0 == "/" }.reversed())
+        }
+    }
+
+    var apiKey: ApiKey { apiProvider == .albastar ? .citadel : .custom }
+
+    /// How the status line names the provider: Albastar, or the custom base URL's host.
+    var apiName: String {
+        apiProvider == .albastar ? "Albastar" : URL(string: apiBase)?.host() ?? "Custom API"
+    }
+
+    var apiSpeechModel: String {
+        get { apiSpeechModels[apiProvider.rawValue] ?? (apiProvider == .albastar ? "parakeet" : "") }
+        set { apiSpeechModels[apiProvider.rawValue] = newValue }
+    }
+
+    /// The engine's name for the speech model: the API one depends on the mode.
+    var speechEngine: String {
+        guard speechModel == "api" else { return speechModel }
+        return apiSpeechMode == .live ? "api-live" : "api"
+    }
+
+    var apiCommand: String {
+        let config: [String: Any] = ["base": apiBase, "key_env": apiKey.variable, "name": apiName,
+                                     "model": apiSpeechModel, "timeout_s": apiSpeechTimeoutS,
+                                     "fallback": apiFallback.rawValue]
         let data = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])) ?? Data("{}".utf8)
-        return "vegeta " + String(decoding: data, as: UTF8.self)
+        return "api " + String(decoding: data, as: UTF8.self)
     }
 
     static func knows(_ key: String) -> Bool { CodingKeys(stringValue: key) != nil }
@@ -188,19 +222,27 @@ struct Settings: Codable, Equatable {
 extension Settings {
     init(from decoder: Decoder) throws {
         let saved = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyKey.self)
         let fallback = Settings()
         func value<T: Decodable>(_ key: CodingKeys, _ current: T) -> T { (try? saved.decodeIfPresent(T.self, forKey: key)) ?? current }
-        speechModel = value(.speechModel, fallback.speechModel)
-        vegetaSpeechModel = value(.vegetaSpeechModel, fallback.vegetaSpeechModel)
-        vegetaSpeechTimeoutS = value(.vegetaSpeechTimeoutS, fallback.vegetaSpeechTimeoutS)
-        vegetaFallback = value(.vegetaFallback, fallback.vegetaFallback)
+        func old<T: Decodable>(_ name: String) -> T? { try? legacy.decodeIfPresent(T.self, forKey: LegacyKey(name)) }
+        // Vegeta became the API at Albastar, after stop over HTTP or live over Vegeta Live; its settings carry over
+        let speech = value(.speechModel, fallback.speechModel)
+        speechModel = speech == "vegeta" || speech == "vegeta-live" ? "api" : speech
+        apiProvider = value(.apiProvider, fallback.apiProvider)
+        apiCustomBase = value(.apiCustomBase, fallback.apiCustomBase)
+        apiSpeechMode = value(.apiSpeechMode, speech == "vegeta" ? .afterStop : fallback.apiSpeechMode)
+        apiSpeechModels = value(.apiSpeechModels, (old("vegetaSpeechModel") as String?).map { ["albastar": $0] }
+                                ?? fallback.apiSpeechModels)
+        apiSpeechTimeoutS = value(.apiSpeechTimeoutS, old("vegetaSpeechTimeoutS") ?? fallback.apiSpeechTimeoutS)
+        apiFallback = value(.apiFallback, old("vegetaFallback") ?? fallback.apiFallback)
         typingHold = value(.typingHold, fallback.typingHold)
         pasteApps = value(.pasteApps, fallback.pasteApps)
         sounds = value(.sounds, fallback.sounds)
         cleanupEnabled = value(.cleanupEnabled, fallback.cleanupEnabled)
         let provider = value(.cleanupProvider, fallback.cleanupProvider)
-        cleanupProvider = Settings.cleanupProviders.contains { $0.id == provider } ? provider : fallback.cleanupProvider
-        cleanupModels = value(.cleanupModels, fallback.cleanupModels)
+        let migrated = provider == "vegeta" || provider == "vegeta-live" ? "api" : provider
+        cleanupProvider = Settings.cleanupProviders.contains { $0.id == migrated } ? migrated : fallback.cleanupProvider
         cleanupInstructions = value(.cleanupInstructions, fallback.cleanupInstructions)
         cleanupPolish = value(.cleanupPolish, fallback.cleanupPolish)
         cleanupBenchmark = value(.cleanupBenchmark, fallback.cleanupBenchmark)
@@ -211,6 +253,7 @@ extension Settings {
         cleanupFailure = value(.cleanupFailure, fallback.cleanupFailure)
         cleanupRetries = value(.cleanupRetries, fallback.cleanupRetries)
         cleanupTimeoutS = value(.cleanupTimeoutS, fallback.cleanupTimeoutS)
+        if cleanupTimeoutS["api"] == nil { cleanupTimeoutS["api"] = cleanupTimeoutS["vegeta"] ?? 4 }
         openRouterModels = value(.openRouterModels, fallback.openRouterModels)
         openRouterRecent = value(.openRouterRecent, fallback.openRouterRecent)
         captionsShown = value(.captionsShown, fallback.captionsShown)
@@ -239,6 +282,15 @@ extension Settings {
         summaryProvider = Settings.summaryProviders.contains { $0.id == summary } ? summary : fallback.summaryProvider
         summaryModels = value(.summaryModels, fallback.summaryModels)
         notesFiling = value(.notesFiling, fallback.notesFiling)
+    }
+
+    /// Keys of earlier versions, read once to carry their values over.
+    private struct LegacyKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ name: String) { stringValue = name }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
     }
 }
 

@@ -28,7 +28,7 @@ enum AppResources {
     static func engineEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let keys = Keychain.shared.values()
-        for key in ApiKey.cleanup {
+        for key in ApiKey.engine {
             if let value = keys[key.id] { environment[key.variable] = value }
         }
         let path = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"

@@ -1,11 +1,11 @@
-"""Replay a recorded take through the real engine on Vegeta Live and print, per phrase, end of speech → corrected text.
+"""Replay a recorded take through the real engine at the API and print, per phrase, end of speech → corrected text.
 
-    python replay.py take.wav [--base https://citadel.albastov.com] [--model vegeta-fast] [--asr vegeta-live]
+    python replay.py take.wav [--base https://api.albastov.com/v1] [--asr api-live|api] [--model auto]
 
 Runs live.py as the app does (uv, the same commands with Settings' defaults), plays the WAV at real time in place of
-the microphone, and reads the engine's events. Needs CITADEL_API_KEY in the environment (any value for the stub:
-python tests/stream_stub.py). Nothing of the app's is touched: the take goes to a temporary folder and is dropped.
-`--asr vegeta` replays the same take over the HTTP path, for comparison.
+the microphone, and reads the engine's events. Needs the key in the environment (`--key-env`, CITADEL_API_KEY by
+default; any value for the stub: python tests/api_stub.py). Nothing of the app's is touched: the take goes to a
+temporary folder and is dropped. `--asr api-live` is the realtime socket, `--asr api` the HTTP path after stop.
 """
 from __future__ import annotations
 
@@ -36,17 +36,18 @@ def ms(value) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("wav")
-    parser.add_argument("--base", default="https://citadel.albastov.com", help="Citadel's origin")
-    parser.add_argument("--asr", default="vegeta-live", choices=["vegeta-live", "vegeta"])
-    parser.add_argument("--model", default="vegeta-fast", help="cleanup model id; empty: no cleanup")
+    parser.add_argument("--base", default="https://api.albastov.com/v1", help="the API's base URL")
+    parser.add_argument("--key-env", default="CITADEL_API_KEY", help="the environment variable with the key")
+    parser.add_argument("--asr", default="api-live", choices=["api-live", "api"])
+    parser.add_argument("--model", default="auto", help="cleanup model id; empty: no cleanup")
     parser.add_argument("--speech-model", default="parakeet")
     parser.add_argument("--fallback", default="fail", choices=["fail", "local"],
-                        help="what a take Vegeta fails does (the app's default is local)")
+                        help="what a take the API fails does (the app's default is local)")
     parser.add_argument("--no-polish", action="store_true")
     parser.add_argument("--log", help="the engine's own log (stderr); a temporary file by default")
     args = parser.parse_args()
-    if not os.environ.get("CITADEL_API_KEY"):
-        print("CITADEL_API_KEY is not set", file=sys.stderr)
+    if not os.environ.get(args.key_env):
+        print(f"{args.key_env} is not set", file=sys.stderr)
         return 2
     uv = shutil.which("uv")
     if uv is None:
@@ -54,18 +55,17 @@ def main() -> int:
         return 2
     folder = Path(tempfile.mkdtemp(prefix="iridium-replay-"))
     log_path = Path(args.log) if args.log else folder / "engine.log"
-    provider = "vegeta-live" if args.asr == "vegeta-live" else "vegeta"
     commands = [
         f"takes drop {folder}",
         "hold 0.7",
-        *([f"cleanup {provider}:{args.model}"] if args.model else []),
+        "api " + json.dumps({"base": args.base, "key_env": args.key_env, "name": "API", "model": args.speech_model,
+                             "timeout_s": 8, "fallback": args.fallback}),
+        *([f"cleanup api:{args.model}"] if args.model else []),
         "polish off" if args.no_polish else "polish on",
         "corrections 5 2",
         "rules ",
         "failure raw 3",
         "timeout 4",
-        "vegeta " + json.dumps({"base": args.base, "model": args.speech_model, "timeout_s": 8,
-                                "fallback": args.fallback}),
     ]
     with open(log_path, "w") as log:
         engine = subprocess.Popen([uv, "run", "--quiet", "--script", str(HERE / "live.py"), "--asr", args.asr,
@@ -79,8 +79,8 @@ def main() -> int:
 
         for command in commands:
             send(command)
-        widths = [5, 6, 7, 8, 6, 7, 6, 6, 0]
-        print(row(["id", "speech", "total", "endpoint", "stt", "infer", "clean", "ttft", "text"], widths))
+        widths = [5, 6, 7, 8, 6, 6, 6, 0]
+        print(row(["id", "speech", "total", "endpoint", "stt", "clean", "ttft", "text"], widths))
         totals, stts, cleans, polish = [], [], [], None
         started = False
         watchdog = threading.Timer(600, engine.kill)
@@ -102,7 +102,6 @@ def main() -> int:
             elif kind == "final":
                 timing = event.get("timing") or {}
                 cleanup = timing.get("cleanup") or {}
-                server = timing.get("stream") or {}
                 via = timing.get("via") or "this Mac"
                 totals.append(timing.get("total_ms", 0))
                 stts.append(timing.get("decode_ms", 0))
@@ -110,7 +109,6 @@ def main() -> int:
                     cleans.append(cleanup.get("ms", 0))
                 print(row([event.get("id", ""), ms(timing.get("speech_ms")), ms(timing.get("total_ms")),
                            ms(timing.get("endpoint_ms")), ms(timing.get("decode_ms")),
-                           ms(server.get("inference")),
                            "skip" if cleanup.get("skipped") else ms(cleanup.get("ms")) if cleanup else "",
                            ms(cleanup.get("ttft_ms")),
                            (f"[{via}] " if via != args.asr else "") + (f"[{cleanup['error']}] "

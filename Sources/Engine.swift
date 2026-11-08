@@ -31,6 +31,9 @@ struct EngineEvent: Sendable {
     let said: Bool
     let at: Double?
     let kept: Bool
+    /// `models`: the API's model ids for the cleanup picker (`auto` first when it has it), and the base they are of.
+    let models: [String]
+    let base: String?
 
     init?(line: String) {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -66,6 +69,8 @@ struct EngineEvent: Sendable {
         said = object["said"] as? Bool ?? false
         at = object["at"] as? Double
         kept = object["kept"] as? Bool ?? true
+        models = object["models"] as? [String] ?? []
+        base = object["base"] as? String
     }
 
     /// Where a `take` event stands: recording, captured, done, empty, failed or discarded.

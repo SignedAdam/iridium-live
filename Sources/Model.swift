@@ -65,6 +65,8 @@ final class AppModel {
     var speech = ModelStatus(state: "loading")
     var cleanup = ModelStatus()
     var lastCleanupMs: Double?
+    /// The model that answered the last cleanup, when the API resolved the one asked for (`auto`) to another.
+    var lastCleanupServed: String?
     var memory: MemoryReading?
     var lastRecording: (file: String, seconds: Double)?
     var finishing = false
@@ -289,6 +291,8 @@ final class AppModel {
     }
 
     var onManageModels: () -> Void = {}
+    /// Asks the engine for the API's models (Settings, cleanup model picker).
+    var onListApiModels: () -> Void = {}
 
     func hideControl(minutes: Int? = nil) {
         var next = settings

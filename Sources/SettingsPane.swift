@@ -14,6 +14,7 @@ struct SettingsPane: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    provider(proxy)
                     speech(proxy)
                     cleanup(proxy)
                     meetings
@@ -35,31 +36,63 @@ struct SettingsPane: View {
         .foregroundStyle(.white.opacity(0.88))
     }
 
+    /// The API speech (Model: API) and cleanup (Provider: API) talk to: Albastar, or any OpenAI-compatible base URL.
+    @ViewBuilder
+    private func provider(_ proxy: ScrollViewProxy) -> some View {
+        let custom = model.settings.apiProvider == .custom
+        let key = model.settings.apiKey
+        Section("Provider") {
+            Row("API", detail: custom ? "Any OpenAI-compatible API, with its own key" : "api.albastov.com") {
+                GlassMenu(selection: $model.settings.apiProvider,
+                          options: [(Settings.ApiProvider.albastar, "Albastar"), (.custom, "Custom (OpenAI-compatible)")])
+                    .frame(width: 200)
+            }
+            if custom {
+                Row("Base URL", detail: model.settings.apiBase.isEmpty ? "Needed" : nil,
+                    alert: model.settings.apiBase.isEmpty, inset: 14) {
+                    ModelField(id: $model.settings.apiCustomBase, placeholder: "https://api.example.com/v1", width: 220)
+                }
+                .transition(.opacity)
+            }
+            if Setup.shared.keys[key.id] != true { missingKey(key, proxy) }
+        }
+        .animation(.easeOut(duration: 0.2), value: custom)
+    }
+
     @ViewBuilder
     private func speech(_ proxy: ScrollViewProxy) -> some View {
-        let live = model.settings.speechModel == "vegeta-live"
-        let vegeta = live || model.settings.speechModel == "vegeta"
-        let fallback = model.settings.vegetaFallback == .local
+        let api = model.settings.speechModel == "api"
+        let fallback = model.settings.apiFallback == .local
+        let afterStop = model.settings.apiSpeechMode == .afterStop
         Section("Speech") {
-            Row("Model", detail: vegeta ? "On Vegeta, nothing loaded on this Mac" : status(model.speech),
+            Row("Model", detail: api ? "At \(model.settings.apiName), nothing loaded on this Mac" : status(model.speech),
                 alert: model.speech.state == "error") {
                 GlassMenu(selection: $model.settings.speechModel, options: Settings.speechModels).frame(width: 170)
             }
-            if vegeta {
-                if Setup.shared.keys[ApiKey.citadel.id] != true { missingKey(ApiKey.citadel, proxy) }
-                Row(live ? "When Vegeta Live fails" : "When Vegeta fails",
-                    detail: live
-                        ? (fallback ? "Vegeta takes over that recording, then Phonon-2 on this Mac"
-                                    : "Vegeta takes over that recording, else it waits in History, with Retry")
+            if api {
+                Row("When", detail: afterStop ? "The whole recording is sent when you stop"
+                                              : "Live over the realtime socket, with captions when the API sends them",
+                    inset: 14) {
+                    Segments(selection: $model.settings.apiSpeechMode,
+                             options: [(Settings.SpeechMode.live, "Live"), (.afterStop, "After stop")])
+                }
+                Row("Speech model", detail: model.settings.apiSpeechModel.isEmpty ? "Needed" : nil,
+                    alert: model.settings.apiSpeechModel.isEmpty, inset: 14) {
+                    ModelField(id: $model.settings.apiSpeechModel, placeholder: "whisper-1")
+                }
+                Row("When it fails",
+                    detail: !afterStop
+                        ? (fallback ? "The rest of that recording goes over HTTP, then Phonon-2 on this Mac"
+                                    : "The rest of that recording goes over HTTP, else it waits in History, with Retry")
                         : (fallback ? "Phonon-2 on this Mac takes over that recording"
                                     : "The recording waits in History, with Retry"),
                     inset: 14) {
-                    Segments(selection: $model.settings.vegetaFallback, options: [(.local, "This Mac"), (.fail, "Fail")])
+                    Segments(selection: $model.settings.apiFallback, options: [(.local, "This Mac"), (.fail, "Fail")])
                 }
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: vegeta)
+        .animation(.easeOut(duration: 0.2), value: api)
     }
 
     private func missingKey(_ key: ApiKey, _ proxy: ScrollViewProxy) -> some View {
@@ -78,14 +111,15 @@ struct SettingsPane: View {
     private func cleanup(_ proxy: ScrollViewProxy) -> some View {
         let provider = model.settings.cleanupProvider
         let openRouter = provider == "openrouter"
-        let citadel = provider == "vegeta" || provider == "vegeta-live"
-        let key = citadel ? ApiKey.citadel : openRouter ? ApiKey.openRouter : ApiKey.groq
+        let api = provider == "api"
+        let key = api ? model.settings.apiKey : openRouter ? ApiKey.openRouter : ApiKey.groq
         let saved = model.settings.savedModelsByRecency
         let recent = Array(saved.prefix(3))
         let others = Array(saved.dropFirst(3))
         Section("AI cleanup") {
             Row("Clean up dictation",
-                detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs) : nil,
+                detail: model.settings.cleanupEnabled ? status(model.cleanup, lastMs: model.lastCleanupMs,
+                                                               served: model.lastCleanupServed) : nil,
                 alert: model.cleanup.state == "error") {
                 GlassSwitch(isOn: $model.settings.cleanupEnabled)
             }
@@ -105,23 +139,24 @@ struct SettingsPane: View {
                         Spacer(minLength: 0)
                         Button("Manage models", action: model.onManageModels).buttonStyle(GlassButton())
                     }
-                } else if citadel {
-                    Row("Model", detail: model.settings.cleanupModel.isEmpty ? "Needed" : nil,
-                        alert: model.settings.cleanupModel.isEmpty, inset: 14) {
-                        let ids = CitadelModels.shared.ids
+                } else if api {
+                    Row("Model", detail: apiModelsDetail, alert: apiModelsDetail != nil, inset: 14) {
+                        let ids = ApiModels.shared.base == model.settings.apiBase ? ApiModels.shared.ids : []
                         if ids.isEmpty {
-                            ModelField(id: $model.settings.cleanupModel)
+                            ModelField(id: $model.settings.cleanupModel, placeholder: "auto")
                         } else {
-                            let current = model.settings.cleanupModel
+                            // a provider without `auto` has no Auto: the default then waits for a pick
+                            let picked = model.settings.cleanupModel
+                            let current = picked == "auto" && !ids.contains("auto") ? "" : picked
                             GlassMenu(selection: $model.settings.cleanupModel,
                                       options: (ids.contains(current) || current.isEmpty ? ids : [current] + ids)
-                                          .map { ($0, $0) },
+                                          .map { ($0, $0 == "auto" ? "Auto" : $0) },
                                       label: current.isEmpty ? "Choose" : nil)
                                 .frame(width: 180)
                         }
                     }
-                    .task(id: model.pane == .settings && Setup.shared.keys[ApiKey.citadel.id] == true) {
-                        if model.pane == .settings { CitadelModels.shared.load() }
+                    .task(id: model.pane == .settings) {
+                        if model.pane == .settings { model.onListApiModels() }
                     }
                 } else {
                     Row("Model", inset: 14) {
@@ -446,15 +481,27 @@ struct SettingsPane: View {
         return first.count > 48 ? String(first.prefix(47)) + "…" : String(first)
     }
 
-    private func status(_ status: ModelStatus, lastMs: Double? = nil) -> String? {
+    private func status(_ status: ModelStatus, lastMs: Double? = nil, served: String? = nil) -> String? {
         switch status.state {
         case "downloading": "Downloading \(Int(status.progress * 100))%"
         case "loading": "Loading…"
         case "unloaded": "Unloaded"
         case "error": status.model?.contains(":") == true ? status.message : "Couldn’t load: \(status.message)"
-        case "ready": lastMs.map { "Last: \(Int($0)) ms" }
+        case "ready": lastMs.map { "Last: \(Int($0)) ms" + (served.map { " · \($0)" } ?? "") }
         default: nil
         }
+    }
+
+    /// Why the API cleanup model needs attention: its model list did not come, or no model is picked.
+    private var apiModelsDetail: String? {
+        let models = ApiModels.shared
+        let listed = models.base == model.settings.apiBase
+        let picked = model.settings.cleanupModel
+        if listed, let problem = models.problem { return problem }
+        if picked.isEmpty || (listed && picked == "auto" && !models.ids.isEmpty && !models.ids.contains("auto")) {
+            return "Needed"
+        }
+        return nil
     }
 
     private func gigabytes(_ bytes: UInt64) -> String {
@@ -531,19 +578,21 @@ private struct SetupSection: View {
     }
 }
 
-/// A model id typed in, for when Citadel's model list did not come; saved on Return or Save, not on every key.
+/// A model id or URL typed in; saved on Return or Save, not on every key.
 @MainActor
 private struct ModelField: View {
     @Binding var id: String
+    var placeholder = ""
+    var width: CGFloat = 150
     @State private var typed = ""
 
     var body: some View {
         HStack(spacing: 6) {
-            TextField("vegeta-fast", text: $typed)
+            TextField(placeholder, text: $typed)
                 .textFieldStyle(.plain)
                 .font(tiktok(12))
                 .padding(.horizontal, 9)
-                .frame(width: 150, height: 24)
+                .frame(width: width, height: 24)
                 .background(Pill(fill: 0.08))
                 .onSubmit(store)
             if typed != id { Button("Save", action: store).buttonStyle(GlassButton()) }
