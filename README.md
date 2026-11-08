@@ -79,8 +79,10 @@ Speakers can be renamed and merged, lines can be edited and played back, and a m
 SRT, VTT or text.
 
 A meeting can be recorded now and transcribed later: Settings, Meetings, When it ends, Transcribe or Later, and Live
-transcript off for nothing running while you record. A microphone that drops out or changes mid-meeting is picked up
-again; the meeting keeps recording the other side meanwhile.
+transcript off for nothing running while you record. The microphone you choose is the one recorded, whatever the
+Mac's default input is, so headphones that become the default (Bluetooth ones switch to call mode when their
+microphone opens) are left alone. A chosen microphone that is not connected is replaced by the default input until it
+is. One that drops out mid-meeting is picked up again; the meeting keeps recording the other side meanwhile.
 
 Engines: Apple on this Mac (default), Parakeet on this Mac, or ElevenLabs, AssemblyAI and Deepgram with a key. Any
 meeting can be transcribed again with another engine. The live transcript uses Apple on device speech. Summaries,

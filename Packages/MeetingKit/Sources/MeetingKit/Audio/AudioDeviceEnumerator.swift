@@ -51,6 +51,25 @@ enum AudioDeviceEnumerator {
         inputDevices().first { $0.uid == uid }?.name
     }
 
+    static func name(of id: AudioDeviceID) -> String? {
+        stringProperty(id, kAudioObjectPropertyName)
+    }
+
+    static func uid(of id: AudioDeviceID) -> String? {
+        stringProperty(id, kAudioDevicePropertyDeviceUID)
+    }
+
+    static func nominalSampleRate(of id: AudioDeviceID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var rate = 0.0
+        var size = UInt32(MemoryLayout<Double>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &rate) == noErr, rate > 0 else { return nil }
+        return rate
+    }
+
     static func observeDeviceChanges(_ handler: @escaping () -> Void) {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
