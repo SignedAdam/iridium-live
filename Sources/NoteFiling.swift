@@ -26,6 +26,7 @@ enum FilingError: Error, Equatable {
 /// Asks the cleanup model to split new note text by topic and say where each piece belongs.
 struct NoteFiler: Sendable {
     let provider: String
+    let endpoint: URL
     let model: String
     let key: String
 
@@ -33,9 +34,13 @@ struct NoteFiler: Sendable {
     private static let textLimit = 12_000
     private static let gistLimit = 200
 
-    static func endpoint(for provider: String) -> URL {
-        provider == "groq" ? URL(string: "https://api.groq.com/openai/v1/chat/completions")!
-                           : URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+    /// The chat endpoint of a cleanup provider; `api` is the base URL of Settings, Provider.
+    static func endpoint(for provider: String, apiBase: String) -> URL? {
+        switch provider {
+        case "groq": URL(string: "https://api.groq.com/openai/v1/chat/completions")
+        case "api": URL(string: apiBase + "/chat/completions")
+        default: URL(string: "https://openrouter.ai/api/v1/chat/completions")
+        }
     }
 
     /// Splits `text` into segments aimed at `notes`, keeping every word of the original.
@@ -89,12 +94,12 @@ struct NoteFiler: Sendable {
     }
 
     private func ask(_ messages: [(String, String)]) async throws -> String {
-        var request = URLRequest(url: Self.endpoint(for: provider))
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 60
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if provider != "groq" {
+        if provider == "openrouter" {
             request.setValue("https://github.com/SignedAdam/iridium-live", forHTTPHeaderField: "HTTP-Referer")
             request.setValue("Iridium Live", forHTTPHeaderField: "X-Title")
         }
@@ -105,8 +110,11 @@ struct NoteFiler: Sendable {
             "temperature": 0,
             "messages": messages.map { ["role": $0.0, "content": $0.1] },
         ]
-        if parts.count == 2, provider != "groq" {
+        if parts.count == 2, provider == "openrouter" {
             payload["provider"] = ["order": [parts[1]], "allow_fallbacks": true]
+        }
+        if provider == "api", parts[0] == "auto" {
+            payload["requirements"] = ["reasoning": "off"]
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -243,10 +251,12 @@ final class NoteFiling {
         self.model = model
         filer = { [weak model] in
             guard let model else { return nil }
-            let provider = model.settings.cleanupProvider
-            let pick = model.settings.cleanupModel
-            guard !pick.isEmpty, let key = Keychain.shared.values()[provider], !key.isEmpty else { return nil }
-            return NoteFiler(provider: provider, model: pick, key: key)
+            let settings = model.settings
+            let pick = settings.cleanupModel
+            guard !pick.isEmpty, let key = Keychain.shared.values()[settings.cleanupKey.id], !key.isEmpty,
+                  let endpoint = NoteFiler.endpoint(for: settings.cleanupProvider, apiBase: settings.apiBase)
+            else { return nil }
+            return NoteFiler(provider: settings.cleanupProvider, endpoint: endpoint, model: pick, key: key)
         }
     }
 
@@ -283,6 +293,7 @@ final class NoteFiling {
         guard text.trimmingCharacters(in: .whitespacesAndNewlines).count >= Self.shortest else { return }
         guard let maker = filer(), !maker.model.isEmpty else {
             dictated = false
+            model.show(notice: "Take not filed: needs the \(model.settings.cleanupKey.name) key")
             return
         }
         dictated = false
@@ -290,14 +301,26 @@ final class NoteFiling {
         let notes = library.digests()
         running = true
         Task { [weak self] in
-            let segments = try? await maker.split(text, among: notes, open: open)
+            var segments: [FiledSegment] = []
+            var failure: String?
+            do { segments = try await maker.split(text, among: notes, open: open) } catch { failure = Self.reason(error) }
             guard let self else { return }
             running = false
-            guard let segments, !segments.isEmpty else {
+            guard failure == nil, !segments.isEmpty else {
                 dictated = true
+                model.show(notice: "Take not filed: \(failure ?? "no topics found"); it stays in \(library.currentName)")
                 return
             }
             fileAway(segments, pending: text, open: open)
+        }
+    }
+
+    private static func reason(_ error: Error) -> String {
+        switch error as? FilingError {
+        case .noKey: "no key"
+        case let .noAnswer(why): why
+        case .unusable: "the answer did not match the text"
+        case nil: error.localizedDescription
         }
     }
 
@@ -355,6 +378,7 @@ final class NoteFiling {
         }
         guard !landed.isEmpty else {
             undoable = nil
+            EventLog.shared.add("notes: the take belongs in \(library.currentName), where it is")
             return
         }
         apply(kept.map(\.text).joined(separator: "\n\n"))

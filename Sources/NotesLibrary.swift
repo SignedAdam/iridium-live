@@ -200,8 +200,13 @@ final class NotesLibrary {
         open(nil)
     }
 
+    /// Opens a saved note, or the unsaved one for nil. Unsaved text being left becomes a numbered note first:
+    /// My notes lists only saved notes, so text left behind in the unsaved note could not be found again.
     func open(_ id: UUID?) {
         guard id != index.current else { return }
+        if currentNote == nil, !store.latest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            EventLog.shared.add("notes: the unsaved note was saved as \(save(store.latest).name) before another opened")
+        }
         let file = id.flatMap { id in index.notes.first { $0.id == id } }.map { url(of: $0) } ?? scratch
         index.current = id
         let text = store.switchTo(file)

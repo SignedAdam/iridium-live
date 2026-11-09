@@ -13,10 +13,12 @@ Dictation app for macOS. Speech recognition runs locally on the GPU with
   record button starts the moment it is pressed.
 - **Sounds:** a short sound when recording starts, when you release, and when the text is typed (Settings, Typing,
   Sounds). Typed plays only when the text reached the app or note it was aimed at.
-- **Notes:** dictate into a note and edit it like any text. Saved notes are in My notes. With a cleanup key, a take
-  is filed by topic about 20 s after you stop: each part goes to the note it belongs to or starts a new one, with
-  tags, and a notice shows where it went, with Undo. Tags can be edited; My notes filters by tag and sorts by
-  recent, title or tag. Settings, Notes, File takes by topic.
+- **Notes:** dictate into a note and edit it like any text. Saved notes are in My notes. Opening another note saves
+  the unsaved one as a numbered note first, so nothing is left where My notes cannot show it. With the cleanup
+  provider's key (Groq, OpenRouter or the API's), a take is filed by topic about 20 s after you stop: each part goes
+  to the note it belongs to or starts a new one, with tags, and a notice shows where it went, with
+  Undo. A take that could not be filed says why and stays where it was dictated. Tags can be edited; My notes
+  filters by tag and sorts by recent, title or tag. Settings, Notes, File takes by topic.
 - **Hotkeys:** hold, double-tap or toggle. Several hotkeys can share a key.
 - **Microphone:** the MacBook's own. While the lid is closed, your default input, such as AirPods or a USB microphone.
   If no sound arrives, the status line says so.

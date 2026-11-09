@@ -192,6 +192,9 @@ struct Settings: Codable, Equatable {
 
     var apiKey: ApiKey { apiProvider == .albastar ? .citadel : .custom }
 
+    /// The key the cleanup provider is called with: the API provider's own, else the one named after the provider.
+    var cleanupKey: ApiKey { cleanupProvider == "api" ? apiKey : ApiKey.named(cleanupProvider) ?? .openRouter }
+
     /// How the status line names the provider: Albastar, or the custom base URL's host.
     var apiName: String {
         apiProvider == .albastar ? "Albastar" : URL(string: apiBase)?.host() ?? "Custom API"

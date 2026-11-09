@@ -312,14 +312,14 @@ struct SettingsPane: View {
         Section("Notes") {
             Row("File takes by topic",
                 detail: model.settings.notesFiling ? filingDetail : nil,
-                alert: model.settings.notesFiling && !held(ApiKey.named(model.settings.cleanupProvider) ?? ApiKey.openRouter)) {
+                alert: model.settings.notesFiling && !held(model.settings.cleanupKey)) {
                 GlassSwitch(isOn: $model.settings.notesFiling)
             }
         }
     }
 
     private var filingDetail: String {
-        let key = ApiKey.named(model.settings.cleanupProvider) ?? ApiKey.openRouter
+        let key = model.settings.cleanupKey
         return held(key) ? "Sorts each take into notes and tags it" : "Needs the \(key.name) key"
     }
 
